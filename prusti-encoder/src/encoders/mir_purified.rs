@@ -1,12 +1,14 @@
+use std::alloc::Global;
+
 use pcg::{
-    action::{PcgAction, PcgActions},
+    action::{BorrowPcgAction, PcgAction, PcgActions},
     borrow_pcg::{
-        action::{BorrowPCGAction, BorrowPCGActionKind},
-        borrow_pcg_edge::BorrowPCGEdge,
-        borrow_pcg_expansion::BorrowPCGExpansion,
-        edge::{abstraction::AbstractionType, kind::BorrowPCGEdgeKind},
+        action::BorrowPcgActionKind,
+        borrow_pcg_edge::BorrowPcgEdge,
+        borrow_pcg_expansion::BorrowPcgExpansion,
+        edge::{abstraction::AbstractionType, kind::BorrowPcgEdgeKind},
         state::BorrowsState,
-        unblock_graph::BorrowPCGUnblockAction,
+        unblock_graph::BorrowPcgUnblockAction,
     },
     free_pcs::{CapabilityKind, PcgBasicBlock, RepackOp},
     pcg::{EvalStmtPhase, PCGNode, Pcg, PcgSuccessor},
@@ -114,7 +116,7 @@ where
     pub deps: &'enc mut TaskEncoderDependencies<'vir, E>,
     pub def_id: DefId,
     pub local_decls: &'enc mir::LocalDecls<'vir>,
-    pub fpcs_analysis: PcgOutput<'enc, 'vir>,
+    pub fpcs_analysis: PcgOutput<'enc, 'vir, Global>,
     pub local_defs: crate::encoders::PurifiedLocalDefEncOutput<'vir>,
     pub body: &'enc mir::Body<'vir>,
 
@@ -267,7 +269,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
 
     pub(crate) fn pcs_borrow_expansion(
         &mut self,
-        expansion: BorrowPCGExpansion<'vir>,
+        expansion: BorrowPcgExpansion<'vir>,
         unfold: bool,
         label: Option<&'vir str>,
     ) {
@@ -286,8 +288,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 // We shouldn't be unfolding old places?
                 debug_assert!(!unfold);
                 (
-                    snap.place,
-                    Some(Self::get_location_label(self.vcx, snap.at)),
+                    snap.place(),
+                    Some(Self::get_location_label(self.vcx, snap.at())),
                 )
             }
         };
@@ -331,24 +333,26 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     fn pcs_handle_edge(
         &mut self,
         borrows_state: &BorrowsState<'vir>,
-        edge: &BorrowPCGEdge<'vir>,
+        edge: &BorrowPcgEdge<'vir>,
         add: bool,
         label: Option<&'vir str>,
         edge_to_loop: bool,
         to_skip: &mut Vec<mir::BasicBlock>,
     ) {
         let conditions = edge.conditions();
-        let Some(paths) = conditions.paths() else {
-            // TODO: what does getting None mean?
-            return self.pcs_handle_edge_conditionless(
-                borrows_state,
-                edge,
-                add,
-                label,
-                edge_to_loop,
-                to_skip,
-            );
-        };
+        let cond = conditions
+            .all_branch_choices()
+            .map(|choices| {
+                let successors = choices.successors(self.body);
+                let tos = &self.from_to_vars[&choices.from()];
+                let candidates = tos.iter().filter(|(to, _)| successors.contains(to));
+                let conj = candidates
+                    .map(|(_, var)| self.vcx.mk_local_ex(var, &vir::TypeData::Bool))
+                    .collect::<Vec<_>>();
+                self.vcx.mk_conj(self.vcx.alloc_slice(&conj))
+            })
+            .collect::<Vec<_>>();
+        let cond = self.vcx.mk_disj(self.vcx.alloc_slice(&cond));
         let stmts = self.block(|self_| {
             self_.pcs_handle_edge_conditionless(
                 borrows_state,
@@ -368,36 +372,23 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             return;
         }
         let stmts = self.vcx.alloc_slice(&stmts);
-        let cond = paths
-            .iter()
-            .filter_map(|path| {
-                let mut conj = Vec::new();
-                for pc in path {
-                    let tos = &self.from_to_vars[&pc.from];
-                    let (_, var) = tos.iter().find(|(to, _)| *to == pc.to)?;
-                    conj.push(self.vcx.mk_local_ex(var, &vir::TypeData::Bool));
-                }
-                Some(self.vcx.mk_conj(self.vcx.alloc_slice(&conj)))
-            })
-            .collect::<Vec<_>>();
-        let cond = self.vcx.mk_disj(self.vcx.alloc_slice(&cond));
         self.stmt(self.vcx.mk_if_stmt(cond, stmts, &[]));
     }
 
     fn pcs_handle_edge_conditionless(
         &mut self,
         borrows_state: &BorrowsState<'vir>,
-        edge: &BorrowPCGEdge<'vir>,
+        edge: &BorrowPcgEdge<'vir>,
         add: bool,
         label: Option<&'vir str>,
         edge_to_loop: bool,
         to_skip: &mut Vec<mir::BasicBlock>,
     ) {
         match edge.kind() {
-            BorrowPCGEdgeKind::BorrowPCGExpansion(expansion) => {
+            BorrowPcgEdgeKind::BorrowPcgExpansion(expansion) => {
                 self.pcs_borrow_expansion(expansion.clone(), add, label);
             }
-            BorrowPCGEdgeKind::Abstraction(AbstractionType::FunctionCall(call)) => {
+            BorrowPcgEdgeKind::Abstraction(AbstractionType::FunctionCall(call)) => {
                 if add {
                     // The wand will be introduced by the method call itself.
                     return;
@@ -437,7 +428,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 //     _ => unreachable!(),
                 // }
             }
-            BorrowPCGEdgeKind::Abstraction(at @ AbstractionType::Loop(_)) => {
+            BorrowPcgEdgeKind::Abstraction(at @ AbstractionType::Loop(_)) => {
                 // self.pcs_handle_wand(borrows_state, add, at, label, edge_to_loop);
             }
             _ => comment!(self, "(ignoring)"),
@@ -447,7 +438,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     pub(crate) fn pcs_unblock_actions(
         &mut self,
         borrows_state: &BorrowsState<'vir>,
-        actions: &[BorrowPCGUnblockAction<'vir>],
+        actions: &[BorrowPcgUnblockAction<'vir>],
         label: Option<&'vir str>,
     ) {
         let mut to_skip = Vec::new();
@@ -467,14 +458,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         for action in actions.iter() {
             match action {
                 PcgAction::Borrow(action) => self.borrow_action(pcg, action, edge_to_loop),
-                PcgAction::Owned(action) => self.pcg_repack(action),
+                PcgAction::Owned(action) => self.pcg_repack(action.kind()),
             }
         }
     }
     fn borrow_action(
         &mut self,
         pcg: &Pcg<'vir>,
-        action: &BorrowPCGAction<'vir>,
+        action: &BorrowPcgAction<'vir>,
         edge_to_loop: bool,
     ) {
         let mut to_skip = Vec::new();
@@ -484,7 +475,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             //MakePlaceOld(Place<'tcx>),
             //SetLatest(Place<'tcx>, Location),
             //AddRegionProjectionMember(RegionProjectionMember<'tcx>, PathConditions),
-            BorrowPCGActionKind::RemoveEdge(edge) => self.pcs_handle_edge(
+            BorrowPcgActionKind::RemoveEdge(edge) => self.pcs_handle_edge(
                 pcg.borrow_pcg(),
                 edge,
                 false,
@@ -492,10 +483,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 edge_to_loop,
                 &mut to_skip,
             ),
-            BorrowPCGActionKind::AddEdge {
-                edge,
-                for_exclusive: _,
-            } => self.pcs_handle_edge(
+            BorrowPcgActionKind::AddEdge { edge, for_read: _ } => self.pcs_handle_edge(
                 pcg.borrow_pcg(),
                 edge,
                 true,
@@ -549,26 +537,23 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
 
     fn pcg_repack(&mut self, repack_op: &RepackOp<'vir>) {
         match repack_op {
-            RepackOp::Expand(place, target, _capability_kind) => {
-                let place_local_data = self.place_to_local_data.get(place.into()).map_or_else(
+            RepackOp::Expand(expand) => {
+                let place = expand.from();
+                let place_local_data = self.place_to_local_data.get(&place).map_or_else(
                     || self.local_defs.locals[place.local].local,
                     |local_data| *local_data,
                 );
-
                 let place_ty_out = self
                     .deps
-                    .require_ref::<RustTyPredicatesEnc>((*place).ty(self.pcg_ctxt()).ty)
+                    .require_ref::<RustTyPredicatesEnc>(place.ty(self.pcg_ctxt()).ty)
                     .unwrap();
-                let expansion = place
-                    .expand_one_level(*target, self.pcg_ctxt())
-                    .unwrap()
-                    .expansion();
+                let expansion = expand.target_places(self.pcg_ctxt());
                 let (most_generic_ty, _) = encoders::most_generic_ty::extract_type_params(
                     self.vcx.tcx(),
                     place.ty(self.pcg_ctxt()).ty,
                 );
                 let most_generic_inner_tys = self.extract_inner_tys(most_generic_ty.ty());
-                let place_enc = self.encode_place(*place);
+                let place_enc = self.encode_place(place);
                 let casts = self.place_casts(&place_enc);
                 match place_ty_out.generic_predicate.specifics {
                     encoders::predicate::PredicateEncData::StructLike(
@@ -780,30 +765,27 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     | encoders::predicate::PredicateEncData::Trusted => return,
                 };
             }
-            RepackOp::Collapse(place, target, capability_kind) => {
-                if matches!(capability_kind, CapabilityKind::Write) {
+            RepackOp::Collapse(collapse) => {
+                if matches!(collapse.capability(), CapabilityKind::Write) {
                     assert!(matches!(repack_op, RepackOp::Collapse(..)));
                     return;
                 }
-                let place_local_data = self.place_to_local_data.get(place.into()).map_or_else(
+                let place = collapse.to();
+                let place_local_data = self.place_to_local_data.get(&place).map_or_else(
                     || self.local_defs.locals[place.local].local,
                     |local_data| *local_data,
                 );
-                let place_ty = (*place).ty(self.pcg_ctxt());
                 let place_ty_out = self
                     .deps
-                    .require_ref::<RustTyPredicatesEnc>(place_ty.ty)
+                    .require_ref::<RustTyPredicatesEnc>(place.ty(self.pcg_ctxt()).ty)
                     .unwrap();
-                let expansion = place
-                    .expand_one_level(*target, self.pcg_ctxt())
-                    .unwrap()
-                    .expansion();
+                let expansion = collapse.expansion_places(self.pcg_ctxt());
                 let (most_generic_ty, _) = encoders::most_generic_ty::extract_type_params(
                     self.vcx.tcx(),
                     place.ty(self.pcg_ctxt()).ty,
                 );
                 let most_generic_inner_tys = self.extract_inner_tys(most_generic_ty.ty());
-                let place_enc = self.encode_place(*place);
+                let place_enc = self.encode_place(place);
                 let casts = self.place_casts(&place_enc);
                 match place_ty_out.generic_predicate.specifics {
                     encoders::predicate::PredicateEncData::StructLike(
@@ -1585,7 +1567,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
         let cfpcs = &current_fpcs.statements[location.statement_index];
         for phase in EvalStmtPhase::phases() {
             comment!(self, "PCG (T) {phase}");
-            self.pcg_actions(cfpcs.states[phase].as_ref(), cfpcs.actions(phase), false);
+            self.pcg_actions(&cfpcs.states[phase], cfpcs.actions(phase), false);
         }
         self.current_fpcs = Some(current_fpcs);
 
