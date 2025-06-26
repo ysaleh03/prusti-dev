@@ -20,7 +20,7 @@ use crate::encoders::{
         casters::{CastTypeImpure, CastTypePure, CastersEnc},
         ty_constructor::TyConstructorEnc,
     },
-    MirPolyImpureEnc,
+    MirPolyImpureEnc, MirPolyPurifiedEnc,
 };
 
 pub fn test_entrypoint<'tcx>(
@@ -52,8 +52,13 @@ pub fn test_entrypoint<'tcx>(
                 )
                 .unwrap_or_default();
 
+                // if !(is_trusted && is_pure) {
+                //     let res = MirPolyImpureEnc::encode(def_id, false);
+                //     assert!(res.is_ok());
+                // }
+
                 if !(is_trusted && is_pure) {
-                    let res = MirPolyImpureEnc::encode(def_id, false);
+                    let res = MirPolyPurifiedEnc::encode(def_id, false);
                     assert!(res.is_ok());
                 }
             }
@@ -81,14 +86,23 @@ pub fn test_entrypoint<'tcx>(
     // it will still use `MirPolyImpureEnc` directly sometimes (see usages
     // earlier in this file).
     header(&mut viper_code, "methods");
-    for output in crate::encoders::MirMonoImpureEnc::all_outputs() {
+    for output in crate::encoders::MirMonoPurifiedEnc::all_outputs() {
         viper_code.push_str(&format!("{:?}\n", output.method));
         program_methods.push(output.method);
     }
-    for output in crate::encoders::MirPolyImpureEnc::all_outputs() {
+    for output in crate::encoders::MirPolyPurifiedEnc::all_outputs() {
         viper_code.push_str(&format!("{:?}\n", output.method));
         program_methods.push(output.method);
     }
+    // header(&mut viper_code, "methods");
+    // for output in crate::encoders::MirMonoImpureEnc::all_outputs() {
+    //     viper_code.push_str(&format!("{:?}\n", output.method));
+    //     program_methods.push(output.method);
+    // }
+    // for output in crate::encoders::MirPolyImpureEnc::all_outputs() {
+    //     viper_code.push_str(&format!("{:?}\n", output.method));
+    //     program_methods.push(output.method);
+    // }
 
     header(&mut viper_code, "functions");
     for output in crate::encoders::PureFunctionEnc::all_outputs() {
