@@ -52,7 +52,8 @@ impl CastType for CastTypePure {
             CastFunctionsOutputRef::Casters { make_concrete, .. } => make_concrete.gen()(
                 snap.downcast_ty(),
                 &ty_args.iter().map(|t| t.expr(vcx)).collect::<Vec<_>>(),
-            ).upcast_ty(),
+            )
+            .upcast_ty(),
         }
     }
 

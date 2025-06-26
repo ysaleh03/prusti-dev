@@ -131,7 +131,8 @@ where
 
                 let loop_analysis = LoopAnalysis::find_loops(&body);
                 let bc = BorrowCheckerImpl::new(vcx.tcx(), &body_with_facts);
-                let fpcs_analysis = pcg::run_pcg(&body_with_facts.body, vcx.tcx(), &bc, Global, None);
+                let fpcs_analysis =
+                    pcg::run_pcg(&body_with_facts.body, vcx.tcx(), &bc, Global, None);
 
                 let block_count = body.basic_blocks.len();
 
