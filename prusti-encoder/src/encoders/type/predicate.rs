@@ -3,10 +3,7 @@ use prusti_rustc_interface::{
     target::abi,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
-use vir::{
-    CallableIdn, CastType, FunctionIdn, HasType, MethodIdn, PredicateIdn,
-    VirCtxt,
-};
+use vir::{CallableIdn, CastType, FunctionIdn, HasType, MethodIdn, PredicateIdn, VirCtxt};
 
 use crate::encoders::{generic::GenericEncOutputRef, GenericEnc};
 
@@ -271,10 +268,8 @@ impl<'vir> PredicateBuilder<'vir> {
         expr: Option<vir::ExprBool<'vir>>,
     ) -> vir::PredicateIdn<'vir, A> {
         let ident = self.predicate_ident(name, args);
-        self.predicates.push(
-            self.vcx
-                .mk_predicate(ident, params, expr),
-        );
+        self.predicates
+            .push(self.vcx.mk_predicate(ident, params, expr));
         ident
     }
 
