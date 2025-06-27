@@ -121,15 +121,15 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         }
         // if root is a primitive then we need to require/ensure
         // that lhs has the corresponding VIR type
-        (ty::TyKind::Bool, ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Char, ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Int(..), ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Uint(..), ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Float(..), ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Foreign(..), ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Str, ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Never, ty::TyKind::Param(param_ty))
-        | (ty::TyKind::Error(..), ty::TyKind::Param(param_ty)) => {
+        (ty::TyKind::Bool, ty::TyKind::Param(_))
+        | (ty::TyKind::Char, ty::TyKind::Param(_))
+        | (ty::TyKind::Int(..), ty::TyKind::Param(_))
+        | (ty::TyKind::Uint(..), ty::TyKind::Param(_))
+        | (ty::TyKind::Float(..), ty::TyKind::Param(_))
+        | (ty::TyKind::Foreign(..), ty::TyKind::Param(_))
+        | (ty::TyKind::Str, ty::TyKind::Param(_))
+        | (ty::TyKind::Never, ty::TyKind::Param(_))
+        | (ty::TyKind::Error(..), ty::TyKind::Param(_)) => {
             vec![(lhs, ty_constructor.ty_constructor.apply(vcx, &[]))]
         }
         // if a param generic corresponds to a non-primitive root
