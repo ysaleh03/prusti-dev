@@ -93,7 +93,8 @@ where
                 .collect::<Vec<_>>();
             args.extend(param_ty_decls.iter().map(|decl| decl.ty));
             let args = UnknownArity::new(vcx.alloc_slice(&args));
-            let method_ref = MethodIdent::new(method_name, args);
+            let ret_tys = vcx.alloc_slice(&[local_defs.locals[mir::RETURN_PLACE].ty.snapshot]);
+            let method_ref = MethodIdent::new(method_name, args, ret_tys);
             deps.emit_output_ref(
                 task_key.clone(),
                 PurifiedFunctionEncOutputRef { method_ref },
