@@ -1,5 +1,5 @@
 use prusti_rustc_interface::{
-    middle::{mir, ty},
+    middle::{mir, ty, ty::TypeVisitableExt},
     span::def_id::DefId,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
@@ -13,7 +13,7 @@ use crate::{
         PurifiedFunctionEncOutputRef,
     },
     encoders::{
-        lifted::ty_constructor::TyConstructorEnc,
+        lifted::{generic::LiftedGenericEnc, ty_constructor::TyConstructorEnc},
         most_generic_ty::{self},
     },
 };
@@ -101,7 +101,7 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
     generic: ty::Ty<'tcx>,
     lhs: vir::Expr<'vir>,
 ) -> Vec<(vir::Expr<'vir>, vir::Expr<'vir>)> {
-    if generic == root {
+    if !root.has_param() && generic == root {
         return Vec::new();
     }
 
@@ -111,56 +111,36 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         .unwrap();
 
     match (root.kind(), generic.kind()) {
-        (ty::TyKind::Adt(root_adt_def, root_args), ty::TyKind::Adt(gen_adt_def, gen_args)) => {
-            root_adt_def
-                .all_fields()
-                .zip(gen_adt_def.all_fields())
-                .zip(ty_constructor.ty_param_accessors)
-                .flat_map(|((root_field, gen_field), accessor)| {
-                    extract_type_conditions(
-                        vcx,
-                        deps,
-                        root_field.ty(vcx.tcx(), root_args),
-                        gen_field.ty(vcx.tcx(), gen_args),
-                        accessor.apply(vcx, [lhs]),
-                    )
-                })
-                .collect::<Vec<_>>()
+        // if root is a param, then we're done
+        (ty::TyKind::Param(param_ty), ty::Param(_)) => {
+            let lifted = deps
+                .require_ref::<LiftedGenericEnc>(*param_ty)
+                .unwrap()
+                .expr(vcx);
+            vec![(lhs, lifted)]
         }
-        (ty::TyKind::Array(root_ty, ..), ty::TyKind::Array(gen_ty, ..))
-        | (ty::TyKind::Pat(root_ty, ..), ty::TyKind::Pat(gen_ty, ..))
-        | (ty::TyKind::Slice(root_ty), ty::TyKind::Slice(gen_ty))
-        | (ty::TyKind::RawPtr(root_ty, ..), ty::TyKind::RawPtr(gen_ty, ..))
-        | (ty::TyKind::Ref(_, root_ty, ..), ty::TyKind::Ref(_, gen_ty, ..)) => {
-            extract_type_conditions(
-                vcx,
-                deps,
-                *root_ty,
-                *gen_ty,
-                ty_constructor.ty_param_accessors[0].apply(vcx, [lhs]),
-            )
+        // if root is a primitive then we need to require/ensure
+        // that lhs has the corresponding VIR type
+        (ty::TyKind::Bool, ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Char, ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Int(..), ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Uint(..), ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Float(..), ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Foreign(..), ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Str, ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Never, ty::TyKind::Param(param_ty))
+        | (ty::TyKind::Error(..), ty::TyKind::Param(param_ty)) => {
+            let lifted = deps
+                .require_ref::<LiftedGenericEnc>(*param_ty)
+                .unwrap()
+                .expr(vcx);
+            vec![(lhs, lifted)]
         }
-        (ty::TyKind::Tuple(root_tys), ty::TyKind::Tuple(gen_tys)) => root_tys
-            .iter()
-            .zip(gen_tys.iter())
-            .zip(ty_constructor.ty_param_accessors)
-            .flat_map(|((root_ty, gen_ty), accessor)| {
-                extract_type_conditions(vcx, deps, root_ty, gen_ty, accessor.apply(vcx, [lhs]))
-            })
-            .collect::<Vec<_>>(),
-        (ty::TyKind::Bool, ty::TyKind::Param(_))
-        | (ty::TyKind::Char, ty::TyKind::Param(_))
-        | (ty::TyKind::Int(..), ty::TyKind::Param(_))
-        | (ty::TyKind::Uint(..), ty::TyKind::Param(_))
-        | (ty::TyKind::Float(..), ty::TyKind::Param(_))
-        | (ty::TyKind::Foreign(..), ty::TyKind::Param(_))
-        | (ty::TyKind::Str, ty::TyKind::Param(_))
-        | (ty::TyKind::Never, ty::TyKind::Param(_))
-        | (ty::TyKind::Error(..), ty::TyKind::Param(_)) => {
-            vec![(lhs, ty_constructor.ty_constructor.apply(vcx, &[]))]
-        }
-        // if a param corresponds to a non-primitive type
+        // if a param generic corresponds to a non-primitive root
         // then we need to expand the param before proceeding
+        // *and*
+        // need to require/ensure that lhs is the corresponding VIR
+        // data structure with fields of the corresponding VIR types
         (ty::TyKind::Array(..), ty::TyKind::Param(_))
         | (ty::TyKind::Pat(..), ty::TyKind::Param(_))
         | (ty::TyKind::Slice(..), ty::TyKind::Param(_))
@@ -177,11 +157,46 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
             inner_eq_exprs.push(expr);
             inner_eq_exprs
         }
-        // ty::TyKind::Alias(alias_ty_kind, alias_ty) => todo!(),
-        // ty::TyKind::Param(_) => {}
-        // ty::TyKind::Bound(debruijn_index, _) => todo!(),
-        // ty::TyKind::Placeholder(_) => todo!(),
-        // ty::TyKind::Infer(infer_ty) => todo!(),
-        _ => unreachable!(),
+        // else we expand both types recursively and collect their conditions
+        (ty::TyKind::Adt(root_adt_def, root_args), ty::TyKind::Adt(gen_adt_def, gen_args)) => {
+            root_adt_def
+                .all_fields()
+                .zip(gen_adt_def.all_fields())
+                .zip(ty_constructor.ty_param_accessors)
+                .flat_map(|((root_field, gen_field), accessor)| {
+                    extract_type_conditions(
+                        vcx,
+                        deps,
+                        root_field.ty(vcx.tcx(), root_args),
+                        gen_field.ty(vcx.tcx(), gen_args),
+                        accessor.apply(vcx, [lhs]),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }
+        (ty::TyKind::Tuple(root_tys), ty::TyKind::Tuple(gen_tys)) => root_tys
+            .iter()
+            .zip(gen_tys.iter())
+            .zip(ty_constructor.ty_param_accessors)
+            .flat_map(|((root_ty, gen_ty), accessor)| {
+                extract_type_conditions(vcx, deps, root_ty, gen_ty, accessor.apply(vcx, [lhs]))
+            })
+            .collect::<Vec<_>>(),
+        (ty::TyKind::Array(root_ty, ..), ty::TyKind::Array(gen_ty, ..))
+        | (ty::TyKind::Pat(root_ty, ..), ty::TyKind::Pat(gen_ty, ..))
+        | (ty::TyKind::Slice(root_ty), ty::TyKind::Slice(gen_ty))
+        | (ty::TyKind::RawPtr(root_ty, ..), ty::TyKind::RawPtr(gen_ty, ..))
+        | (ty::TyKind::Ref(_, root_ty, ..), ty::TyKind::Ref(_, gen_ty, ..)) => {
+            extract_type_conditions(
+                vcx,
+                deps,
+                *root_ty,
+                *gen_ty,
+                ty_constructor.ty_param_accessors[0].apply(vcx, [lhs]),
+            )
+        }
+        (root_kind, generic_kind) => {
+            unreachable!("root: {root_kind:#?} generic: {generic_kind:#?}")
+        }
     }
 }
