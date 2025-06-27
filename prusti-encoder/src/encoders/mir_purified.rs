@@ -1416,21 +1416,6 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                             ),
                         ).unwrap().function;
                         unop_function.apply(self.vcx, &[self.encode_operand_snap(operand)])
-                        /*
-                        assert!(source.projection.is_empty());
-                        let source_version = self.ssa_analysis.version.get(&(location, source.local)).unwrap();
-                        let source_name = vir::vir_format_identifier!(self.vcx, "_{}s_{}", source.local.index(), source_version);
-
-                        let unop_function = self.deps.require_ref::<crate::encoders::MirBuiltinEnc>(
-                            crate::encoders::MirBuiltinEncTask::UnOp(
-                                *unop,
-                                source.ty(self.local_decls, self.vcx.tcx()).ty,
-                            ),
-                        ).unwrap().name;
-                        Some(self.vcx.mk_func_app(
-                            unop_function,
-                            &[self.vcx.mk_local_ex(source_name)],
-                        ))*/
                     }
 
                     mir::Rvalue::Aggregate(
@@ -1457,23 +1442,31 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                         sl.snap_data.field_snaps_to_snap.apply(self.vcx, self.vcx.alloc_slice(&casted_args))
                     }
                     mir::Rvalue::Discriminant(place) => {
-                        let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();
                         let place_ty = place.ty(self.local_decls, self.vcx.tcx());
-                        let ty = self.deps.require_ref::<RustTyPredicatesEnc>(place_ty.ty).unwrap();
+                        let ty = self
+                            .deps
+                            .require_local::<encoders::rust_ty_snapshots::RustTySnapshotsEnc>(place_ty.ty)
+                            .unwrap()
+                            .generic_snapshot
+                            .specifics;
                         let place_expr = self.encode_place(Place::from(*place)).expr;
 
-                        match ty.generic_predicate.get_enumlike().filter(|_| place_ty.variant_index.is_none()) {
-                            Some(el) => {
-                                let discr_ty = place_ty.ty.discriminant_ty(self.vcx.tcx());
-                                let discr_ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(discr_ty).unwrap();
-                                let discr_expr = el.as_ref().unwrap().discr.apply(self.vcx, [place_expr]);
-                                // self.vcx.mk_unfolding_expr(ty.value_to_pred_app(self.vcx, place_expr, Some(self.vcx.mk_wildcard())), discr_expr)
-                                discr_expr
-                            }
+                        match ty.get_enumlike().filter(|_| place_ty.variant_index.is_none()) {
+                            Some(ty) => ty
+                                .unwrap()
+                                .snap_to_discr_snap
+                                .apply(self.vcx, [place_expr]),
                             None => {
+                                let e_rvalue_ty = self
+                                    .deps
+                                    .require_local::<encoders::rust_ty_snapshots::RustTySnapshotsEnc>(rvalue_ty)
+                                    .unwrap()
+                                    .generic_snapshot
+                                    .specifics
+                                    .expect_primitive();
                                 // mir::Rvalue::Discriminant documents "Returns zero for types without discriminant"
                                 let zero = self.vcx.mk_uint::<0>();
-                                e_rvalue_ty.generic_predicate.expect_prim().prim_to_snap.apply(self.vcx, [zero])
+                                e_rvalue_ty.prim_to_snap.apply(self.vcx, [zero])
                             }
                         }
                     }
