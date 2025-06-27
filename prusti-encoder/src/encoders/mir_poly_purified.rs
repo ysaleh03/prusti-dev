@@ -137,7 +137,8 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         // *and*
         // need to require/ensure that lhs is the corresponding VIR
         // data structure with fields of the corresponding VIR types
-        (ty::TyKind::Array(..), ty::TyKind::Param(_))
+        (ty::TyKind::Adt(..), ty::TyKind::Param(_))
+        | (ty::TyKind::Array(..), ty::TyKind::Param(_))
         | (ty::TyKind::Pat(..), ty::TyKind::Param(_))
         | (ty::TyKind::Slice(..), ty::TyKind::Param(_))
         | (ty::TyKind::RawPtr(..), ty::TyKind::Param(_))
