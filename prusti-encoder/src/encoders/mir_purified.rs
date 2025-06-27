@@ -27,7 +27,7 @@ use prusti_rustc_interface::{
     target::abi,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
-use vir::{FunctionIdent, UnknownArity};
+use vir::{CallableIdent, FunctionIdent, UnknownArity};
 
 use crate::{
     encoder_traits::{
@@ -38,7 +38,7 @@ use crate::{
         self,
         lifted::{
             aggregate_cast::{AggregateSnapArgsCastEnc, AggregateSnapArgsCastEncTask},
-            casters::{CastTypePure, CastersEncOutputRef},
+            casters::CastersEncOutputRef,
             func_app_ty_params::LiftedFuncAppTyParamsEnc,
             rust_ty_cast::RustTyGenericCastEncOutput,
         },
@@ -49,7 +49,7 @@ use crate::{
 use super::{
     lifted::{
         cast::{CastArgs, CastToEnc},
-        casters::CastTypeImpure,
+        casters::CastTypePure,
         rust_ty_cast::RustTyCastersEnc,
         ty::{EncodeGenericsAsLifted, LiftedTyEnc},
     },
@@ -1006,10 +1006,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             }
         };
         let tmp = self.new_tmp(&ty_out.generic_predicate.snapshot);
-        let stmt = self.vcx.mk_local_decl_stmt(
-            self.vcx.mk_local_decl(tmp.0.name, tmp.0.ty),
-            Some(encode_place_result),
-        );
+        let stmt = self.vcx.mk_pure_assign_stmt(tmp.1, encode_place_result);
         self.stmt(stmt);
         tmp.1
     }
@@ -1780,30 +1777,34 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                         return;
                     };
 
-                    let mut method_in = args
+                    let arg_exprs = args
                         .iter()
                         .map(|arg| self.encode_operand(&arg.node))
                         .collect::<Vec<_>>();
 
-                    for ((fn_arg_ty, arg), arg_ex) in
-                        fn_arg_tys.iter().zip(args.iter()).zip(method_in.iter())
-                    {
-                        let local_decls = self.local_decls_src();
-                        let tcx = self.vcx().tcx();
-                        let arg_ty = arg.node.ty(local_decls, tcx);
-                        let caster = self
-                            .deps()
-                            .require_ref::<CastToEnc<CastTypeImpure>>(CastArgs {
-                                expected: *fn_arg_ty,
-                                actual: arg_ty,
-                            })
-                            .unwrap();
-                        // In this context, `apply_cast_if_necessary` returns
-                        // the impure operation to perform the cast
-                        if let Some(stmt) = caster.apply_cast_if_necessary(self.vcx(), arg_ex) {
-                            self.stmt(stmt);
-                        }
-                    }
+                    let mut method_in = fn_arg_tys
+                        .iter()
+                        .zip(args.iter())
+                        .zip(arg_exprs.iter())
+                        .map(|((fn_arg_ty, arg), arg_ex)| {
+                            let local_decls = self.local_decls_src();
+                            let arg_ty = arg.node.ty(local_decls, self.vcx().tcx());
+                            let caster = self
+                                .deps()
+                                .require_ref::<CastToEnc<CastTypePure>>(CastArgs {
+                                    expected: *fn_arg_ty,
+                                    actual: arg_ty,
+                                })
+                                .unwrap();
+                            // In this context, `apply_cast_if_necessary` returns
+                            // the impure operation to perform the cast
+                            if *fn_arg_ty == arg_ty {
+                                arg_ex
+                            } else {
+                                caster.apply_cast_if_necessary(self.vcx, arg_ex)
+                            }
+                        })
+                        .collect::<Vec<_>>();
 
                     // let mut method_args =
                     //     std::iter::once(dest).chain(method_in).collect::<Vec<_>>();
@@ -1818,6 +1819,11 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                     method_in.extend(encoded_ty_args);
 
                     let label_pre = self.new_label("pre");
+
+                    let expected_ty = destination.ty(self.local_decls_src(), self.vcx.tcx()).ty;
+                    let fn_result_ty = sig.output().skip_binder();
+                    let mut tmp_expr = Vec::new();
+
                     self.vcx().with_span(span, |vcx| {
                         vcx.handle_error(
                             "call.precondition:assertion.false",
@@ -1835,31 +1841,49 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                                 Some(vec![error])
                             },
                         );
-                        self.stmt(self.vcx.alloc(vir::StmtGenData::new(self.vcx.alloc(
-                            func_out.method_ref.apply(
-                                self.vcx,
-                                &[dest_local_def.local],
-                                &method_in,
+
+                        let tmps = func_out
+                            .method_ref
+                            .result_ty()
+                            .into_iter()
+                            .map(|&ty| self.new_tmp(ty))
+                            .collect::<Vec<_>>();
+
+                        let (tmp_out, tmp_expr_tmp): (Vec<_>, Vec<_>) = tmps.into_iter().unzip();
+                        tmp_expr.extend(tmp_expr_tmp);
+
+                        self.stmt(self.vcx.alloc(
+                            vir::StmtGenData::new(
+                                self.vcx.alloc(
+                                    func_out.method_ref.apply(self.vcx, &tmp_out, &method_in),
+                                ),
                             ),
-                        ))));
+                        ));
                     });
+
+                    let mut method_out = Vec::new();
+                    method_out.push(dest_local_def.local_ex);
+
+                    assert_eq!(method_out.len(), tmp_expr.len());
+
                     let label_post = self.new_label("post");
                     self.call_labels
                         .insert(location.block, (label_pre, label_post));
-                    let expected_ty = destination.ty(self.local_decls_src(), self.vcx.tcx()).ty;
-                    let fn_result_ty = sig.output().skip_binder();
+
                     let result_cast = self
                         .deps()
-                        .require_ref::<CastToEnc<CastTypeImpure>>(CastArgs {
+                        .require_ref::<CastToEnc<CastTypePure>>(CastArgs {
                             expected: expected_ty,
                             actual: fn_result_ty,
                         })
                         .unwrap();
-                    if let Some(stmt) =
-                        result_cast.apply_cast_if_necessary(self.vcx, dest_local_def.local_ex)
-                    {
-                        self.stmt(stmt);
-                    }
+                    let rhs = if expected_ty == fn_result_ty {
+                        tmp_expr[0]
+                    } else {
+                        result_cast.apply_cast_if_necessary(self.vcx, tmp_expr[0])
+                    };
+
+                    self.stmt(self.vcx.mk_pure_assign_stmt(dest_local_def.local_ex, rhs));
                 }
 
                 target
