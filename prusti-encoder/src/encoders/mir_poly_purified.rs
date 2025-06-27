@@ -130,11 +130,7 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         | (ty::TyKind::Str, ty::TyKind::Param(param_ty))
         | (ty::TyKind::Never, ty::TyKind::Param(param_ty))
         | (ty::TyKind::Error(..), ty::TyKind::Param(param_ty)) => {
-            let lifted = deps
-                .require_ref::<LiftedGenericEnc>(*param_ty)
-                .unwrap()
-                .expr(vcx);
-            vec![(lhs, lifted)]
+            vec![(lhs, ty_constructor.ty_constructor.apply(vcx, &[]))]
         }
         // if a param generic corresponds to a non-primitive root
         // then we need to expand the param before proceeding
