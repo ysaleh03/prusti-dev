@@ -52,7 +52,7 @@ where
         task_key: &Self::TaskKey<'vir>,
         arg: &PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> Vec<vir::Expr<'vir>>;
+    ) -> vir::Expr<'vir>;
 
     fn encode<'vir>(
         task_key: Self::TaskKey<'vir>,
@@ -118,7 +118,7 @@ where
                 let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
                 let type_s = arg.ty.snapshot;
                 args.push(vcx.mk_local_decl(name_s, type_s));
-                pres.extend(Self::mk_conditions(
+                pres.push(Self::mk_conditions(
                     vcx, &mut deps, &task_key, &arg, arg_idx,
                 ));
             }
@@ -127,7 +127,7 @@ where
             let name_ret = ret.local.name;
             let type_ret = ret.ty.snapshot;
             rets.push(vcx.mk_local_decl(name_ret, type_ret));
-            posts.extend(Self::mk_conditions(
+            posts.push(Self::mk_conditions(
                 vcx,
                 &mut deps,
                 &task_key,

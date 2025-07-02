@@ -46,8 +46,8 @@ impl PurifiedFunctionEnc for MirMonoPurifiedEnc {
         task_key: &Self::TaskKey<'vir>,
         arg: &crate::encoders::PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> Vec<vir::Expr<'vir>> {
-        Vec::new()
+    ) -> vir::Expr<'vir> {
+        vcx.mk_todo_expr("TODO")
     }
 }
 
