@@ -230,6 +230,11 @@ where
                     encoded_blocks,
                 };
                 visitor.visit_body(&body);
+                start_stmts.extend(
+                    visitor.declared_vars.iter().map(|(name, ty)| {
+                        vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
+                    }),
+                );
                 start_stmts.extend(visitor.from_to_vars.iter().flat_map(|(_, v)| v.iter()).map(
                     |(_, v)| {
                         vcx.mk_local_decl_stmt(
