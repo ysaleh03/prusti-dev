@@ -156,7 +156,11 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
             Some(ty_constructor.ty_constructor.apply(vcx, &rhss))
         }
         (ty::TyKind::Ref(_, root_ty, ..), ty::TyKind::Ref(_, gen_ty, ..)) => {
-            extract_type_conditions(vcx, deps, *root_ty, *gen_ty)
+            if let Some(rhs) = extract_type_conditions(vcx, deps, *root_ty, *gen_ty) {
+                Some(ty_constructor.ty_constructor.apply(vcx, &[rhs]))
+            } else {
+                Some(ty_constructor.ty_constructor.apply(vcx, &[])) // does this case ever happen?
+            }
         }
         (ty::TyKind::Tuple(root_tys), ty::TyKind::Tuple(gen_tys)) => {
             let rhss = root_tys
