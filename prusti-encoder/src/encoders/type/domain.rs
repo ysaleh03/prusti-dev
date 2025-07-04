@@ -210,12 +210,24 @@ impl TaskEncoder for DomainEnc {
                     super::kinds::tuple::domain(*task_key, &output_ref, deps, &mut builder)?
                 }
                 TyKind::Never => super::kinds::never::domain(*task_key, deps, &mut builder)?,
-                TyKind::Ref(_, _, ty::Mutability::Not) => {
-                    super::kinds::immref::domain(*task_key, &output_ref, deps, &mut builder)?
-                }
-                TyKind::Ref(_, _, ty::Mutability::Mut) => {
-                    super::kinds::mutref::domain(*task_key, deps, &mut builder)?
-                }
+                // TyKind::Ref(_, _, ty::Mutability::Not) => {
+                //     super::kinds::immref::domain(*task_key, &output_ref, deps, &mut builder)?
+                // }
+                // TyKind::Ref(_, _, ty::Mutability::Mut) => {
+                //     super::kinds::mutref::domain(*task_key, deps, &mut builder)?
+                // }
+                TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::purified_immref::domain(
+                    *task_key,
+                    &output_ref,
+                    deps,
+                    &mut builder,
+                )?,
+                TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::purified_mutref::domain(
+                    *task_key,
+                    &output_ref,
+                    deps,
+                    &mut builder,
+                )?,
                 TyKind::Param(_) => super::kinds::param::domain(*task_key, deps, &mut builder)?,
                 TyKind::Str => super::kinds::str::domain(*task_key, deps, &mut builder)?,
                 _kind => super::kinds::opaque::domain(*task_key, deps, &mut builder)?,

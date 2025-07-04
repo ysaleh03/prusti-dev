@@ -77,7 +77,8 @@ impl TaskEncoder for ConstEnc {
                     // we will need to revisit this encoding, but for the moment this allows assertions to avoid
                     // crashing Prusti.
                     ConstValue::Slice { .. } if ty.peel_refs().is_str() => {
-                        let ref_ty = kind.expect_immref();
+                        // let ref_ty = kind.expect_immref();
+                        let ref_ty = kind.expect_purified_immref();
                         let str_ty = ty.peel_refs();
                         let str_snap = deps
                             .require_local::<RustTySnapshotsEnc>(str_ty)?

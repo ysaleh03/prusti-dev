@@ -600,7 +600,21 @@ impl TaskEncoder for PredicateEnc {
                     &generic_exprs,
                     &mut builder,
                 )?,
-                TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::immref::predicate(
+                // TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::immref::predicate(
+                //     *task_key,
+                //     snap.clone(),
+                //     deps,
+                //     &generic_decls,
+                //     &generic_exprs,
+                //     &mut builder,
+                // )?,
+                // TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::mutref::predicate(
+                //     *task_key,
+                //     snap.clone(),
+                //     deps,
+                //     /*&generic_decls, &generic_exprs, */ &mut builder,
+                // )?,
+                TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::purified_immref::predicate(
                     *task_key,
                     snap.clone(),
                     deps,
@@ -608,11 +622,13 @@ impl TaskEncoder for PredicateEnc {
                     &generic_exprs,
                     &mut builder,
                 )?,
-                TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::mutref::predicate(
+                TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::purified_mutref::predicate(
                     *task_key,
                     snap.clone(),
                     deps,
-                    /*&generic_decls, &generic_exprs, */ &mut builder,
+                    &generic_decls,
+                    &generic_exprs,
+                    &mut builder,
                 )?,
                 TyKind::Never => (
                     super::kinds::never::predicate(

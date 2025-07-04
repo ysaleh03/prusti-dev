@@ -396,7 +396,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             curr_ver[local]
                         }),
                     ),
-                ).upcast_ty()
+                )
+                .upcast_ty()
             })
             .collect::<Vec<_>>();
         self.reify_binds(update, tuple_ref.mk_cons(self.vcx, &tuple_args))
@@ -1003,15 +1004,10 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                                 .deps
                                 .require_ref::<RustTySnapshotsEnc>(qvar_ty)
                                 .unwrap();
-                            self.vcx
-                                .mk_local_decl(
-                                    vir::vir_format!(
-                                        self.vcx,
-                                        "qvar_{}_{idx}",
-                                        self.encoding_depth
-                                    ),
-                                    ty_out.generic_snapshot.snapshot,
-                                )
+                            self.vcx.mk_local_decl(
+                                vir::vir_format!(self.vcx, "qvar_{}_{idx}", self.encoding_depth),
+                                ty_out.generic_snapshot.snapshot,
+                            )
                         })
                         .collect::<Vec<_>>(),
                 );
@@ -1303,23 +1299,23 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                         .unwrap()
                         .generic_snapshot
                         .specifics
-                        .expect_mutref();
-                    let inner_ty_out = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty).unwrap();
+                        // .expect_mutref();
+                        .expect_purified_mutref();
+                    // let inner_ty_out = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty).unwrap();
                     //let ref_expr = Some(e_ty.deref_access.apply(vcx, [expr]));
                     let ref_expr = e_ty.deref_access.gen()(expr);
                     // let val_expr = e_ty.value_access.apply(vcx, [expr]);
                     // let place_ty = place_ty.projection_ty(vcx.tcx(), elem);
                     // Since the `expr` is the target of a reference, it is encoded as a `Param`.
                     // If it is not a type parameter, we cast it to its concrete Snapshot.
-                    //let cast = self
-                    //    .deps
-                    //    .require_local::<RustTyCastersEnc<CastTypePure>>(place_ty.ty)
-                    //    .unwrap();
-                    //let val_expr = cast.cast_to_concrete_if_possible(vcx, val_expr);
-                    //(val_expr, place_ref)
-                    let ref_val_expr =
-                        inner_ty_out.ref_to_snap(vcx, unsafe { std::mem::transmute(ref_expr) }); // TODO: hack...
-                    (ref_val_expr.lift(), place_ref)
+                    let cast = deps
+                        .require_local::<RustTyCastersEnc<CastTypePure>>(place_ty.ty)
+                        .unwrap();
+                    let val_expr = cast.cast_to_concrete_if_possible(vcx, val_expr);
+                    (val_expr, place_ref)
+                    // let ref_val_expr =
+                    //     inner_ty_out.ref_to_snap(vcx, unsafe { std::mem::transmute(ref_expr) }); // TODO: hack...
+                    // (ref_val_expr.lift(), place_ref)
                 }
                 _ => unreachable!(),
             }
