@@ -4,6 +4,8 @@ pub mod adt;
 pub mod closure;
 pub mod immref;
 pub mod mutref;
+pub mod purified_mutref;
+pub mod purified_immref;
 pub mod never;
 pub mod opaque;
 pub mod param;
