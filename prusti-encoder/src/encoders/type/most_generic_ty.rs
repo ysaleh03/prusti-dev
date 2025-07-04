@@ -102,8 +102,7 @@ impl<'tcx> MostGenericTy<'tcx> {
             TyKind::Tuple(tys) => tys.iter().map(as_param_ty).collect::<Vec<_>>(),
             TyKind::Array(inner, _) => vec![as_param_ty(*inner)],
             TyKind::Slice(inner) => vec![as_param_ty(*inner)],
-            TyKind::Ref(_, inner, ty::Mutability::Not) => vec![as_param_ty(*inner)],
-            TyKind::Ref(_, _, ty::Mutability::Mut) => vec![],
+            TyKind::Ref(_, inner, _) => vec![as_param_ty(*inner)],
             TyKind::RawPtr(inner, _) => vec![as_param_ty(*inner)],
             TyKind::Param(p) => vec![p],
             TyKind::Closure(_, args) => {
@@ -175,23 +174,10 @@ pub fn extract_type_params<'tcx>(
             let ty = tcx.mk_ty_from_kind(TyKind::Slice(ty));
             (MostGenericTy(ty), vec![inner])
         }
-        TyKind::Ref(_, inner, ty::Mutability::Not) => {
+        TyKind::Ref(_, inner, mutability) => {
             let ty = to_placeholder(tcx, None);
-            let ty = tcx.mk_ty_from_kind(TyKind::Ref(
-                tcx.lifetimes.re_erased,
-                ty,
-                ty::Mutability::Not,
-            ));
+            let ty = tcx.mk_ty_from_kind(TyKind::Ref(tcx.lifetimes.re_erased, ty, mutability));
             (MostGenericTy(ty), vec![inner])
-        }
-        TyKind::Ref(_, _, ty::Mutability::Mut) => {
-            let ty = to_placeholder(tcx, None);
-            let ty = tcx.mk_ty_from_kind(TyKind::Ref(
-                tcx.lifetimes.re_erased,
-                ty,
-                ty::Mutability::Mut,
-            ));
-            (MostGenericTy(ty), vec![]) // vec![inner])
         }
         TyKind::RawPtr(inner, m) => {
             let ty = to_placeholder(tcx, None);
