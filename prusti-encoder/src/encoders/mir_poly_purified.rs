@@ -129,6 +129,10 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         | (ty::TyKind::Error(..), ty::TyKind::Param(_)) => {
             Some(ty_constructor.ty_constructor.apply(vcx, &[]))
         }
+        // also root has no more params
+        (ty::TyKind::Adt(_, root_args), ty::TyKind::Param(_)) if !root_args.has_param() => {
+            Some(ty_constructor.ty_constructor.apply(vcx, &[]))
+        }
         // if a param generic corresponds to a non-primitive root
         // then we need to expand the param before proceeding
         (ty::TyKind::Adt(..), ty::TyKind::Param(_))
@@ -137,7 +141,7 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
         | (ty::TyKind::Slice(..), ty::TyKind::Param(_))
         | (ty::TyKind::RawPtr(..), ty::TyKind::Param(_))
         | (ty::Tuple(..), ty::TyKind::Param(_)) => {
-            extract_type_conditions(vcx, deps, root, most_generic_ty.into())
+            extract_type_conditions(vcx, deps, root, most_generic_ty.ty())
         }
         // else we expand both types recursively and collect their conditions
         (ty::TyKind::Adt(root_adt_def, root_args), ty::TyKind::Adt(gen_adt_def, gen_args)) => {
@@ -159,7 +163,7 @@ fn extract_type_conditions<'vir: 'tcx, 'tcx>(
             if let Some(rhs) = extract_type_conditions(vcx, deps, *root_ty, *gen_ty) {
                 Some(ty_constructor.ty_constructor.apply(vcx, &[rhs]))
             } else {
-                Some(ty_constructor.ty_constructor.apply(vcx, &[])) // does this case ever happen?
+                unreachable!() // does this case ever happen?
             }
         }
         (ty::TyKind::Tuple(root_tys), ty::TyKind::Tuple(gen_tys)) => {
