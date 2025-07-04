@@ -53,6 +53,20 @@ pub struct DomainDataMutRef<'vir> {
     pub value_access: FunctionIdn<'vir, vir::CSnap, vir::PSnap>,
 }
 #[derive(Clone, Copy, Debug)]
+pub struct DomainDataPurifiedImmRef<'vir> {
+    /// Construct domain from a `Ref` value.
+    pub prim_to_snap: FunctionIdent<'vir, UnaryArity<'vir>>,
+    /// Function to access the snapshot value.
+    pub value_access: FunctionIdent<'vir, UnaryArity<'vir>>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct DomainDataPurifiedMutRef<'vir> {
+    /// Construct domain from a `Ref` value.
+    pub prim_to_snap: FunctionIdent<'vir, UnaryArity<'vir>>,
+    /// Function to access the snapshot value.
+    pub value_access: FunctionIdent<'vir, UnaryArity<'vir>>,
+}
+#[derive(Clone, Copy, Debug)]
 pub struct DomainDataStruct<'vir> {
     /// Construct domain from snapshots of fields or for primitive types
     /// from the single Viper primitive value.
@@ -93,6 +107,8 @@ pub enum DomainEncSpecifics<'vir> {
     Primitive(DomainDataPrim<'vir>),
     ImmRef(DomainDataImmRef<'vir>),
     MutRef(DomainDataMutRef<'vir>),
+    PurifiedImmRef(DomainDataPurifiedImmRef<'vir>),
+    PurifiedMutRef(DomainDataPurifiedMutRef<'vir>),
     // structs, tuples
     StructLike(DomainDataStruct<'vir>),
     EnumLike(Option<DomainDataEnum<'vir>>),
@@ -325,6 +341,20 @@ impl<'vir> DomainEncSpecifics<'vir> {
         match self {
             Self::MutRef(data) => data,
             _ => panic!("expected mutref"),
+        }
+    }
+    #[track_caller]
+    pub fn expect_purified_immref(self) -> DomainDataPurifiedImmRef<'vir> {
+        match self {
+            Self::PurifiedImmRef(data) => data,
+            _ => panic!("expected purified immref"),
+        }
+    }
+    #[track_caller]
+    pub fn expect_purified_mutref(self) -> DomainDataPurifiedMutRef<'vir> {
+        match self {
+            Self::PurifiedMutRef(data) => data,
+            _ => panic!("expected purified mutref"),
         }
     }
     #[track_caller]

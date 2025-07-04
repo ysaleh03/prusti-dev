@@ -8,7 +8,10 @@ use vir::{CallableIdn, CastType, FunctionIdn, HasType, MethodIdn, PredicateIdn, 
 use crate::encoders::{generic::GenericEncOutputRef, GenericEnc};
 
 use super::{
-    domain::{DomainDataImmRef, DomainDataMutRef, DomainDataPrim, DomainDataStruct},
+    domain::{
+        DomainDataImmRef, DomainDataMutRef, DomainDataPrim, DomainDataPurifiedImmRef,
+        DomainDataPurifiedMutRef, DomainDataStruct,
+    },
     lifted::{generic::LiftedGeneric, ty::LiftedTy},
     most_generic_ty::{get_vir_base_name_kind, MostGenericTy},
     snapshot::SnapshotEnc,
@@ -61,6 +64,18 @@ pub struct PredicateEncDataMutRef<'vir> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct PredicateEncDataPurifiedImmRef<'vir> {
+    pub perm: Option<vir::Expr<'vir>>,
+    pub snap_data: DomainDataPurifiedImmRef<'vir>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PredicateEncDataPurifiedMutRef<'vir> {
+    pub perm: Option<vir::Expr<'vir>>,
+    pub snap_data: DomainDataPurifiedMutRef<'vir>,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum PredicateEncData<'vir> {
     Never,
     Primitive(DomainDataPrim<'vir>),
@@ -70,6 +85,8 @@ pub enum PredicateEncData<'vir> {
     EnumLike(Option<PredicateEncDataEnum<'vir>>),
     ImmRef(PredicateEncDataImmRef<'vir>),
     MutRef(PredicateEncDataMutRef<'vir>),
+    PurifiedImmRef(PredicateEncDataPurifiedImmRef<'vir>),
+    PurifiedMutRef(PredicateEncDataPurifiedMutRef<'vir>),
     Param,
 }
 
@@ -133,6 +150,20 @@ impl<'vir> PredicateEncOutputRef<'vir> {
         match self.specifics {
             PredicateEncData::MutRef(r) => r,
             s => panic!("expected mutref type ({s:?})"),
+        }
+    }
+    #[track_caller]
+    pub fn expect_purified_immref(&self) -> PredicateEncDataPurifiedImmRef<'vir> {
+        match self.specifics {
+            PredicateEncData::PurifiedImmRef(r) => r,
+            s => panic!("expected purified immref type ({s:?})"),
+        }
+    }
+    #[track_caller]
+    pub fn expect_purified_mutref(&self) -> PredicateEncDataPurifiedMutRef<'vir> {
+        match self.specifics {
+            PredicateEncData::PurifiedMutRef(r) => r,
+            s => panic!("expected purified mutref type ({s:?})"),
         }
     }
     pub fn get_structlike(&self) -> Option<&PredicateEncDataStruct<'vir>> {
