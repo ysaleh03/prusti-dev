@@ -52,7 +52,7 @@ where
         task_key: &Self::TaskKey<'vir>,
         arg: &PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> vir::Expr<'vir>;
+    ) -> Option<vir::Expr<'vir>>;
 
     fn encode<'vir>(
         task_key: Self::TaskKey<'vir>,
@@ -118,22 +118,16 @@ where
                 let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
                 let type_s = arg.ty.snapshot;
                 args.push(vcx.mk_local_decl(name_s, type_s));
-                pres.push(Self::mk_conditions(
-                    vcx, &mut deps, &task_key, &arg, arg_idx,
-                ));
+                Self::mk_conditions(vcx, &mut deps, &task_key, &arg, arg_idx)
+                    .map(|cond| pres.push(cond));
             }
             let mut rets = Vec::with_capacity(1);
             let ret = local_defs.locals[mir::RETURN_PLACE];
             let name_ret = ret.local.name;
             let type_ret = ret.ty.snapshot;
             rets.push(vcx.mk_local_decl(name_ret, type_ret));
-            posts.push(Self::mk_conditions(
-                vcx,
-                &mut deps,
-                &task_key,
-                &ret,
-                mir::RETURN_PLACE.into(),
-            ));
+            Self::mk_conditions(vcx, &mut deps, &task_key, &ret, mir::RETURN_PLACE.into())
+                .map(|cond| posts.push(cond));
 
             // ..
             // pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
