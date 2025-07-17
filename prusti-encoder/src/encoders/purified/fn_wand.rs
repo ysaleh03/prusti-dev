@@ -1,6 +1,6 @@
 use crate::encoders::{
     indirect::{IndirectKey, IndirectPredicatesEnc},
-    ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
+    MirSpecEnc, PurifiedEncVisitor, PurifiedLocalDefEncOutput,
 };
 use pcg::borrow_pcg::{state::BorrowsState, unblock_graph::UnblockGraph};
 use prusti_interface::{environment::EnvQuery, PrustiError};
@@ -68,29 +68,29 @@ impl<'vir> WandEncOutput<'vir> {
     pub fn indirect_pres<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a MirLocalDefEncOutput<'vir>,
+        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
     ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
         self.inputs().filter_map(|g| {
-            self.encode_generic(vcx, deps, g, true, &|i| local_defs.locals[i].impure_snap)
+            self.encode_generic(vcx, deps, g, true, &|i| local_defs.locals[i].local_ex)
         })
     }
 
     pub fn indirect_posts<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a MirLocalDefEncOutput<'vir>,
+        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
     ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
         self.outputs().filter_map(|g| {
-            self.encode_generic(vcx, deps, g, false, |i| local_defs.locals[i].impure_snap)
+            self.encode_generic(vcx, deps, g, false, |i| local_defs.locals[i].local_ex)
         })
     }
 
     pub fn wand_posts<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a MirLocalDefEncOutput<'vir>,
+        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
     ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
         // TODO: wands for late-bound regions
@@ -108,13 +108,13 @@ impl<'vir> WandEncOutput<'vir> {
                     })
                     .1
             };
-            let snap_rhs = |i| vcx.mk_old_expr(local_defs.locals[i].impure_snap);
+            let snap_rhs = |i| vcx.mk_old_expr(local_defs.locals[i].local_ex);
             match self.mk_wand(&lhs, &rhs, &pledge, snap_lhs, snap_rhs, vcx, deps) {
                 Ok(wand) => {
                     snaps
                         .into_iter()
                         .fold(vcx.mk_wand_expr(wand), |acc, (local, (name, _))| {
-                            vcx.mk_let_expr(name, local_defs.locals[local].impure_snap, acc)
+                            vcx.mk_let_expr(name, local_defs.locals[local].local_ex, acc)
                         })
                 }
                 Err(rhs) => rhs,
@@ -127,7 +127,7 @@ impl<'vir> WandEncOutput<'vir> {
         arguments: &[vir::Expr<'vir>],
         label_pre: &'vir str,
         label_post: &'vir str,
-        visitor: &mut ImpureEncVisitor<'vir, '_, E>,
+        visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
     ) {
         let vcx = visitor.vcx;
         let snap_lhs = |l: mir::Local| {
@@ -153,19 +153,19 @@ impl<'vir> WandEncOutput<'vir> {
     pub fn package_wands<E: TaskEncoder>(
         &self,
         final_borrow_state: &BorrowsState<'vir>,
-        visitor: &mut ImpureEncVisitor<'vir, '_, E>,
+        visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
     ) -> Vec<vir::Stmt<'vir>> {
         let mut wand_packages = Vec::new();
         let vcx = visitor.vcx;
         let label = visitor.new_label("package_post");
         let snap_lhs = |l| {
             if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].impure_snap, label)
+                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].local_ex, label)
             } else {
-                vcx.mk_old_expr(visitor.local_defs.locals[l].impure_snap)
+                vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex)
             }
         };
-        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].impure_snap);
+        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex);
 
         for (lhs, rhs, pledge) in self.viper_wands() {
             if lhs.is_empty() {
