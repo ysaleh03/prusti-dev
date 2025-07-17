@@ -1,9 +1,12 @@
 use crate::encoders::{
     domain::{
         DomainBuilder, DomainDataEnum, DomainDataStruct, DomainDataVariant, DomainEnc,
-        DomainEncOutputRef, DomainEncSpecifics, FieldTy,
+        DomainEncOutputRef, DomainEncSpecifics, FieldTy, TyParam,
     },
-    lifted::ty::{EncodeGenericsAsParamTy, LiftedTyEnc},
+    lifted::{
+        ty::{EncodeGenericsAsParamTy, LiftedTyEnc},
+        ty_constructor::TyConstructorEnc,
+    },
     predicate::{
         PredicateBuilder, PredicateEncData, PredicateEncDataEnum, PredicateEncDataStruct,
         PredicateEncDataVariant, RefToIndirectPred,
@@ -15,7 +18,7 @@ use crate::encoders::{
 };
 use prusti_rustc_interface::middle::ty;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, HasType};
+use vir::{CastType, HasType, Snap};
 
 pub(crate) fn domain<'vir>(
     task_key: <DomainEnc as TaskEncoder>::TaskKey<'vir>,
@@ -48,13 +51,11 @@ pub(crate) fn domain<'vir>(
                 rust_ty_data: None,
             }], task_key, output_ref, &generics, deps, builder)?;
             */
-            let (field_snaps_to_snap, field_access, _) = super::structlike::domain(
+            let fields = [FieldTy::from_ty(builder.vcx,deps,generics[0].to_ty(builder.vcx.tcx()),)?];
+            let (field_snaps_to_snap, field_access, _, _, _) = super::structlike::domain(
                 "",
-                &[FieldTy::from_ty(
-                    builder.vcx,
-                    deps,
-                    generics[0].to_ty(builder.vcx.tcx()),
-                )?],
+                &fields,
+                &[],
                 task_key,
                 output_ref,
                 &generics,
@@ -71,8 +72,8 @@ pub(crate) fn domain<'vir>(
             let variant = adt.non_enum_variant();
             let fields = FieldTy::mk_field_tys(builder.vcx, deps, variant, params)?;
 
-            let (field_snaps_to_snap, field_access, _) = super::structlike::domain(
-                "", &fields, task_key, output_ref, &generics, deps, builder,
+            let (field_snaps_to_snap, field_access, _, _, _) = super::structlike::domain(
+                "", &fields, &[], task_key, output_ref, &generics, deps, builder,
             )?;
 
             Ok(DomainEncSpecifics::StructLike(DomainDataStruct {
@@ -100,6 +101,19 @@ pub(crate) fn domain<'vir>(
                 discr_ty.snapshot.downcast_ty(),
             );
 
+            let ty_cons = deps.require_ref::<TyConstructorEnc>(task_key)?;
+            builder.axiom("typeof", vir::expr! {
+            forall s: [builder.self_type()] ::
+                {[output_ref.typeof_function]((s) as Snap)}
+                ([output_ref.typeof_function]((s) as Snap)) == ([ty_cons.ty_constructor](..[generics.iter()
+                    .enumerate()
+                    .map(|(param_idx, _)| {
+                        vir::expr! { [output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)) }
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice()]))
+            });
+
             let variants =
                 adt.variants()
                     .iter_enumerated()
@@ -111,11 +125,13 @@ pub(crate) fn domain<'vir>(
                         );
 
                         let fields = FieldTy::mk_field_tys(builder.vcx, deps, variant, params)?;
+                        let typarams = TyParam::mk_ty_params(builder.vcx, deps, params)?;                        
 
-                        let (field_snaps_to_snap, field_access, field_vars) =
+                        let (field_snaps_to_snap, field_access, typaram_access, field_vars, type_vars) =
                             super::structlike::domain(
                                 &format!("{var_idx_num}_"),
                                 &fields,
+                                &typarams,
                                 task_key,
                                 output_ref,
                                 &generics,
@@ -125,9 +141,9 @@ pub(crate) fn domain<'vir>(
 
                         // discriminant of constructor is known
                         builder.axiom(&format!("{var_idx_num}_cons_discr"), vir::expr! {
-                            forall ..[field_vars] ::
-                                {[field_snaps_to_snap](..[field_vars.as_slice()])}
-                                ([discr_ident]([field_snaps_to_snap](..[field_vars.as_slice()]))) == ([discr])
+                            forall ..[type_vars], ..[field_vars] ::
+                                {[field_snaps_to_snap]([..[type_vars.as_slice()]], [..[field_vars.as_slice()]])}
+                                ([discr_ident]([field_snaps_to_snap]([..[type_vars.as_slice()]], [..[field_vars.as_slice()]]))) == ([discr])
                         });
 
                         Ok(DomainDataVariant {

@@ -70,8 +70,8 @@ impl TaskEncoder for ConstEnc {
                     }),
                     ConstValue::ZeroSized => {
                         let s = kind.expect_structlike();
-                        assert_eq!(s.field_snaps_to_snap.arity().len(), 0);
-                        (s.field_snaps_to_snap)(&[])
+                        assert_eq!(s.field_snaps_to_snap.arity().1.len(), 0);
+                        (s.field_snaps_to_snap)(&[], &[])
                     }
                     // Encode `&str` constants to an opaque domain. If we ever want to perform string reasoning
                     // we will need to revisit this encoding, but for the moment this allows assertions to avoid
@@ -88,11 +88,11 @@ impl TaskEncoder for ConstEnc {
                         let cast = deps.require_local::<RustTyCastersEnc<CastTypePure>>(str_ty)?;
                         vir::with_vcx(|vcx| {
                             // first, we create a string snapshot
-                            let snap = (str_snap.field_snaps_to_snap)(&[]);
+                            let snap = (str_snap.field_snaps_to_snap)(&[], &[]);
                             // upcast it to a param
                             let snap = cast.cast_to_generic_if_necessary(vcx, snap.upcast_ty());
                             // wrap it in a ref
-                            (ref_ty.prim_to_snap)(vcx.mk_null(), snap)
+                            (ref_ty.prim_to_snap)(snap)
                         })
                     }
                     ConstValue::Slice { .. } => todo!("ConstValue::Slice : {:?}", const_.ty()),

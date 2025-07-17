@@ -17,7 +17,11 @@ pub struct WandEnc;
 
 pub type WandEncError = ();
 
-type Pledges<'vir> = Vec<(Option<(vir::Expr<'vir>, Span)>, vir::Expr<'vir>, Span)>;
+type Pledges<'vir> = Vec<(
+    Option<(vir::ExprBool<'vir>, Span)>,
+    vir::ExprBool<'vir>,
+    Span,
+)>;
 
 #[derive(Clone, Debug, Default)]
 pub struct WandEncOutput<'vir> {

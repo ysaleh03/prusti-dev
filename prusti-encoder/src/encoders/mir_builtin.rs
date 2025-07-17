@@ -262,7 +262,9 @@ impl MirBuiltinEnc {
                             lhs.downcast_ty(),
                             vcx.mk_int::<1>(),
                         );
-                        let common_div = vcx.mk_bin_op_expr_inner(op_kind, lhs_sub, rhs).downcast_ty();
+                        let common_div = vcx
+                            .mk_bin_op_expr_inner(op_kind, lhs_sub, rhs)
+                            .downcast_ty();
                         let neg_pos =
                             vcx.mk_bin_op_expr(vir::BinOpKind::Add, common_div, vcx.mk_int::<1>());
                         let neg_neg =
@@ -428,11 +430,13 @@ impl MirBuiltinEnc {
                 tys: vec![rvalue_pure_ty, bool_ty],
                 aggregate_type: AggregateType::Tuple,
             })?;
-        let tuple =
-            (e_res_ty.specifics.expect_structlike().field_snaps_to_snap)(&ty_caster.apply_casts(
+        let tuple = (e_res_ty.specifics.expect_structlike().field_snaps_to_snap)(
+            &[],
+            &ty_caster.apply_casts(
                 vcx,
                 [wrapped_val_snap.upcast_ty(), overflowed_snap.upcast_ty()].into_iter(),
-            ));
+            ),
+        );
         // `let wrapped_val == (val ..) in $tuple`
         let inner_let = vcx.mk_let_expr(wrapped_val_str, wrapped_val_exp, tuple);
 

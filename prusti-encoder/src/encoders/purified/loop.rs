@@ -19,7 +19,7 @@ use crate::encoders::{
 };
 
 pub(super) enum WandOldOuter<'vir> {
-    LetBind(Vec<(&'vir str, vir::Expr<'vir>)>),
+    LetBind(Vec<(&'vir str, vir::ExprSnap<'vir>)>),
     Label(Option<&'vir str>),
 }
 

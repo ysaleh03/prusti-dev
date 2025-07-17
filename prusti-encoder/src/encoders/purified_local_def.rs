@@ -24,8 +24,8 @@ pub type PurifiedLocalDefEncError = ();
 
 #[derive(Clone, Copy)]
 pub struct PurifiedLocalDef<'vir> {
-    pub local: vir::Local<'vir>,
-    pub local_ex: vir::Expr<'vir>,
+    pub local: vir::LocalSnap<'vir>,
+    pub local_ex: vir::ExprSnap<'vir>,
     pub ty: &'vir PredicateEncOutputRef<'vir>,
 }
 

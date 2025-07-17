@@ -27,6 +27,8 @@ use crate::{
     encoder_traits::pure_func_app_enc::PureFuncAppEnc,
     encoders::{
         lifted::cast::{CastArgs, CastToEnc},
+        mir_poly_purified::extract_type_expr,
+        most_generic_ty::extract_type_params,
         ConstEnc, MirBuiltinEnc, ViperTupleEnc,
     },
 };
@@ -674,17 +676,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         .specifics
                         .expect_purified_mutref()
                         .prim_to_snap;
-                    // We want to distinguish if `place` is a value that lives
-                    // in pure code or not. If it lives in impure (the only way
-                    // that this can happen is that we have a `&mut` argument)
-                    // then we want to return the actual address in the
-                    // snapshot. Otherwise we want to use `null` as this value
-                    // should never escape pure code anyway. Thus `place_ref`
-                    // will return `None` if this isn't a re-borrow, and if it's
-                    // a re-borrow of created-in-pure reference then it will be
-                    // field projections of `null` which is also `null`.
-                    let place_ref = place_ref.unwrap_or_else(|| self.vcx.mk_null());
-                    e_rvalue_ty.gen()(place_ref, snap).upcast_ty()
+                    e_rvalue_ty.gen()(snap).upcast_ty()
                 } else {
                     let e_rvalue_ty = rvalue_snapshot_encoding
                         .specifics
@@ -693,7 +685,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     // For shared borrows we want to use just the snapshot
                     // without the reference so that snapshot equality compares
                     // only values.
-                    e_rvalue_ty.gen()(self.vcx.mk_null(), snap).upcast_ty()
+                    e_rvalue_ty.gen()(snap).upcast_ty()
                 }
             }
             // ThreadLocalRef
@@ -737,19 +729,15 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             }
             // Discriminant
             mir::Rvalue::Aggregate(box kind, fields) => match kind {
-                mir::AggregateKind::Adt(..)
-                | mir::AggregateKind::Tuple
-                | mir::AggregateKind::Closure(..) => {
+                mir::AggregateKind::Adt(..) => {
                     let e_rvalue_ty = self
                         .deps
                         .require_ref::<RustTyPredicatesEnc>(rvalue_ty)
                         .unwrap();
-                    let sl = match kind {
-                        mir::AggregateKind::Adt(_, vidx, _, _, _) => {
-                            e_rvalue_ty.generic_predicate.get_variant_any(*vidx)
-                        }
-                        _ => e_rvalue_ty.generic_predicate.expect_structlike(),
+                    let mir::AggregateKind::Adt(_, vidx, generic_args, _, _) = kind else {
+                        unreachable!()
                     };
+                    let sl = e_rvalue_ty.generic_predicate.get_variant_any(*vidx);
                     let field_tys = fields
                         .iter()
                         .map(|field| field.ty(&self.body.local_decls, self.vcx.tcx()))
@@ -766,7 +754,38 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         .map(|field| self.encode_operand(curr_ver, field))
                         .collect::<Vec<_>>();
                     let casted_args = ty_caster.apply_casts(self.vcx, cons_args.into_iter());
-                    sl.snap_data.field_snaps_to_snap.gen()(&casted_args).upcast_ty()
+                    let type_args = generic_args
+                        .types()
+                        .map(|typ| {
+                            let gen = extract_type_params(self.vcx.tcx(), typ).0.ty();
+                            extract_type_expr(self.vcx, self.deps, typ, gen)
+                        })
+                        .collect::<Vec<_>>();
+                    sl.snap_data.field_snaps_to_snap.gen()(&type_args, &casted_args).upcast_ty()
+                }
+                mir::AggregateKind::Tuple | mir::AggregateKind::Closure(..) => {
+                    let e_rvalue_ty = self
+                        .deps
+                        .require_ref::<RustTyPredicatesEnc>(rvalue_ty)
+                        .unwrap();
+                    let sl = e_rvalue_ty.generic_predicate.expect_structlike();
+                    let field_tys = fields
+                        .iter()
+                        .map(|field| field.ty(&self.body.local_decls, self.vcx.tcx()))
+                        .collect::<Vec<_>>();
+                    let ty_caster = self
+                        .deps
+                        .require_local::<AggregateSnapArgsCastEnc>(AggregateSnapArgsCastEncTask {
+                            tys: field_tys,
+                            aggregate_type: kind.into(),
+                        })
+                        .unwrap();
+                    let cons_args = fields
+                        .iter()
+                        .map(|field| self.encode_operand(curr_ver, field))
+                        .collect::<Vec<_>>();
+                    let casted_args = ty_caster.apply_casts(self.vcx, cons_args.into_iter());
+                    sl.snap_data.field_snaps_to_snap.gen()(&[], &casted_args).upcast_ty()
                 }
                 _ => todo!("Unsupported Rvalue::AggregateKind: {kind:?}"),
             },
@@ -1283,7 +1302,7 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                         .unwrap()
                         .generic_snapshot
                         .specifics
-                        .expect_immref();
+                        .expect_purified_immref();
                     let val_expr = e_ty.value_access.gen()(expr);
                     // Since the `expr` is the target of a reference, it is encoded as a `Param`.
                     // If it is not a type parameter, we cast it to its concrete Snapshot.
@@ -1299,23 +1318,15 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                         .unwrap()
                         .generic_snapshot
                         .specifics
-                        // .expect_mutref();
                         .expect_purified_mutref();
-                    // let inner_ty_out = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty).unwrap();
-                    //let ref_expr = Some(e_ty.deref_access.apply(vcx, [expr]));
-                    let ref_expr = e_ty.deref_access.gen()(expr);
-                    // let val_expr = e_ty.value_access.apply(vcx, [expr]);
-                    // let place_ty = place_ty.projection_ty(vcx.tcx(), elem);
+                    let val_expr = e_ty.value_access.gen()(expr);
                     // Since the `expr` is the target of a reference, it is encoded as a `Param`.
                     // If it is not a type parameter, we cast it to its concrete Snapshot.
                     let cast = deps
                         .require_local::<RustTyCastersEnc<CastTypePure>>(place_ty.ty)
                         .unwrap();
-                    let val_expr = cast.cast_to_concrete_if_possible(vcx, val_expr);
+                    let val_expr = cast.cast_to_concrete_if_possible(vcx, val_expr.upcast_ty());
                     (val_expr, place_ref)
-                    // let ref_val_expr =
-                    //     inner_ty_out.ref_to_snap(vcx, unsafe { std::mem::transmute(ref_expr) }); // TODO: hack...
-                    // (ref_val_expr.lift(), place_ref)
                 }
                 _ => unreachable!(),
             }

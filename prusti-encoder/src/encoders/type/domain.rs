@@ -26,6 +26,9 @@ pub struct FieldFunctions<'vir> {
     pub write: FunctionIdn<'vir, (vir::CSnap, vir::Snap), vir::CSnap>,
 }
 
+/// Snapshot of self as argument. Returns domain of field.
+pub type TyParamFunction<'vir> = FunctionIdn<'vir, vir::CSnap, vir::TyVal>;
+
 #[derive(Clone, Copy, Debug)]
 pub struct DomainDataPrim<'vir> {
     pub prim_type: vir::TypePrim<'vir>,
@@ -55,22 +58,22 @@ pub struct DomainDataMutRef<'vir> {
 #[derive(Clone, Copy, Debug)]
 pub struct DomainDataPurifiedImmRef<'vir> {
     /// Construct domain from a `Ref` value.
-    pub prim_to_snap: FunctionIdent<'vir, UnaryArity<'vir>>,
+    pub prim_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
     /// Function to access the snapshot value.
-    pub value_access: FunctionIdent<'vir, UnaryArity<'vir>>,
+    pub value_access: FunctionIdn<'vir, vir::CSnap, vir::PSnap>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct DomainDataPurifiedMutRef<'vir> {
     /// Construct domain from a `Ref` value.
-    pub prim_to_snap: FunctionIdent<'vir, UnaryArity<'vir>>,
+    pub prim_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
     /// Function to access the snapshot value.
-    pub value_access: FunctionIdent<'vir, UnaryArity<'vir>>,
+    pub value_access: FunctionIdn<'vir, vir::CSnap, vir::PSnap>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct DomainDataStruct<'vir> {
     /// Construct domain from snapshots of fields or for primitive types
     /// from the single Viper primitive value.
-    pub field_snaps_to_snap: FunctionIdn<'vir, vir::ManySnap, vir::CSnap>,
+    pub field_snaps_to_snap: FunctionIdn<'vir, (vir::ManyTyVal, vir::ManySnap), vir::CSnap>,
     /// Functions to access the fields.
     pub field_access: &'vir [FieldFunctions<'vir>],
 }
@@ -140,6 +143,7 @@ impl<'vir> task_encoder::OutputRefAny for DomainEncOutputRef<'vir> {}
 
 use super::{
     lifted::{
+        generic::LiftedGenericEnc,
         ty::{EncodeGenericsAsParamTy, LiftedTy, LiftedTyEnc},
         ty_constructor::TyConstructorEnc,
     },
@@ -426,6 +430,14 @@ impl<'vir> DomainDataPrim<'vir> {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct LiftedRustTyData<'vir> {
+    /// The representation of the Rust type of the field
+    lifted_ty: LiftedTy<'vir, ParamTy>,
+    /// Takes as input the value of the field, and returns its type
+    typeof_function: FunctionIdn<'vir, vir::Snap, vir::TyVal>,
+}
+
 /// Data for encoding field access functions and axioms
 #[derive(Clone)]
 pub(super) struct FieldTy<'vir> {
@@ -439,14 +451,6 @@ pub(super) struct FieldTy<'vir> {
     /// `Bool` field encoded as part of the snapshot encoding of the rust bool
     /// type.
     pub(super) rust_ty_data: Option<LiftedRustTyData<'vir>>,
-}
-
-#[derive(Clone)]
-pub(super) struct LiftedRustTyData<'vir> {
-    /// The representation of the Rust type of the field
-    lifted_ty: LiftedTy<'vir, ParamTy>,
-    /// Takes as input the value of the field, and returns its type
-    typeof_function: FunctionIdn<'vir, vir::Snap, vir::TyVal>,
 }
 
 impl<'vir> FieldTy<'vir> {
@@ -484,6 +488,45 @@ impl<'vir> FieldTy<'vir> {
                 lifted_ty,
                 typeof_function,
             }),
+        })
+    }
+}
+
+/// Data for encoding type access functions and axioms
+#[derive(Clone)]
+pub(super) struct TyParam<'vir> {
+    pub(super) rust_ty: ty::Ty<'vir>,
+    pub(super) ty: vir::TypeTyVal<'vir>,
+}
+
+impl<'vir> TyParam<'vir> {
+    pub fn mk_ty_params<T: TaskEncoder>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, T>,
+        params: ty::GenericArgsRef<'vir>,
+    ) -> Result<Vec<Self>, EncodeFullError<'vir, T>> {
+        params
+            .types()
+            .filter_map(|ty| {
+                if let ty::Param(param_ty) = ty.kind() {
+                    Some(param_ty)
+                } else {
+                    None
+                }
+            })
+            .map(|param_ty| Self::from_param_ty(vcx, deps, *param_ty))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    pub(super) fn from_param_ty<T: TaskEncoder>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, T>,
+        param_ty: ty::ParamTy,
+    ) -> Result<TyParam<'vir>, EncodeFullError<'vir, T>> {
+        let vir_ty = deps.require_ref::<LiftedGenericEnc>(param_ty)?.ty();
+        Ok(TyParam {
+            rust_ty: param_ty.to_ty(vcx.tcx()),
+            ty: vir_ty,
         })
     }
 }

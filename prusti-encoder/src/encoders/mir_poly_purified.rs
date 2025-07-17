@@ -1,8 +1,9 @@
 use prusti_rustc_interface::{
-    middle::{mir, ty, ty::TypeVisitableExt},
+    middle::{mir, ty},
     span::def_id::DefId,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
+use vir::CastType;
 
 /// Encodes a Rust function as a Viper method using the polymorphic encoding of generics.
 pub struct MirPolyPurifiedEnc;
@@ -32,7 +33,7 @@ impl PurifiedFunctionEnc for MirPolyPurifiedEnc {
         task_key: &Self::TaskKey<'vir>,
         arg: &super::PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> Option<vir::Expr<'vir>> {
+    ) -> Option<vir::ExprBool<'vir>> {
         let mir_ty = vcx
             .tcx()
             .fn_sig(task_key)
@@ -49,18 +50,17 @@ impl PurifiedFunctionEnc for MirPolyPurifiedEnc {
             return None;
         }
         let most_generic_ty = most_generic_ty::extract_type_params(vcx.tcx(), mir_ty).0;
-        let mut lhs = if idx == mir::RETURN_PLACE.as_usize() {
+        let snap = if idx == mir::RETURN_PLACE.as_usize() {
             arg.local_ex
         } else {
             let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
             let type_s = arg.ty.snapshot;
             vcx.mk_local_ex(name_s, type_s)
         };
-        lhs = deps
+        let lhs = (deps
             .require_ref::<crate::encoders::domain::DomainEnc>(most_generic_ty)
             .unwrap()
-            .typeof_function
-            .apply(vcx, [lhs]);
+            .typeof_function)(snap);
         let rhs = extract_type_expr(vcx, deps, mir_ty, most_generic_ty.into());
         Some(vcx.mk_eq_expr(lhs, rhs))
     }
@@ -92,12 +92,12 @@ impl TaskEncoder for MirPolyPurifiedEnc {
 
 /// Recurisvely visits all types in `typ` and builds an
 /// Expr that constructs the corresponding VIR type.
-pub fn extract_type_expr<'vir: 'tcx, 'tcx, E: TaskEncoder>(
+pub fn extract_type_expr<'vir: 'tcx, 'tcx, Curr, Next, E: TaskEncoder>(
     vcx: &'vir vir::VirCtxt<'tcx>,
     deps: &mut TaskEncoderDependencies<'vir, E>,
     typ: ty::Ty<'tcx>,
     gen: ty::Ty<'tcx>,
-) -> vir::Expr<'vir> {
+) -> vir::ExprGenTyVal<'vir, Curr, Next> {
     let most_generic_ty = most_generic_ty::extract_type_params(vcx.tcx(), typ).0;
     let ty_constructor = deps
         .require_ref::<TyConstructorEnc>(most_generic_ty)
@@ -123,13 +123,11 @@ pub fn extract_type_expr<'vir: 'tcx, 'tcx, E: TaskEncoder>(
         | (ty::TyKind::Str, _)
         | (ty::TyKind::Never, _)
         | (ty::TyKind::Error(..), _)
-        | (ty::TyKind::Ref(..), ty::TyKind::Param(_)) => {
-            ty_constructor.ty_constructor.apply(vcx, &[])
-        }
+        | (ty::TyKind::Ref(..), ty::TyKind::Param(_)) => ty_constructor.ty_constructor.gen()(&[]),
         (ty::TyKind::Adt(_, args), ty::TyKind::Param(_))
             if args.types().collect::<Vec<_>>().is_empty() =>
         {
-            ty_constructor.ty_constructor.apply(vcx, &[])
+            ty_constructor.ty_constructor.gen()(&[])
         }
         // if a param generic corresponds to a non-primitive typ
         // then we need to expand the param before proceeding
@@ -148,11 +146,11 @@ pub fn extract_type_expr<'vir: 'tcx, 'tcx, E: TaskEncoder>(
                 .zip(gen_args.types())
                 .map(|(typ_arg, gen_arg)| extract_type_expr(vcx, deps, typ_arg, gen_arg))
                 .collect::<Vec<_>>();
-            ty_constructor.ty_constructor.apply(vcx, &rhss)
+            ty_constructor.ty_constructor.gen()(&rhss)
         }
         (ty::TyKind::Ref(_, typ_ty, ..), ty::TyKind::Ref(_, gen_ty, ..)) => {
             let rhs = extract_type_expr(vcx, deps, *typ_ty, *gen_ty);
-            ty_constructor.ty_constructor.apply(vcx, &[rhs])
+            ty_constructor.ty_constructor.gen()(&[rhs])
         }
         (ty::TyKind::Tuple(typ_tys), ty::TyKind::Tuple(gen_tys)) => {
             let rhss = typ_tys
@@ -160,14 +158,14 @@ pub fn extract_type_expr<'vir: 'tcx, 'tcx, E: TaskEncoder>(
                 .zip(gen_tys.iter())
                 .map(|(typ_ty, gen_ty)| extract_type_expr(vcx, deps, typ_ty, gen_ty))
                 .collect::<Vec<_>>();
-            ty_constructor.ty_constructor.apply(vcx, &rhss)
+            ty_constructor.ty_constructor.gen()(&rhss)
         }
         (ty::TyKind::Array(typ_ty, ..), ty::TyKind::Array(gen_ty, ..))
         | (ty::TyKind::Pat(typ_ty, ..), ty::TyKind::Pat(gen_ty, ..))
         | (ty::TyKind::Slice(typ_ty), ty::TyKind::Slice(gen_ty))
         | (ty::TyKind::RawPtr(typ_ty, ..), ty::TyKind::RawPtr(gen_ty, ..)) => {
             let rhs = extract_type_expr(vcx, deps, *typ_ty, *gen_ty);
-            ty_constructor.ty_constructor.apply(vcx, &[rhs])
+            ty_constructor.ty_constructor.gen()(&[rhs])
         }
         (typ_kind, gen_kind) => {
             unreachable!("typ: {typ_kind:#?} gen: {gen_kind:#?}")

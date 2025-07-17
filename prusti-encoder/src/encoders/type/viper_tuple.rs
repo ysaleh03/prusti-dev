@@ -25,7 +25,7 @@ impl<'vir> ViperTupleEncOutput<'vir> {
         elems: &[vir::ExprGenSnap<'vir, Curr, Next>],
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         self.tuple
-            .map(|t| (t.1.field_snaps_to_snap.gen())(elems).upcast_ty())
+            .map(|t| (t.1.field_snaps_to_snap.gen())(&[], elems).upcast_ty())
             .unwrap_or_else(|| elems[0])
     }
 

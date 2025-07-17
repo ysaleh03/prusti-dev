@@ -41,6 +41,8 @@ use crate::{
             casters::CastTypePure,
             func_app_ty_params::LiftedFuncAppTyParamsEnc,
         },
+        mir_poly_purified::extract_type_expr,
+        most_generic_ty::extract_type_params,
         FunctionCallTaskDescription, MirBuiltinEnc, WandEnc, WandEncTask,
     },
 };
@@ -1143,17 +1145,15 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                             &[self.vcx.mk_local_ex(source_name)],
                         ))*/
                     }
-
                     mir::Rvalue::Aggregate(
-                        box kind @ (mir::AggregateKind::Adt(..) | mir::AggregateKind::Tuple),
+                        box kind @ mir::AggregateKind::Adt(..),
                         fields,
                     ) => {
                         let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();
-                        let sl = match kind {
-                            mir::AggregateKind::Adt(_, vidx, _, _, _) =>
-                                e_rvalue_ty.generic_predicate.get_variant_any(*vidx),
-                            _ => e_rvalue_ty.generic_predicate.expect_structlike()
+                        let mir::AggregateKind::Adt(_, vidx, generic_args, _, _) = kind else {
+                            unreachable!()
                         };
+                        let sl = e_rvalue_ty.generic_predicate.get_variant_any(*vidx);
                         let field_tys = fields.iter()
                             .map(|field| field.ty(self.local_decls, self.vcx.tcx()))
                             .collect::<Vec<_>>();
@@ -1165,7 +1165,32 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                         ).unwrap();
                         let field_snaps = fields.iter().map(|field| self.encode_operand_snap(field)).collect::<Vec<_>>();
                         let casted_args = ty_caster.apply_casts(self.vcx, field_snaps.into_iter());
-                        (sl.snap_data.field_snaps_to_snap)(&casted_args).upcast_ty()
+                        let type_args = generic_args
+                            .types()
+                            .map(|typ| {
+                                extract_type_expr(self.vcx, self.deps, typ, extract_type_params(self.vcx.tcx(), typ).0.ty())
+                            })
+                            .collect::<Vec<_>>();
+                        (sl.snap_data.field_snaps_to_snap)(&type_args, &casted_args).upcast_ty()
+                    }
+                    mir::Rvalue::Aggregate(
+                        box kind @ mir::AggregateKind::Tuple,
+                        fields,
+                    ) => {
+                        let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();
+                        let sl = e_rvalue_ty.generic_predicate.expect_structlike();
+                        let field_tys = fields.iter()
+                            .map(|field| field.ty(self.local_decls, self.vcx.tcx()))
+                            .collect::<Vec<_>>();
+                        let ty_caster = self.deps.require_local::<AggregateSnapArgsCastEnc>(
+                            AggregateSnapArgsCastEncTask {
+                                tys: field_tys,
+                                aggregate_type: kind.into()
+                            }
+                        ).unwrap();
+                        let field_snaps = fields.iter().map(|field| self.encode_operand_snap(field)).collect::<Vec<_>>();
+                        let casted_args = ty_caster.apply_casts(self.vcx, field_snaps.into_iter());
+                        (sl.snap_data.field_snaps_to_snap)(&[], &casted_args).upcast_ty()
                     }
                     mir::Rvalue::Discriminant(place) => {
                         let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();

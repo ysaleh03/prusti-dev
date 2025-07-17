@@ -65,13 +65,13 @@ pub struct PredicateEncDataMutRef<'vir> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct PredicateEncDataPurifiedImmRef<'vir> {
-    pub perm: Option<vir::Expr<'vir>>,
+    pub perm: Option<vir::ExprPerm<'vir>>,
     pub snap_data: DomainDataPurifiedImmRef<'vir>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct PredicateEncDataPurifiedMutRef<'vir> {
-    pub perm: Option<vir::Expr<'vir>>,
+    pub perm: Option<vir::ExprPerm<'vir>>,
     pub snap_data: DomainDataPurifiedMutRef<'vir>,
 }
 

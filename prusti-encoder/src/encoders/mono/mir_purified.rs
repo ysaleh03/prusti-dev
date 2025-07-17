@@ -46,8 +46,8 @@ impl PurifiedFunctionEnc for MirMonoPurifiedEnc {
         task_key: &Self::TaskKey<'vir>,
         arg: &crate::encoders::PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> Option<vir::Expr<'vir>> {
-        Some(vcx.mk_todo_expr("TODO"))
+    ) -> Option<vir::ExprBool<'vir>> {
+        Some(vcx.mk_todo_expr("TODO", vir::TYPE_BOOL))
     }
 }
 

@@ -1,9 +1,9 @@
 use std::alloc::Global;
 
-use pcg::{borrow_checker::r#impl::BorrowCheckerImpl, r#loop::LoopAnalysis};
+use pcg::{borrow_checker::r#impl::BorrowCheckerImpl, r#loop::LoopAnalysis, PcgCtxt};
 use prusti_rustc_interface::middle::mir;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::{MethodIdent, UnknownArity, ViperIdent};
+use vir::{CastType, ManySnap, ManyTyVal, MethodIdn, ViperIdent};
 
 use crate::{
     encoders::{
@@ -21,7 +21,7 @@ pub struct PurifiedFunctionEncError;
 
 #[derive(Clone, Debug)]
 pub struct PurifiedFunctionEncOutputRef<'vir> {
-    pub method_ref: MethodIdent<'vir, UnknownArity<'vir>>,
+    pub method_ref: MethodIdn<'vir, (ManySnap, ManyTyVal)>,
 }
 impl<'vir> task_encoder::OutputRefAny for PurifiedFunctionEncOutputRef<'vir> {}
 
@@ -52,7 +52,7 @@ where
         task_key: &Self::TaskKey<'vir>,
         arg: &PurifiedLocalDef<'vir>,
         idx: usize,
-    ) -> Option<vir::Expr<'vir>>;
+    ) -> Option<vir::ExprBool<'vir>>;
 
     fn encode<'vir>(
         task_key: Self::TaskKey<'vir>,
@@ -86,15 +86,20 @@ where
                 let local_ty = local_defs.locals[arg_idx.into()].local.ty;
                 args.push(local_ty);
             }
+            let args = vcx.alloc_slice(&args);
             let param_ty_decls = deps
                 .require_local::<LiftedTyParamsEnc>(substs)?
                 .iter()
                 .map(|g| g.decl())
                 .collect::<Vec<_>>();
-            args.extend(param_ty_decls.iter().map(|decl| decl.ty));
-            let args = UnknownArity::new(vcx.alloc_slice(&args));
+            let ty_args = vcx.alloc_slice(
+                &param_ty_decls
+                    .iter()
+                    .map(|decl| decl.ty)
+                    .collect::<Vec<_>>(),
+            );
             let ret_tys = vcx.alloc_slice(&[local_defs.locals[mir::RETURN_PLACE].ty.snapshot]);
-            let method_ref = MethodIdent::new(method_name, args, ret_tys);
+            let method_ref = MethodIdn::new(method_name, (args, ty_args));
             deps.emit_output_ref(
                 task_key.clone(),
                 PurifiedFunctionEncOutputRef { method_ref },
@@ -124,7 +129,7 @@ where
             let mut rets = Vec::with_capacity(1);
             let ret = local_defs.locals[mir::RETURN_PLACE];
             let name_ret = ret.local.name;
-            let type_ret = ret.ty.snapshot;
+            let type_ret = ret.ty.snapshot.as_dyn();
             rets.push(vcx.mk_local_decl(name_ret, type_ret));
             Self::mk_conditions(vcx, &mut deps, &task_key, &ret, mir::RETURN_PLACE.into())
                 .map(|cond| posts.push(cond));
@@ -182,7 +187,7 @@ where
                         let name = vir::vir_format!(vcx, "_reach_bb{block}");
                         vcx.mk_local_decl_stmt(
                             vir::vir_local_decl! { vcx; [name] : Bool },
-                            Some(vcx.mk_todo_expr("false")),
+                            Some(vcx.mk_bool::<false>()),
                         )
                     }));
                 }
@@ -258,8 +263,6 @@ where
                 None
             };
 
-            args.extend(param_ty_decls.iter());
-
             // Add functional specification as the last pre- and postconditions.
             pres.extend(spec.pres);
             posts.extend(spec.posts);
@@ -267,7 +270,7 @@ where
             Ok(PurifiedFunctionEncOutput {
                 method: vcx.mk_method(
                     method_ref,
-                    vcx.alloc_slice(&args),
+                    (&args, &param_ty_decls),
                     vcx.alloc_slice(&rets),
                     vcx.alloc_slice(&pres),
                     vcx.alloc_slice(&posts),
