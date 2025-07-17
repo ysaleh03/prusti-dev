@@ -672,7 +672,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 if kind.mutability().is_mut() {
                     let e_rvalue_ty = rvalue_snapshot_encoding
                         .specifics
-                        .expect_mutref()
+                        .expect_purified_mutref()
                         .prim_to_snap;
                     // We want to distinguish if `place` is a value that lives
                     // in pure code or not. If it lives in impure (the only way
@@ -688,7 +688,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 } else {
                     let e_rvalue_ty = rvalue_snapshot_encoding
                         .specifics
-                        .expect_immref()
+                        .expect_purified_immref()
                         .prim_to_snap;
                     // For shared borrows we want to use just the snapshot
                     // without the reference so that snapshot equality compares
