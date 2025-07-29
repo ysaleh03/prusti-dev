@@ -303,3 +303,4 @@ pub type TriggerData<'vir> = crate::gendata::TriggerGenData<'vir, !, !>;
 pub type UnOpData<'vir> = crate::gendata::UnOpGenData<'vir, !, !>;
 pub type UnfoldingData<'vir> = crate::gendata::UnfoldingGenData<'vir, !, !>;
 pub type WandData<'vir> = crate::gendata::WandGenData<'vir, !, !>;
+pub type PurifiedWandData<'vir> = crate::gendata::WandGenData<'vir, !, !>;

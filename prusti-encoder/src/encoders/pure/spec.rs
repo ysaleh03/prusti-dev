@@ -238,6 +238,20 @@ impl TaskEncoder for MirSpecEnc {
     }
 }
 
+#[derive(Clone)]
+pub struct PurifiedMirSpecEncOutput<'vir> {
+    pub pres: Vec<vir::ExprBool<'vir>>,
+    pub posts: Vec<vir::ExprBool<'vir>>,
+    pub pledges: Vec<(
+        Option<(vir::ExprBool<'vir>, Span)>,
+        vir::ExprBool<'vir>,
+        Span,
+    )>, // TODO: associate with a named lifetime
+    pub pre_args: &'vir [vir::ExprSnap<'vir>],
+    #[allow(dead_code)]
+    pub post_args: &'vir [vir::ExprSnap<'vir>],
+}
+
 impl TaskEncoder for PurifiedMirSpecEnc {
     task_encoder::encoder_cache!(PurifiedMirSpecEnc);
 
@@ -248,7 +262,7 @@ impl TaskEncoder for PurifiedMirSpecEnc {
         bool,                     // If to encode as pure or not
     );
 
-    type OutputFullLocal<'vir> = MirSpecEncOutput<'vir>;
+    type OutputFullLocal<'vir> = PurifiedMirSpecEncOutput<'vir>;
 
     type EncodingError = <MirPureEnc as TaskEncoder>::EncodingError;
 
@@ -274,35 +288,15 @@ impl TaskEncoder for PurifiedMirSpecEnc {
 
         vir::with_vcx(|vcx| {
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
-            let all_args: Vec<_> = if pure {
+            let all_args: Vec<vir::ExprSnap<'vir>> = if pure {
                 let result_ty = local_defs.locals[mir::RETURN_PLACE].ty;
                 local_iter
-                    .map(|local| {
-                        vcx.mk_local_ex(
-                            vir::vir_format_identifier!(
-                                vcx,
-                                "{}_param",
-                                local_defs.locals[local].local.name
-                            )
-                            .to_str(),
-                            local_defs.locals[local].ty.snapshot,
-                        )
-                    })
+                    .map(|local| local_defs.locals[local].local_ex)
                     .chain([vcx.mk_result(result_ty.snapshot)])
                     .collect()
             } else {
                 local_iter
-                    .map(|local| {
-                        vcx.mk_local_ex(
-                            vir::vir_format_identifier!(
-                                vcx,
-                                "{}_param",
-                                local_defs.locals[local].local.name
-                            )
-                            .to_str(),
-                            local_defs.locals[local].local_ex.ty(),
-                        )
-                    })
+                    .map(|local| local_defs.locals[local].local_ex)
                     .collect()
             };
             let all_args = vcx.alloc_slice(&all_args);
@@ -339,17 +333,18 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                             },
                         )
                         .unwrap()
-                        .expr;
+                        .expr
+                        .downcast_ty();
                     let expr = expr.reify(vcx, (*spec_def_id, pre_args));
                     let span = vcx.tcx().def_span(spec_def_id);
-                    vcx.with_span(span, |vcx| to_bool.apply(vcx, [expr]))
+                    vcx.with_span(span, |_| to_bool(expr).downcast_ty())
                 })
-                .collect::<Vec<vir::Expr<'_>>>();
+                .collect::<Vec<vir::ExprBool<'_>>>();
 
             let post_args = if pure {
                 all_args
             } else {
-                let post_args: Vec<_> = pre_args
+                let post_args: Vec<vir::ExprSnap<'vir>> = pre_args
                     .iter()
                     .map(|arg| vcx.mk_old_expr(arg))
                     .chain([local_defs.locals[mir::RETURN_PLACE].local_ex])
@@ -381,12 +376,13 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                                 },
                             )
                             .unwrap()
-                            .expr;
+                            .expr
+                            .downcast_ty();
                         let expr = expr.reify(vcx, (*spec_def_id, post_args));
-                        to_bool.apply(vcx, [expr])
+                        to_bool(expr).downcast_ty()
                     })
                 })
-                .collect::<Vec<vir::Expr<'_>>>();
+                .collect::<Vec<vir::ExprBool<'_>>>();
             let pledge_args = vcx.alloc_slice(
                 &pre_args
                     .iter()
@@ -416,6 +412,7 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                         )
                         .unwrap()
                         .expr
+                        .downcast_ty()
                     });
                     let rhs_expr = deps
                         .require_local::<crate::encoders::MirPureEnc>(
@@ -430,7 +427,8 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                             },
                         )
                         .unwrap()
-                        .expr;
+                        .expr
+                        .downcast_ty();
                     let lhs_expr = lhs_expr
                         .map(|lhs_expr| lhs_expr.reify(vcx, (lhs_def_id.unwrap(), pledge_args)));
                     let rhs_expr = rhs_expr.reify(vcx, (*rhs_def_id, pledge_args));
@@ -439,7 +437,7 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                         lhs_expr.map(|lhs_expr| {
                             let lhs_span = vcx.tcx().def_span(lhs_def_id.unwrap());
                             (
-                                vcx.with_span(lhs_span, |vcx| to_bool.apply(vcx, [lhs_expr])),
+                                vcx.with_span(lhs_span, |_| to_bool(lhs_expr).downcast_ty()),
                                 lhs_span,
                             )
                         }),
@@ -450,13 +448,13 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                                     rhs_span.into(),
                                 )])
                             });
-                            to_bool.apply(vcx, [rhs_expr])
+                            to_bool(rhs_expr).downcast_ty()
                         }),
                         rhs_span,
                     )
                 })
                 .collect::<Vec<_>>();
-            let data = MirSpecEncOutput {
+            let data = PurifiedMirSpecEncOutput {
                 pres,
                 posts,
                 pledges,

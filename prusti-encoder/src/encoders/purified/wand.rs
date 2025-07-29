@@ -3,21 +3,21 @@ use pcg::{
         borrow_pcg_edge::{BorrowPcgEdgeLike, BorrowPcgEdgeRef},
         edge::{abstraction::AbstractionType, kind::BorrowPcgEdgeKind},
         graph::BorrowsGraph,
-        region_projection::RegionProjection,
         state::BorrowsState,
         unblock_graph::UnblockGraph,
+        AbstractionInputTarget, AbstractionOutputTarget,
     },
     pcg::PCGNode,
-    utils::{maybe_old::MaybeOldPlace, maybe_remote::MaybeRemotePlace},
+    utils::maybe_remote::MaybeRemotePlace,
 };
 use task_encoder::TaskEncoder;
 
 use crate::encoders::PurifiedEncVisitor;
 
-use super::r#loop::WandOldOuter;
+use super::r#loop::PurifiedWandOldOuter;
 
-type Inputs<'a> = Vec<PCGNode<'a, MaybeRemotePlace<'a>, MaybeRemotePlace<'a>>>;
-type Outputs<'a> = Vec<RegionProjection<'a, MaybeOldPlace<'a>>>;
+type Inputs<'a> = Vec<AbstractionInputTarget<'a>>;
+type Outputs<'a> = Vec<AbstractionOutputTarget<'a>>;
 
 impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     pub(crate) fn ignore_abstraction_edge(
@@ -26,7 +26,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         let inputs: Inputs<'vir> = at.inputs();
         let skip = inputs
             .iter()
-            .any(|i| matches!(i, PCGNode::Place(MaybeRemotePlace::Remote(_))));
+            .any(|i| matches!(**i, PCGNode::Place(MaybeRemotePlace::Remote(_))));
         if skip {
             None
         } else {
@@ -60,17 +60,21 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         let Some((inputs, outputs)) = Self::ignore_abstraction_edge(edge) else {
             return;
         };
-        let mut old_outer = WandOldOuter::Label(label);
+        let mut old_outer = PurifiedWandOldOuter::Label(label);
         let mut proof_block = Vec::new();
         let mut wand_rhs = Vec::new();
         for i in inputs {
-            self.encode_pcg_node(&i, &mut wand_rhs, &mut old_outer);
+            self.encode_pcg_node(&*i, &mut wand_rhs, &mut old_outer);
             if package {
-                proof_block.extend(self.create_package_script(borrows_state, i, &mut old_outer));
+                proof_block.extend(self.create_package_script(borrows_state, *i, &mut old_outer));
             }
         }
         let mut wand_lhs = Vec::new();
         for i in outputs {
+            let i = match *i {
+                PCGNode::Place(_) => unreachable!(),
+                PCGNode::RegionProjection(region_projection) => region_projection,
+            };
             let exprs = self.encode_region_projection(i, &mut old_outer);
             wand_lhs.extend(exprs);
         }
@@ -90,11 +94,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         &mut self,
         borrows_state: &BorrowsState<'vir>,
         rhs: impl Into<PCGNode<'vir>>,
-        old_outer: &mut WandOldOuter<'vir>,
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
     ) -> Vec<vir::Stmt<'vir>> {
         let ug = UnblockGraph::for_node(rhs, borrows_state, self.pcg_ctxt());
 
-        let WandOldOuter::Label(label) = old_outer else {
+        let PurifiedWandOldOuter::Label(label) = old_outer else {
             unreachable!()
         };
         let label = *label.get_or_insert_with(|| self.new_label("outer_package"));

@@ -10,7 +10,7 @@ use pcg::{
 use prusti_rustc_interface::middle::mir;
 
 use task_encoder::TaskEncoder;
-use vir::Reify;
+use vir::{CastType, Reify};
 
 use crate::encoders::{
     indirect::{IndirectKey, IndirectPredicatesEnc},
@@ -18,8 +18,8 @@ use crate::encoders::{
     PurifiedEncVisitor,
 };
 
-pub(super) enum WandOldOuter<'vir> {
-    LetBind(Vec<(&'vir str, vir::ExprSnap<'vir>)>),
+pub(super) enum PurifiedWandOldOuter<'vir> {
+    LetBind(Vec<(&'vir str, Result<vir::ExprSnap<'vir>, vir::ExprSnap<'vir>>)>),
     Label(Option<&'vir str>),
 }
 
@@ -29,7 +29,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         &mut self,
         _lh: LoopId,
         cfpcs: &PcgBasicBlock<'vir>,
-    ) -> &'vir [vir::Expr<'vir>] {
+    ) -> &'vir [vir::ExprBool<'vir>] {
         let mut inv = Vec::new();
         let start = &cfpcs.statements[0];
         let state = &start.states[EvalStmtPhase::PreOperands];
@@ -49,8 +49,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 let (place_res, snap, _, _) = self.encode_place_snap(*place);
                 let ty = (*place).ty(self.pcg_ctxt());
                 let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(ty.ty).unwrap();
-                let pred = ty_out.ref_to_pred(self.vcx, place_res.expr, None);
-                inv.push(pred);
+                // let pred = ty_out.ref_to_pred(self.vcx, place_res.expr, None);
+                // inv.push(pred);
 
                 let regions = ty.ty.walk().flat_map(IndirectKey::from_generic_arg);
                 for region in regions {
@@ -68,13 +68,17 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             }
         }
         for (_edge, inputs, outputs) in Self::get_abstraction_edges(state.borrow_pcg().graph()) {
-            let mut let_bind = WandOldOuter::LetBind(Vec::new());
+            let mut let_bind = PurifiedWandOldOuter::LetBind(Vec::new());
             let mut wand_rhs = Vec::new();
             for i in inputs {
                 self.encode_pcg_node(&i, &mut wand_rhs, &mut let_bind);
             }
             let mut wand_lhs = Vec::new();
             for i in outputs {
+                let i = match *i {
+                    PCGNode::RegionProjection(region_projection) => region_projection,
+                    PCGNode::Place(_) => unreachable!(),
+                };
                 let exprs = self.encode_region_projection(i, &mut let_bind);
                 wand_lhs.extend(exprs);
             }
@@ -83,10 +87,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 self.vcx.mk_conj(self.vcx.alloc_slice(&wand_rhs)),
             );
             let mut wand = self.vcx.mk_wand_expr(wand);
-            let WandOldOuter::LetBind(let_bind) = let_bind else {
+            let PurifiedWandOldOuter::LetBind(let_bind) = let_bind else {
                 unreachable!()
             };
             for (ident, expr) in let_bind {
+                let expr = expr.map_or_else(|e| e.as_dyn(), |e| e.as_dyn());
                 wand = self.vcx.mk_let_expr(ident, expr, wand);
             }
             inv.push(wand);
@@ -94,11 +99,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         self.vcx.alloc_slice(&inv)
     }
 
-    pub(super) fn encode_pcg_node(
+    pub(super) fn encode_pcg_node<T: RegionProjectionBaseLike<'vir>>(
         &mut self,
-        node: &PCGNode<'vir, MaybeRemotePlace<'vir>, MaybeRemotePlace<'vir>>,
-        wand_rhs: &mut Vec<vir::Expr<'vir>>,
-        old_outer: &mut WandOldOuter<'vir>,
+        node: &PCGNode<'vir, MaybeRemotePlace<'vir>, T>,
+        wand_rhs: &mut Vec<vir::ExprBool<'vir>>,
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
     ) {
         match node {
             PCGNode::Place(MaybeRemotePlace::Remote(_)) => unreachable!(),
@@ -109,8 +114,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 let p = self.encode_place(p);
                 let p = self.configure_old(*place, p.expr, old_outer);
 
-                let pred = ty_out.ref_to_pred(self.vcx, p, None);
-                wand_rhs.push(pred);
+                // let pred = ty_out.ref_to_pred(self.vcx, p, None);
+                // wand_rhs.push(pred);
             }
             PCGNode::RegionProjection(r) => {
                 let exprs = self.encode_region_projection(*r, old_outer);
@@ -122,8 +127,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     pub(super) fn encode_region_projection<T: RegionProjectionBaseLike<'vir>>(
         &mut self,
         r: RegionProjection<'vir, T>,
-        old_outer: &mut WandOldOuter<'vir>,
-    ) -> Vec<vir::Expr<'vir>> {
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
+    ) -> Vec<vir::ExprBool<'vir>> {
         let place = r.place().to_maybe_remote_region_projection_base();
         let (place_snap, ty, _) = match place {
             MaybeRemoteRegionProjectionBase::Place(p) => {
@@ -161,9 +166,9 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     fn encode_maybe_remote_place_snap(
         &mut self,
         place: MaybeRemotePlace<'vir>,
-        old_outer: &mut WandOldOuter<'vir>,
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
     ) -> (
-        vir::Expr<'vir>,
+        vir::ExprSnap<'vir>,
         mir::tcx::PlaceTy<'vir>,
         RustTyPredicatesEncOutputRef<'vir>,
     ) {
@@ -176,9 +181,9 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     fn configure_old(
         &mut self,
         place: MaybeRemotePlace,
-        expr: vir::Expr<'vir>,
-        old_outer: &mut WandOldOuter<'vir>,
-    ) -> vir::Expr<'vir> {
+        expr: vir::ExprSnap<'vir>,
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
+    ) -> vir::ExprSnap<'vir> {
         match place {
             MaybeRemotePlace::Local(MaybeOldPlace::Current { .. }) => {
                 self.mk_wand_outer(expr, old_outer)
@@ -195,36 +200,41 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         vcx: &'vir vir::VirCtxt<'vir>,
         at: SnapshotLocation,
     ) -> vir::OldLabel<'vir> {
-        match at {
-            // TODO: handle this properly!!
-            SnapshotLocation::After(loc) => {
-                let name =
-                    vir::vir_format!(vcx, "_after_{}_{}", loc.block.index(), loc.statement_index);
-                vir::OldLabel::Label(name)
-            }
-            SnapshotLocation::Mid(loc) => {
-                let name =
-                    vir::vir_format!(vcx, "_mid_{}_{}", loc.block.index(), loc.statement_index);
-                vir::OldLabel::Label(name)
-            }
-            SnapshotLocation::Start(bb) => {
-                vir::OldLabel::Block(vir::CfgBlockLabelData::BasicBlock(bb.as_usize()))
-            }
+        if let SnapshotLocation::Start(bb) | SnapshotLocation::Loop(bb) = at {
+            return vir::OldLabel::Block(vir::CfgBlockLabelData::BasicBlock(bb.as_usize()));
         }
+        let label_identifier = match at {
+            SnapshotLocation::Start(_) => "start",
+            SnapshotLocation::Prepare(_) => "prepare",
+            SnapshotLocation::BeforeCollapse(_) => "before_collapse",
+            SnapshotLocation::Mid(_) => "mid",
+            SnapshotLocation::After(_) => "after",
+            SnapshotLocation::Loop(_) => "loop",
+            SnapshotLocation::BeforeRefReassignment(_) => "before_ref_reassignment",
+        };
+        let location = at.location();
+        let label = vir::vir_format!(
+            vcx,
+            "_{}_{}_{}",
+            label_identifier,
+            location.block.index(),
+            location.statement_index
+        );
+        vir::OldLabel::Label(label)
     }
 
     fn mk_wand_outer(
         &mut self,
-        expr: vir::Expr<'vir>,
-        old_outer: &mut WandOldOuter<'vir>,
-    ) -> vir::Expr<'vir> {
+        expr: vir::ExprSnap<'vir>,
+        old_outer: &mut PurifiedWandOldOuter<'vir>,
+    ) -> vir::ExprSnap<'vir> {
         match old_outer {
-            WandOldOuter::LetBind(let_bind) => {
-                let ident = vir::vir_format!(self.vcx, "_snap{}", let_bind.len());
-                let_bind.push((ident, expr));
+            PurifiedWandOldOuter::LetBind(let_bind) => {
+                let ident = vir::vir_format!(self.vcx, "_lb{}", let_bind.len());
+                let_bind.push((ident, Ok(expr)));
                 self.vcx.mk_local_ex(ident, expr.ty())
             }
-            WandOldOuter::Label(label) => {
+            PurifiedWandOldOuter::Label(label) => {
                 let label = *label.get_or_insert_with(|| self.new_label("outer_package"));
                 self.vcx.mk_local_labelled_old_expr(expr, label)
             }

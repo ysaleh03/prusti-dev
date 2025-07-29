@@ -1,6 +1,6 @@
 use crate::encoders::{
     indirect::{IndirectKey, IndirectPredicatesEnc},
-    MirSpecEnc, PurifiedEncVisitor, PurifiedLocalDefEncOutput,
+    ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
 };
 use pcg::borrow_pcg::{state::BorrowsState, unblock_graph::UnblockGraph};
 use prusti_interface::{environment::EnvQuery, PrustiError};
@@ -13,9 +13,9 @@ use prusti_rustc_interface::{
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
 /// Encodes the magic wands given a function signature.
-pub struct WandEnc;
+pub struct PurifiedWandEnc;
 
-pub type WandEncError = ();
+pub type PurifiedWandEncError = ();
 
 type Pledges<'vir> = Vec<(
     Option<(vir::ExprBool<'vir>, Span)>,
@@ -24,24 +24,21 @@ type Pledges<'vir> = Vec<(
 )>;
 
 #[derive(Clone, Debug, Default)]
-pub struct WandEncOutput<'vir> {
-    pub late_bound: Vec<IndirectKey>,
-    pub inputs: Vec<IndirectKey>,
-    pub outputs: Vec<IndirectKey>,
-    pub edges: Vec<(IndirectKey, IndirectKey)>,
+pub struct PurifiedWandEncOutput<'vir> {
+    edges: PurifiedWandEncEdges,
     pub generic_to_param: FxHashMap<IndirectKey, Vec<(mir::Local, ty::Ty<'vir>)>>,
     pub pledges: Pledges<'vir>,
 }
 
-impl<'vir> WandEncOutput<'vir> {
+impl<'vir> PurifiedWandEncOutput<'vir> {
     fn encode_generic(
         &self,
         vcx: &'vir vir::VirCtxt<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, impl TaskEncoder>,
         g: IndirectKey,
         input: bool,
-        mut snap: impl FnMut(mir::Local) -> vir::Expr<'vir>,
-    ) -> Option<vir::Expr<'vir>> {
+        mut snap: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
+    ) -> Option<vir::ExprBool<'vir>> {
         use vir::Reify;
         // There may not be any parameters for this generic, for example, if the
         // generic is the `Self` type of a trait but the function doesn't take a
@@ -68,31 +65,31 @@ impl<'vir> WandEncOutput<'vir> {
     pub fn indirect_pres<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
+        local_defs: &'a MirLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
-    ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
+    ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
         self.inputs().filter_map(|g| {
-            self.encode_generic(vcx, deps, g, true, &|i| local_defs.locals[i].local_ex)
+            self.encode_generic(vcx, deps, g, true, &|i| local_defs.locals[i].impure_snap)
         })
     }
 
     pub fn indirect_posts<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
+        local_defs: &'a MirLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
-    ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
+    ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
         self.outputs().filter_map(|g| {
-            self.encode_generic(vcx, deps, g, false, |i| local_defs.locals[i].local_ex)
+            self.encode_generic(vcx, deps, g, false, |i| local_defs.locals[i].impure_snap)
         })
     }
 
     pub fn wand_posts<'a, E: TaskEncoder>(
         &'a self,
         vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a PurifiedLocalDefEncOutput<'vir>,
+        local_defs: &'a MirLocalDefEncOutput<'vir>,
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
-    ) -> impl Iterator<Item = vir::Expr<'vir>> + 'a {
+    ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
         // TODO: wands for late-bound regions
         self.viper_wands().into_iter().map(|(lhs, rhs, pledge)| {
             let mut snaps = FxHashMap::default();
@@ -108,13 +105,13 @@ impl<'vir> WandEncOutput<'vir> {
                     })
                     .1
             };
-            let snap_rhs = |i| vcx.mk_old_expr(local_defs.locals[i].local_ex);
+            let snap_rhs = |i| vcx.mk_old_expr(local_defs.locals[i].impure_snap);
             match self.mk_wand(&lhs, &rhs, &pledge, snap_lhs, snap_rhs, vcx, deps) {
                 Ok(wand) => {
                     snaps
                         .into_iter()
                         .fold(vcx.mk_wand_expr(wand), |acc, (local, (name, _))| {
-                            vcx.mk_let_expr(name, local_defs.locals[local].local_ex, acc)
+                            vcx.mk_let_expr(name, local_defs.locals[local].impure_snap, acc)
                         })
                 }
                 Err(rhs) => rhs,
@@ -124,10 +121,10 @@ impl<'vir> WandEncOutput<'vir> {
 
     pub fn apply_wands<E: TaskEncoder>(
         &self,
-        arguments: &[vir::Expr<'vir>],
+        arguments: &[vir::ExprSnap<'vir>],
         label_pre: &'vir str,
         label_post: &'vir str,
-        visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
+        visitor: &mut ImpureEncVisitor<'vir, '_, E>,
     ) {
         let vcx = visitor.vcx;
         let snap_lhs = |l: mir::Local| {
@@ -153,19 +150,19 @@ impl<'vir> WandEncOutput<'vir> {
     pub fn package_wands<E: TaskEncoder>(
         &self,
         final_borrow_state: &BorrowsState<'vir>,
-        visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
+        visitor: &mut ImpureEncVisitor<'vir, '_, E>,
     ) -> Vec<vir::Stmt<'vir>> {
         let mut wand_packages = Vec::new();
         let vcx = visitor.vcx;
         let label = visitor.new_label("package_post");
         let snap_lhs = |l| {
             if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].local_ex, label)
+                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].impure_snap, label)
             } else {
-                vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex)
+                vcx.mk_old_expr(visitor.local_defs.locals[l].impure_snap)
             }
         };
-        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex);
+        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].impure_snap);
 
         for (lhs, rhs, pledge) in self.viper_wands() {
             if lhs.is_empty() {
@@ -220,11 +217,11 @@ impl<'vir> WandEncOutput<'vir> {
         lhs: &[IndirectKey],
         rhs: &[IndirectKey],
         pledge: &Pledges<'vir>,
-        mut snap_lhs: impl FnMut(mir::Local) -> vir::Expr<'vir>,
-        mut snap_rhs: impl FnMut(mir::Local) -> vir::Expr<'vir>,
+        mut snap_lhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
+        mut snap_rhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
         vcx: &'vir vir::VirCtxt<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, E>,
-    ) -> Result<vir::Wand<'vir>, vir::Expr<'vir>> {
+    ) -> Result<vir::PurifiedWand<'vir>, vir::ExprBool<'vir>> {
         let rhs = rhs
             .iter()
             .filter_map(|g| self.encode_generic(vcx, deps, *g, true, &mut snap_rhs));
@@ -247,23 +244,81 @@ impl<'vir> WandEncOutput<'vir> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct WandEncTask {
+pub struct PurifiedWandEncTask {
     pub def_id: DefId,
 }
 
-impl TaskEncoder for WandEnc {
-    task_encoder::encoder_cache!(WandEnc);
+#[derive(Clone, Debug, Default)]
+struct PurifiedWandEncEdges {
+    /// for b in inputs { requires b }
+    inputs: Vec<IndirectKey>,
+    /// for a in outputs { ensures a }
+    outputs: Vec<IndirectKey>,
+    /// for (a, b) in edges { ensures a --* b }
+    edges: Vec<(IndirectKey, IndirectKey)>,
+}
 
-    type TaskDescription<'vir> = WandEncTask;
+impl PurifiedWandEncEdges {
+    fn input(&mut self, key: IndirectKey) {
+        debug_assert!(!self.inputs.contains(&key), "input {key:?} already exists");
+        self.inputs.push(key);
+    }
 
-    type TaskKey<'vir> = WandEncTask;
+    fn output(&mut self, key: IndirectKey) {
+        debug_assert!(
+            !self.outputs.contains(&key),
+            "output {key:?} already exists"
+        );
+        self.outputs.push(key);
+    }
 
-    type OutputFullLocal<'vir> = WandEncOutput<'vir>;
+    fn input_and_output(&mut self, key: IndirectKey, skip_output: bool) {
+        if !skip_output {
+            self.output(key);
+        }
+        self.input(key);
+        self.edge(key, key);
+    }
 
-    type EncodingError = WandEncError;
+    /// Adds an edge of `output --* input`.
+    fn edge(&mut self, output: IndirectKey, input: IndirectKey) {
+        debug_assert!(
+            self.inputs.contains(&input),
+            "input {input:?} does not exist"
+        );
+        debug_assert!(
+            self.outputs.contains(&output),
+            "output {output:?} does not exist"
+        );
+        debug_assert!(
+            !self.edges.contains(&(output, input)),
+            "edge {output:?} --* {input:?} already exists"
+        );
+        let output_param = matches!(output, IndirectKey::Param(..));
+        let input_param = matches!(input, IndirectKey::Param(..));
+        if input_param ^ output_param {
+            // TODO: handle generics that are instantiated with a lifetime type
+            // and are nested under another lifetime, e.g.
+            // fn foo<T>(x: &mut T) -> &mut T (with `T -> &mut i32`)
+            return;
+        }
+        self.edges.push((output, input));
+    }
+}
+
+impl TaskEncoder for PurifiedWandEnc {
+    task_encoder::encoder_cache!(PurifiedWandEnc);
+
+    type TaskDescription<'vir> = PurifiedWandEncTask;
+
+    type TaskKey<'vir> = PurifiedWandEncTask;
+
+    type OutputFullLocal<'vir> = PurifiedWandEncOutput<'vir>;
+
+    type EncodingError = PurifiedWandEncError;
 
     fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
-        WandEncTask {
+        PurifiedWandEncTask {
             def_id: task.def_id,
         }
     }
@@ -280,39 +335,64 @@ impl TaskEncoder for WandEnc {
             let substs = ecx.identity_substs(def_id);
 
             let fn_sig = ecx.get_fn_sig(def_id, substs);
-            let late_bound = tcx.collect_referenced_late_bound_regions(fn_sig);
             let args = [fn_sig.skip_binder().output()]
                 .into_iter()
                 .chain(fn_sig.skip_binder().inputs().iter().copied())
                 .enumerate();
             let mut generic_to_param: FxHashMap<IndirectKey, Vec<_>> = Default::default();
+
+            let mut gidx_map: FxHashMap<IndirectKey, Result<ty::Variance, usize>> =
+                Default::default();
+            let mut edges = PurifiedWandEncEdges::default();
+
             for (i, ty) in args {
                 for ga in ty.walk() {
                     let Some(key) = IndirectKey::from_generic_arg(ga) else {
                         continue;
                     };
-                    generic_to_param
-                        .entry(key)
-                        .or_default()
-                        .push((mir::Local::from_usize(i), ty));
+                    let local = mir::Local::from_usize(i);
+                    if let IndirectKey::Late(..) = key {
+                        // A late bound lifetime is guaranteed to not be nested
+                        // (otherwise it would have an outlives and not be late bound).
+                        if local == mir::RETURN_PLACE {
+                            match gidx_map.insert(key, Ok(ty::Variance::Covariant)) {
+                                Some(Ok(ty::Variance::Covariant)) => {}
+                                None => edges.output(key),
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            use std::collections::hash_map::Entry;
+                            match gidx_map.entry(key) {
+                                Entry::Occupied(mut o) => match o.get() {
+                                    Ok(ty::Variance::Covariant) => {
+                                        o.insert(Ok(ty::Variance::Invariant)).ok();
+                                        edges.input_and_output(key, true);
+                                    }
+                                    Ok(ty::Variance::Contravariant | ty::Variance::Invariant) => {}
+                                    _ => unreachable!(),
+                                },
+                                Entry::Vacant(v) => {
+                                    v.insert(Ok(ty::Variance::Contravariant));
+                                    edges.input(key);
+                                }
+                            }
+                        }
+                    }
+                    generic_to_param.entry(key).or_default().push((local, ty));
                 }
             }
 
             let outlives_env = ecx.outlives_env(def_id);
 
-            // for b in inputs { requires b }
-            let mut inputs = Vec::new();
-            // for a in outputs { ensures a }
-            let mut outputs = Vec::new();
-            // for (a, b) in edges { ensures a --* b }
-            let mut edges = Vec::new();
-
             let variances = tcx.variances_of(def_id);
             let generics = tcx.generics_of(def_id);
             assert_eq!(generics.count(), variances.len());
-            assert!(generics.has_late_bound_regions.is_some() || late_bound.is_empty());
+            // Old way of collecting late bound regions, not used anymore.
+            debug_assert!(
+                generics.has_late_bound_regions.is_some()
+                    || tcx.collect_referenced_late_bound_regions(fn_sig).is_empty()
+            );
 
-            let mut gidx_map: FxHashMap<IndirectKey, usize> = Default::default();
             for i in 0..generics.count() {
                 let g = generics.param_at(i, tcx);
                 let key = match g.kind {
@@ -326,18 +406,16 @@ impl TaskEncoder for WandEnc {
                     // TODO: skip here?
                     ty::GenericParamDefKind::Const { .. } => continue,
                 };
-                gidx_map.insert(key, i);
+                gidx_map.insert(key, Err(i));
                 match variances[i] {
                     ty::Variance::Covariant => {
-                        outputs.push(key);
+                        edges.output(key);
                     }
                     ty::Variance::Contravariant => {
-                        inputs.push(key);
+                        edges.input(key);
                     }
                     ty::Variance::Invariant => {
-                        inputs.push(key);
-                        outputs.push(key);
-                        edges.push((key, key));
+                        edges.input_and_output(key, false);
                     }
                     ty::Variance::Bivariant => todo!("not sure what this means/how to handle it"),
                 }
@@ -345,13 +423,16 @@ impl TaskEncoder for WandEnc {
 
             // `b` outlives `a`
             let mut insert_edge = |a, b| {
-                let (v_a, v_b) = (variances[gidx_map[&a]], variances[gidx_map[&b]]);
+                let (v_a, v_b) = (
+                    gidx_map[&a].unwrap_or_else(|i| variances[i]),
+                    gidx_map[&b].unwrap_or_else(|i| variances[i]),
+                );
                 if let (
                     ty::Variance::Covariant | ty::Variance::Invariant,
                     ty::Variance::Contravariant | ty::Variance::Invariant,
                 ) = (v_a, v_b)
                 {
-                    edges.push((a, b));
+                    edges.edge(a, b);
                 }
             };
 
@@ -380,21 +461,17 @@ impl TaskEncoder for WandEnc {
                 let GenericKind::Param(b) = pred.0 else {
                     todo!("region bound pair: {pred:?}");
                 };
-                let ty::RegionKind::ReEarlyParam(a) = pred.1.kind() else {
+                let Some(a) = IndirectKey::from_region(pred.1) else {
                     todo!("region bound pair: {pred:?}");
                 };
-                insert_edge(IndirectKey::Early(a), IndirectKey::Param(b));
+                // This edge may be skipped, see TODO in `PurifiedWandEncEdges::edge`.
+                insert_edge(a, IndirectKey::Param(b));
             }
-
-            let late_bound = late_bound.into_iter().map(IndirectKey::Late).collect();
 
             let spec = deps.require_local::<MirSpecEnc>((def_id, substs, None, false))?;
 
             Ok((
-                WandEncOutput {
-                    late_bound,
-                    inputs,
-                    outputs,
+                PurifiedWandEncOutput {
                     edges,
                     generic_to_param,
                     pledges: spec.pledges,
@@ -405,19 +482,17 @@ impl TaskEncoder for WandEnc {
     }
 }
 
-impl<'vir> WandEncOutput<'vir> {
+impl<'vir> PurifiedWandEncOutput<'vir> {
     pub fn inputs(&self) -> impl Iterator<Item = IndirectKey> + '_ {
-        self.inputs
-            .iter()
-            .copied()
-            .chain(self.late_bound.iter().copied())
+        self.edges.inputs.iter().copied()
     }
 
     pub fn outputs(&self) -> impl Iterator<Item = IndirectKey> + '_ {
-        self.outputs
-            .iter()
-            .copied()
-            .chain(self.late_bound.iter().copied())
+        self.edges.outputs.iter().copied()
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = (IndirectKey, IndirectKey)> + '_ {
+        self.edges.edges.iter().copied()
     }
 
     /// convert edges to viper-supported wands
@@ -429,13 +504,13 @@ impl<'vir> WandEncOutput<'vir> {
         let mut wands: Vec<(Vec<IndirectKey>, Vec<IndirectKey>, Pledges<'vir>)> =
             Default::default();
 
-        for (lhs, rhs) in &self.edges {
-            edge_lhs.entry(*rhs).or_default().push(*lhs);
-            edge_rhs.entry(*lhs).or_default().push(*rhs);
+        for (lhs, rhs) in self.edges() {
+            edge_lhs.entry(lhs).or_default().push(rhs);
+            edge_rhs.entry(rhs).or_default().push(lhs);
         }
 
         let mut skip = FxHashSet::default();
-        for &rhs in &self.inputs {
+        for rhs in self.inputs() {
             if !skip.insert(rhs) {
                 continue;
             }
@@ -445,13 +520,13 @@ impl<'vir> WandEncOutput<'vir> {
             };
             let lhs = lhss.first().unwrap();
             let rhss = &edge_lhs[lhs];
-            for rhs_other in rhss {
-                let lhss_other = &edge_lhs[rhs_other];
-                assert_eq!(lhss, lhss_other, "two inputs do not block the same set of outputs: {rhs:?} blocks {lhss:?}, {rhs_other:?} blocks {lhss_other:?}");
-            }
             for lhs_other in lhss {
-                let rhss_other = &edge_rhs[lhs_other];
-                assert_eq!(rhss, rhss_other, "two outputs are not blocked by the same set of inputs: {lhs:?} blocked by {rhss:?}, {lhs_other:?} blocked by {rhss_other:?}");
+                let rhss_other = &edge_lhs[lhs_other];
+                assert_eq!(rhss, rhss_other, "two outputs do not block the same set of inputs: {lhs:?} blocks {rhss:?}, {lhs_other:?} blocks {rhss_other:?}");
+            }
+            for rhs_other in rhss {
+                let lhss_other = &edge_rhs[rhs_other];
+                assert_eq!(lhss, lhss_other, "two inputs are not blocked by the same set of outputs: {rhs:?} blocked by {lhss:?}, {rhs_other:?} blocked by {lhss_other:?}");
             }
             wands.push((lhss.clone(), rhss.clone(), vec![]));
             skip.extend(rhss);

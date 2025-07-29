@@ -40,10 +40,7 @@ pub use mono::{
 };
 pub use predicate::{PredicateEnc, PredicateEncOutputRef};
 pub use pure::spec::{MirSpecEnc, PurifiedMirSpecEnc};
-pub use purified::fn_wand::{
-    WandEnc as PurifiedWandEnc, WandEncOutput as PurifiedWandEncOutput,
-    WandEncTask as PurifiedWandEncTask,
-};
+pub use purified::fn_wand::{PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask};
 pub use purified_local_def::*;
 pub use r#const::ConstEnc;
 pub use r#type::*;

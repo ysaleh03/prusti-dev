@@ -310,7 +310,10 @@ pub struct FunctionGenData<'vir, Curr, Next> {
 #[derive(VirHash, VirReify, VirSerde)]
 pub enum DecreasesGenData<'vir, Curr, Next> {
     None,
-    Tuple(&'vir [ExprGenDyn<'vir, Curr, Next>], Option<ExprGenBool<'vir, Curr, Next>>),
+    Tuple(
+        &'vir [ExprGenDyn<'vir, Curr, Next>],
+        Option<ExprGenBool<'vir, Curr, Next>>,
+    ),
     Wildcard(Option<ExprGenBool<'vir, Curr, Next>>),
     Star,
 }

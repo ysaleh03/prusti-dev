@@ -56,3 +56,4 @@ pub type Type<'vir, T> = &'vir crate::data::TypeData<'vir, T>;
 pub type UnOp<'vir> = &'vir crate::data::UnOpData<'vir>;
 pub type Unfolding<'vir> = &'vir crate::data::UnfoldingData<'vir>;
 pub type Wand<'vir> = &'vir crate::data::WandData<'vir>;
+pub type PurifiedWand<'vir> = &'vir crate::data::PurifiedWandData<'vir>;
