@@ -142,8 +142,8 @@ pub(crate) fn domain<'vir>(
                         // discriminant of constructor is known
                         builder.axiom(&format!("{var_idx_num}_cons_discr"), vir::expr! {
                             forall ..[type_vars], ..[field_vars] ::
-                                {[field_snaps_to_snap]([..[type_vars.as_slice()]], [..[field_vars.as_slice()]])}
-                                ([discr_ident]([field_snaps_to_snap]([..[type_vars.as_slice()]], [..[field_vars.as_slice()]]))) == ([discr])
+                                {[field_snaps_to_snap]([..[type_vars]], [..[field_vars]])}
+                                ([discr_ident]([field_snaps_to_snap]([..[type_vars]], [..[field_vars]]))) == ([discr])
                         });
 
                         Ok(DomainDataVariant {

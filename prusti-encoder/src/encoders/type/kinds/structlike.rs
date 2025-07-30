@@ -81,26 +81,19 @@ pub fn domain<'vir>(
     EncodeFullError<'vir, DomainEnc>,
 > {
     // constructor
-    let cons_ident = builder.function(
-        &format!("{prefix}cons"),
-        (
-            builder.vcx.alloc_slice(
-                &typarams
-                    .iter()
-                    .map(|typ| typ.ty)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
+    let cons_ident: FunctionIdn<'vir, (vir::ManyTyVal, vir::ManySnap), vir::CSnap> = builder
+        .function(
+            &format!("{prefix}cons"),
+            (
+                builder
+                    .vcx
+                    .alloc_slice(&typarams.iter().map(|typ| typ.ty).collect::<Vec<_>>()),
+                builder
+                    .vcx
+                    .alloc_slice(&fields.iter().map(|fty| fty.ty).collect::<Vec<_>>()),
             ),
-            builder.vcx.alloc_slice(
-                &fields
-                    .iter()
-                    .map(|fty| fty.ty)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            ),
-        ),
-        builder.self_type(),
-    );
+            builder.self_type(),
+        );
 
     // field accessors
     let field_reads = fields
@@ -192,8 +185,8 @@ pub fn domain<'vir>(
             &format!("{prefix}cons_read_{idx}"),
             vir::expr! {
                 forall ..[typaram_vars], ..[field_vars] ::
-                    {[cons_ident]([..[typaram_vars.as_slice()]], [..[field_vars.as_slice()]])}
-                    ([field_reads[idx]]([cons_ident]([..[typaram_vars.as_slice()]], [..[field_vars.as_slice()]]))) == ([field_vars[idx]])
+                    {[cons_ident]([..[typaram_vars]], [..[field_vars]])}
+                    ([field_reads[idx]]([cons_ident]([..[typaram_vars]], [..[field_vars]]))) == ([field_vars[idx]])
             },
         );
         let field_ty = fields[idx].rust_ty;
@@ -291,30 +284,30 @@ pub fn domain<'vir>(
             &format!("{prefix}cons_type_{idx}"),
             vir::expr! {
                 forall ..[typaram_vars], ..[field_vars] ::
-                    {[cons_ident]([..[typaram_vars.as_slice()]], [..[field_vars.as_slice()]])}
-                    ([typaram_reads[idx]]([cons_ident]([..[typaram_vars.as_slice()]], [..[field_vars.as_slice()]]))) == ([typaram_vars[idx]])
+                    {[cons_ident]([..[typaram_vars]], [..[field_vars]])}
+                    ([typaram_reads[idx]]([cons_ident]([..[typaram_vars]], [..[field_vars]]))) == ([typaram_vars[idx]])
             },
         );
-        let field_ty = fields[idx].rust_ty;
-        let field_ty_constructor = deps
+        let typaram_ty = typarams[idx].rust_ty;
+        let typaram_ty_constructor = deps
             .require_ref::<TyConstructorEnc>(
-                most_generic_ty::extract_type_params(builder.vcx.tcx(), field_ty).0,
+                most_generic_ty::extract_type_params(builder.vcx.tcx(), typaram_ty).0,
             )
             .unwrap();
-        let field_typeof = deps
+        let typaram_typeof: FunctionIdn<'vir, vir::Snap, vir::TyVal> = deps
             .require_ref::<crate::encoders::domain::DomainEnc>(
-                most_generic_ty::extract_type_params(builder.vcx.tcx(), field_ty).0,
+                most_generic_ty::extract_type_params(builder.vcx.tcx(), typaram_ty).0,
             )
             .unwrap()
             .typeof_function;
         let type_read_name = format!("{prefix}type_type_{idx}");
-        match field_ty.kind() {
+        match typaram_ty.kind() {
             TyKind::Param(p) => {
                 let param_idx = p.index as usize;
                 builder.axiom(&type_read_name, vir::expr! {
                     forall s: [builder.self_type()] ::
                         {[typaram_reads[idx]](s)}
-                        ([generic_enc.param_type_function](([typaram_reads[idx]](s)) as PSnap)) == ([output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)))
+                        ([typaram_reads[idx]](s)) == ([output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)))
                 })
             }
             TyKind::Adt(_, args) => {
@@ -326,8 +319,8 @@ pub fn domain<'vir>(
                 };
                 builder.axiom(&type_read_name, vir::expr! {
                     forall s: [builder.self_type()] ::
-                        {[field_reads[idx]](s)}
-                        ([field_typeof]([field_reads[idx]](s))) == ([(field_ty_constructor.ty_constructor)(&ty_cons(s))])
+                        {[typaram_reads[idx]](s)}
+                        ([typaram_reads[idx]](s)) == ([(typaram_ty_constructor.ty_constructor)(&ty_cons(s))])
                 })
             }
             TyKind::Array(ty, _)
@@ -345,8 +338,8 @@ pub fn domain<'vir>(
                 };
                 builder.axiom(&type_read_name, vir::expr! {
                     forall s: [builder.self_type()] ::
-                        {[field_reads[idx]](s)}
-                        ([field_typeof]([field_reads[idx]](s))) == ([(field_ty_constructor.ty_constructor)(&[ty_con(s)])])
+                        {[typaram_reads[idx]](s)}
+                        ([typaram_reads[idx]](s)) == ([(typaram_ty_constructor.ty_constructor)(&[ty_con(s)])])
                 })
             }
             TyKind::Tuple(tys) => {
@@ -358,8 +351,8 @@ pub fn domain<'vir>(
                 };
                 builder.axiom(&type_read_name, vir::expr! {
                     forall s: [builder.self_type()] ::
-                        {[field_reads[idx]](s)}
-                        ([field_typeof]([field_reads[idx]](s))) == ([(field_ty_constructor.ty_constructor)(&ty_cons(s))])
+                        {[typaram_reads[idx]](s)}
+                        ([typaram_reads[idx]](s)) == ([(typaram_ty_constructor.ty_constructor)(&ty_cons(s))])
                 })
             }
             _ => {}
