@@ -4,7 +4,7 @@ use crate::encoders::{
         DomainEncOutputRef, DomainEncSpecifics, FieldTy, TyParam,
     },
     lifted::{
-        ty::{EncodeGenericsAsParamTy, LiftedTyEnc},
+        ty::{EncodeGenericsAsLifted, EncodeGenericsAsParamTy, LiftedTyEnc},
         ty_constructor::TyConstructorEnc,
     },
     predicate::{
@@ -33,8 +33,7 @@ pub(crate) fn domain<'vir>(
     };
 
     let generics = params
-        .iter()
-        .flat_map(ty::GenericArg::as_type)
+        .types()
         .map(|ty| {
             deps.require_local::<LiftedTyEnc<EncodeGenericsAsParamTy>>(ty)
                 .unwrap()
@@ -51,7 +50,7 @@ pub(crate) fn domain<'vir>(
                 rust_ty_data: None,
             }], task_key, output_ref, &generics, deps, builder)?;
             */
-            let fields = [FieldTy::from_ty(builder.vcx,deps,generics[0].to_ty(builder.vcx.tcx()),)?];
+            let fields = [FieldTy::from_ty(builder.vcx, deps, generics[0].to_ty(builder.vcx.tcx()))?];
             let (field_snaps_to_snap, field_access, _, _, _) = super::structlike::domain(
                 "",
                 &fields,
@@ -71,9 +70,10 @@ pub(crate) fn domain<'vir>(
         ty::AdtKind::Struct => {
             let variant = adt.non_enum_variant();
             let fields = FieldTy::mk_field_tys(builder.vcx, deps, variant, params)?;
+            let typarams = TyParam::mk_ty_params(builder.vcx, deps, params)?;
 
             let (field_snaps_to_snap, field_access, _, _, _) = super::structlike::domain(
-                "", &fields, &[], task_key, output_ref, &generics, deps, builder,
+                "", &fields, &typarams, task_key, output_ref, &generics, deps, builder,
             )?;
 
             Ok(DomainEncSpecifics::StructLike(DomainDataStruct {
@@ -125,7 +125,7 @@ pub(crate) fn domain<'vir>(
                         );
 
                         let fields = FieldTy::mk_field_tys(builder.vcx, deps, variant, params)?;
-                        let typarams = TyParam::mk_ty_params(builder.vcx, deps, params)?;                        
+                        let typarams = TyParam::mk_ty_params(builder.vcx, deps, params)?;                  
 
                         let (field_snaps_to_snap, field_access, typaram_access, field_vars, type_vars) =
                             super::structlike::domain(
@@ -246,6 +246,7 @@ pub(crate) fn predicate<'vir>(
             let (field_accessors, self_pred, snap_expr) = super::structlike::predicate(
                 "",
                 &[deps.require_ref::<RustTyPredicatesEnc>(params[0].expect_ty())?],
+                &[],
                 task_key,
                 &snap,
                 snap_data.field_snaps_to_snap,
@@ -318,10 +319,17 @@ pub(crate) fn predicate<'vir>(
                         .unwrap()
                 })
                 .collect::<Vec<_>>();
+            let typarams = params
+                .types()
+                .map(|ty| {
+                    deps.require_local::<LiftedTyEnc<EncodeGenericsAsLifted>>(ty).unwrap()
+                })
+                .collect::<Vec<_>>();
 
             let (field_accessors, self_pred, snap_expr) = super::structlike::predicate(
                 "",
                 &fields,
+                &typarams,
                 task_key,
                 &snap,
                 snap_data.field_snaps_to_snap,
@@ -419,6 +427,13 @@ pub(crate) fn predicate<'vir>(
                         .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
                         .collect::<Vec<_>>();
 
+                    let typarams = params
+                        .types()
+                        .map(|ty| {
+                            deps.require_local::<LiftedTyEnc<EncodeGenericsAsLifted>>(ty).unwrap()
+                        })
+                        .collect::<Vec<_>>();
+
                     let (
                         field_accessors,
                         variant_pred,
@@ -426,6 +441,7 @@ pub(crate) fn predicate<'vir>(
                     ) = super::structlike::predicate(
                         &format!("{var_idx_num}_"),
                         &fields,
+                        &typarams,
                         task_key,
                         &snap,
                         snap_variant.fields.field_snaps_to_snap,
