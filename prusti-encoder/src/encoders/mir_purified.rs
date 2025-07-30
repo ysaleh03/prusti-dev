@@ -27,7 +27,7 @@ use prusti_rustc_interface::{
     target::abi,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, CompType};
+use vir::{CallableIdn, CastType, CompType};
 
 use crate::{
     encoder_traits::{
@@ -729,15 +729,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         );
 
         let place_vid = place.ty(self.pcg_ctxt()).variant_index;
+        let place_ty = place.ty(self.pcg_ctxt()).ty;
         let place_ty_out = self
             .deps
-            .require_ref::<RustTyPredicatesEnc>(place.ty(self.pcg_ctxt()).ty)
+            .require_ref::<RustTyPredicatesEnc>(place_ty)
             .unwrap();
 
-        let (most_generic_ty, substs) = encoders::most_generic_ty::extract_type_params(
-            self.vcx.tcx(),
-            place.ty(self.pcg_ctxt()).ty,
-        );
+        let (most_generic_ty, substs) =
+            encoders::most_generic_ty::extract_type_params(self.vcx.tcx(), place_ty);
         let place_enc = self.encode_place(place);
         let casts = self.place_casts(&place_enc);
 
@@ -763,9 +762,28 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                         field_exprs.push(field_expr);
                     }
                 }
+
+                // this isn't a great way to check, but
+                // ensures only non-box, non-tuple ADTs get typarams
+                let type_exprs = if snap_cons.arity().0.is_empty() {
+                    vec![]
+                } else {
+                    substs
+                        .into_iter()
+                        .map(|typ| {
+                            extract_type_expr(
+                                self.vcx,
+                                self.deps,
+                                typ,
+                                extract_type_params(self.vcx.tcx(), typ).0.ty(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+
                 let stmt = self.vcx.mk_pure_assign_stmt(
                     self.vcx.mk_local_ex_local(place_local_data),
-                    (snap_cons)(&[], field_exprs.as_slice()).upcast_ty(),
+                    (snap_cons)(type_exprs.as_slice(), field_exprs.as_slice()).upcast_ty(),
                 );
                 self.stmt(stmt);
             }
