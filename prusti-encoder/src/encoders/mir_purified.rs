@@ -1815,11 +1815,6 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                         // let (tmp_out, tmp_expr_tmp): (Vec<_>, Vec<_>) = tmps.into_iter().unzip();
                         // tmp_expr.extend(tmp_expr_tmp);
 
-                        println!(
-                            "i want to return to {:?} and methodidn wants to return to {:?}",
-                            dest_local_def.local_ex, func_out.method_ref
-                        );
-
                         self.stmt(self.vcx.alloc(vir::StmtGenData::new(self.vcx.alloc(
                             (func_out.method_ref)(
                                 (&method_args, &ty_args),
