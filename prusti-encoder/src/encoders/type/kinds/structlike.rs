@@ -144,8 +144,6 @@ pub fn domain<'vir>(
         })
         .collect::<Vec<_>>();
 
-    println!("task key {task_key:?}, cons_ident {cons_ident:?}, field_vars {field_vars:?}, typaram_vars {typaram_vars:?}");
-
     // TODO: typeof and read_type axioms
     /*
     // for struct U<T> { x: T, y: i32 }
