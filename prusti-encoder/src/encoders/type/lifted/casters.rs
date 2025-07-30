@@ -115,10 +115,10 @@ impl CastType for CastTypeImpure {
                 let args = ty_args.iter().map(|t| t.expr(vcx)).collect::<Vec<_>>();
                 Some(ImpureCastStmts::new(
                     vcx.alloc(vir::StmtGenData::new(
-                        vcx.alloc(make_concrete.gen()(snap, &args)),
+                        vcx.alloc(make_concrete.gen()((snap, &args), &[])),
                     )),
                     vcx.alloc(vir::StmtGenData::new(
-                        vcx.alloc(make_generic.gen()(snap, &args)),
+                        vcx.alloc(make_generic.gen()((snap, &args), &[])),
                     )),
                 ))
             }

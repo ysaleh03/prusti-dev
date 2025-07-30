@@ -1569,7 +1569,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                         self.stmt(
                             self.vcx.alloc(vir::StmtGenData::new(
                                 self.vcx
-                                    .alloc((func_out.method_ref)(&method_args, &ty_args)),
+                                    .alloc((func_out.method_ref)((&method_args, &ty_args), &[])),
                             )),
                         );
                     });

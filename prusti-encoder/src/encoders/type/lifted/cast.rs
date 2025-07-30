@@ -111,8 +111,11 @@ impl<'vir> GenericCastOutputRef<'vir, MethodIdn<'vir, (vir::Ref, vir::ManyTyVal)
                 ty_args,
             }) => Some(
                 vcx.alloc(vir::StmtGenData::new(vcx.alloc(cast_applicator.gen()(
-                    expr,
-                    &ty_args.iter().map(|t| t.expr(vcx)).collect::<Vec<_>>(),
+                    (
+                        expr,
+                        &ty_args.iter().map(|t| t.expr(vcx)).collect::<Vec<_>>(),
+                    ),
+                    &[],
                 )))),
             ),
         }

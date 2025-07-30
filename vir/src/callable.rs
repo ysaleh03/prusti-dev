@@ -146,7 +146,10 @@ impl<'vir, A: Arity, R: CompType> FunctionIdn<'vir, A, R> {
         self.result_ty
     }
 
-    pub fn cast_ty<A1: Arity, R1: CompType>(self, args: A1::Tys<'vir>) -> FunctionIdn<'vir, A1, R1> {
+    pub fn cast_ty<A1: Arity, R1: CompType>(
+        self,
+        args: A1::Tys<'vir>,
+    ) -> FunctionIdn<'vir, A1, R1> {
         let self_ = self.cast_args::<A1>(args);
         FunctionIdn {
             idn: self_.idn,
@@ -229,22 +232,31 @@ impl<'vir, A: Arity> MethodIdn<'vir, A> {
         }
     }
 }
-impl<'a, 'vir, A: Arity> FnOnce<A::Exprs<'a, 'vir, !, !>> for MethodIdn<'vir, A> {
+impl<'a, 'vir, A: Arity> FnOnce<(A::Exprs<'a, 'vir, !, !>, &'vir [LocalDyn<'vir>])>
+    for MethodIdn<'vir, A>
+{
     type Output = StmtKindGenData<'vir, !, !>;
-    extern "rust-call" fn call_once(self, args: A::Exprs<'a, 'vir, !, !>) -> Self::Output {
-        self.gen().call_once(args)
+    extern "rust-call" fn call_once(
+        self,
+        (args, targets): (A::Exprs<'a, 'vir, !, !>, &'vir [LocalDyn<'vir>]),
+    ) -> Self::Output {
+        self.gen().call_once((args, targets))
     }
 }
-impl<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity> FnOnce<A::Exprs<'a, 'vir, Curr, Next>>
+impl<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity>
+    FnOnce<(A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDyn<'vir>])>
     for MethodIdnGen<'vir, Curr, Next, A>
 {
     type Output = StmtKindGenData<'vir, Curr, Next>;
-    extern "rust-call" fn call_once(self, args: A::Exprs<'a, 'vir, Curr, Next>) -> Self::Output {
+    extern "rust-call" fn call_once(
+        self,
+        (args, targets): (A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDyn<'vir>]),
+    ) -> Self::Output {
         with_vcx(|vcx| {
             let args = A::args(vcx, args);
             A::types_match(self.inner.args, args, self.inner.debug_info);
             StmtKindGenData::MethodCall(vcx.alloc(MethodCallGenData {
-                targets: &[],
+                targets: targets,
                 method: self.inner.idn.to_str(),
                 args,
             }))

@@ -44,9 +44,8 @@ impl<'vir> RustTyPredicatesEncOutputRef<'vir> {
         );
         vcx.alloc(vir::StmtData::new(vcx.alloc(
             (self.generic_predicate.method_assign)(
-                self_ref,
-                &self.ty.arg_exprs(vcx),
-                self_new_snap,
+                (self_ref, &self.ty.arg_exprs(vcx), self_new_snap),
+                &[],
             ),
         )))
     }
