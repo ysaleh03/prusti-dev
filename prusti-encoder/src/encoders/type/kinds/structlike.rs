@@ -1,9 +1,9 @@
 use crate::encoders::{
     domain::{
-        DomainBuilder, DomainEnc, DomainEncOutputRef, FieldFunctions, FieldTy, TyParam,
-        TyParamFunction,
+        DomainBuilder, DomainEnc, DomainEncOutputRef, FieldFunctions, FieldTy, LiftedRustTyData,
+        TyParam, TyParamFunction,
     },
-    lifted::ty_constructor::TyConstructorEnc,
+    lifted::{generic::LiftedGeneric, ty::LiftedTy, ty_constructor::TyConstructorEnc},
     most_generic_ty,
     predicate::PredicateBuilder,
     rust_ty_predicates::RustTyPredicatesEncOutputRef,
@@ -143,6 +143,8 @@ pub fn domain<'vir>(
                 .mk_local(vir_format!(builder.vcx, "arg_{idx}"), ty.ty)
         })
         .collect::<Vec<_>>();
+
+    println!("task key {task_key:?}, cons_ident {cons_ident:?}, field_vars {field_vars:?}, typaram_vars {typaram_vars:?}");
 
     // TODO: typeof and read_type axioms
     /*
@@ -294,12 +296,6 @@ pub fn domain<'vir>(
                 most_generic_ty::extract_type_params(builder.vcx.tcx(), typaram_ty).0,
             )
             .unwrap();
-        let typaram_typeof: FunctionIdn<'vir, vir::Snap, vir::TyVal> = deps
-            .require_ref::<crate::encoders::domain::DomainEnc>(
-                most_generic_ty::extract_type_params(builder.vcx.tcx(), typaram_ty).0,
-            )
-            .unwrap()
-            .typeof_function;
         let type_read_name = format!("{prefix}type_type_{idx}");
         match typaram_ty.kind() {
             TyKind::Param(p) => {
@@ -380,6 +376,7 @@ pub fn domain<'vir>(
 pub(crate) fn predicate<'vir>(
     prefix: &str,
     fields: &[RustTyPredicatesEncOutputRef<'vir>],
+    typarams: &[LiftedTy<'vir, LiftedGeneric<'vir>>],
     task_key: <PredicateEnc as TaskEncoder>::TaskKey<'vir>,
     _snap: &SnapshotEncOutput<'vir>,
     variant_field_snaps_to_snap: FunctionIdn<'vir, (vir::ManyTyVal, vir::ManySnap), vir::CSnap>,
@@ -454,17 +451,14 @@ pub(crate) fn predicate<'vir>(
             field.ref_to_snap(builder.vcx, (accessor)(ref_self_ex, &generic_exprs))
         })
         .collect::<Vec<_>>();
-    // let snap_args = if task_key.ty().is_enum() {
-    //     generic_exprs
-    //         .iter()
-    //         .chain(snap_args.iter())
-    //         .cloned()
-    //         .collect::<Vec<_>>()
-    // } else {
-    //     snap_args
-    // };
+
+    let ty_args = typarams
+        .iter()
+        .map(|typ| typ.expr(builder.vcx))
+        .collect::<Vec<_>>();
+
     let variant_snap_expr = vir::expr! {
-        unfolding ([pred_owned](ref_self, ..[generic_exprs])) in ([variant_field_snaps_to_snap]([..[generic_exprs]], [..[snap_args.as_slice()]]))
+        unfolding ([pred_owned](ref_self, ..[generic_exprs])) in ([variant_field_snaps_to_snap]([..[ty_args.as_slice()]], [..[snap_args.as_slice()]]))
     };
 
     Ok((field_accessors, pred_owned, variant_snap_expr))
