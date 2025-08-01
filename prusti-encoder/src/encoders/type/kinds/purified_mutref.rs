@@ -95,7 +95,7 @@ pub(crate) fn predicate<'vir>(
 > {
     let ty = task_key.ty();
     let ty_kind = ty.kind();
-    let ty::TyKind::Ref(_, _inner_ty, ty::Mutability::Not) = ty_kind else {
+    let ty::TyKind::Ref(_, _inner_ty, ty::Mutability::Mut) = ty_kind else {
         unreachable!();
     };
 
