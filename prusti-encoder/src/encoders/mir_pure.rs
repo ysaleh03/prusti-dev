@@ -1323,7 +1323,7 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                     // Since the `expr` is the target of a reference, it is encoded as a `Param`.
                     // If it is not a type parameter, we cast it to its concrete Snapshot.
                     let cast = deps
-                        .require_local::<RustTyCastersEnc<CastTypePure>>(place_ty.ty)
+                        .require_local::<RustTyCastersEnc<CastTypePure>>(*inner_ty)
                         .unwrap();
                     let val_expr = cast.cast_to_concrete_if_possible(vcx, val_expr.upcast_ty());
                     (val_expr, place_ref)
