@@ -1,7 +1,10 @@
 use std::alloc::Global;
 
 use pcg::{borrow_checker::r#impl::BorrowCheckerImpl, r#loop::LoopAnalysis, PcgCtxt};
-use prusti_rustc_interface::middle::mir;
+use prusti_rustc_interface::{
+    data_structures::fx::FxHashMap,
+    middle::{mir, ty},
+};
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, ManySnap, ManyTyVal, MethodIdn, ViperIdent};
 
@@ -51,7 +54,8 @@ where
         deps: &mut TaskEncoderDependencies<'vir, Self>,
         task_key: &Self::TaskKey<'vir>,
         arg: &PurifiedLocalDef<'vir>,
-        idx: usize,
+        ty: ty::Ty<'vir>,
+        suffix: &str,
     ) -> Option<vir::ExprBool<'vir>>;
 
     fn encode<'vir>(
@@ -64,6 +68,11 @@ where
             use mir::visit::Visitor;
 
             let substs = Self::get_substs(vcx, &task_key);
+            let fn_sig = vcx
+                .tcx()
+                .fn_sig(def_id)
+                .instantiate(vcx.tcx(), substs)
+                .skip_binder();
             let trusted = crate::encoders::is_function_trusted(def_id, substs);
             let local_defs =
                 deps.require_local::<PurifiedLocalDefEnc>((def_id, substs, caller_def_id))?;
@@ -98,7 +107,7 @@ where
                     .map(|decl| decl.ty)
                     .collect::<Vec<_>>(),
             );
-            let ret_tys = vcx.alloc_slice(&[local_defs.locals[mir::RETURN_PLACE].ty.snapshot]);
+
             let method_ref = MethodIdn::new(method_name, (args, ty_args));
             deps.emit_output_ref(
                 task_key.clone(),
@@ -117,27 +126,47 @@ where
             // postconditions, respectively. "Direct" here refers to owned
             // Viper resources that must be passed in/out given the signature,
             // without going through any dereferences.
-            let mut args = Vec::with_capacity(arg_count + substs.len());
-            for arg_idx in 1..arg_count {
-                let arg = local_defs.locals[arg_idx.into()];
-                let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
-                let type_s = arg.ty.snapshot;
-                args.push(vcx.mk_local_decl(name_s, type_s));
-                Self::mk_conditions(vcx, &mut deps, &task_key, &arg, arg_idx)
-                    .map(|cond| pres.push(cond));
-            }
-            let mut rets = Vec::with_capacity(1);
+            let mut returns = Vec::default();
             let ret = local_defs.locals[mir::RETURN_PLACE];
             let name_ret = ret.local.name;
             let type_ret = ret.ty.snapshot.as_dyn();
-            rets.push(vcx.mk_local_decl(name_ret, type_ret));
-            Self::mk_conditions(vcx, &mut deps, &task_key, &ret, mir::RETURN_PLACE.into())
+            returns.push(vcx.mk_local_decl(name_ret, type_ret));
+            Self::mk_conditions(vcx, &mut deps, &task_key, &ret, fn_sig.output(), "")
                 .map(|cond| posts.push(cond));
+
+            let mut args = Vec::with_capacity(arg_count + substs.len());
+            let arg_tys = fn_sig.inputs();
+
+            let mut return_to_remote = Vec::new();
+
+            for arg_idx in 1..arg_count {
+                let arg = local_defs.locals[arg_idx.into()];
+                let arg_ty = arg_tys[arg_idx - 1];
+                let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
+                let type_s = arg.ty.snapshot;
+                args.push(vcx.mk_local_decl(name_s, type_s));
+                Self::mk_conditions(vcx, &mut deps, &task_key, &arg, arg_ty, "_param")
+                    .map(|cond| pres.push(cond));
+
+                if let ty::TyKind::Ref(_, _, mir::Mutability::Mut) = arg_ty.kind() {
+                    let name_r =
+                        vir::vir_format_identifier!(vcx, "{}_return", arg.local.name).to_str();
+                    returns.push(vcx.mk_local_decl(name_r, type_s.as_dyn()));
+                    Self::mk_conditions(vcx, &mut deps, &task_key, &arg, arg_ty, "_return")
+                        .map(|cond| posts.push(cond));
+                    return_to_remote.push((arg_idx.into(), arg.local_ex));
+                }
+            }
+
+            let return_to_remote = return_to_remote
+                .iter()
+                .copied()
+                .collect::<FxHashMap<mir::Local, vir::ExprSnap<'vir>>>();
 
             // ..
             // pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
             // posts.extend(wands.indirect_posts(vcx, &local_defs, deps));
-            // posts.extend(wands.wand_posts(vcx, &local_defs, deps));
+            posts.extend(wands.wand_posts(vcx, &local_defs, deps));
 
             // Do not encode the method body if it is external, trusted, just
             // a call stub, or a trait function without a default implementation
@@ -163,7 +192,9 @@ where
                     // extra blocks: Start, End
                     2 + block_count,
                 );
+
                 let mut start_stmts = Vec::new();
+                let mut end_stmts = Vec::new();
 
                 for local in 1..arg_count {
                     let name_s = local_defs.locals[local.into()].local.name;
@@ -172,7 +203,7 @@ where
                     start_stmts.push(vcx.mk_local_decl_stmt(
                         vir::vir_local_decl! {vcx; [name_s] : [type_s]},
                         Some(expr),
-                    ))
+                    ));
                 }
                 for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
                     let name_s = local_defs.locals[local].local.name;
@@ -182,6 +213,7 @@ where
                         None,
                     ))
                 }
+
                 if ENCODE_REACH_BB {
                     start_stmts.extend((0..block_count).map(|block| {
                         let name = vir::vir_format!(vcx, "_reach_bb{block}");
@@ -191,6 +223,9 @@ where
                         )
                     }));
                 }
+
+                // returns.extend(remotes.as_dyn().iter());
+
                 // This will be overwritten later.
                 encoded_blocks.push(vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
@@ -213,6 +248,10 @@ where
                     loop_analysis,
                     wands,
 
+                    declared_remotes: Default::default(),
+                    remote_place_to_local_data: Default::default(),
+                    return_to_remote: return_to_remote,
+
                     declared_vars: Default::default(),
                     place_to_local_data: Default::default(),
 
@@ -234,6 +273,11 @@ where
                         vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
                     }),
                 );
+                start_stmts.extend(
+                    visitor.declared_remotes.iter().map(|(name, ty)| {
+                        vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
+                    }),
+                );
                 start_stmts.extend(visitor.from_to_vars.iter().flat_map(|(_, v)| v.iter()).map(
                     |(_, v)| {
                         vcx.mk_local_decl_stmt(
@@ -242,6 +286,10 @@ where
                         )
                     },
                 ));
+                end_stmts.extend(visitor.return_to_remote.iter().map(|(local, rhs)| {
+                    let lhs = returns[local.as_usize()];
+                    vcx.mk_pure_assign_stmt(vcx.mk_local_ex(lhs.name, lhs.ty), rhs.as_dyn())
+                }));
                 visitor.encoded_blocks[0] = vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
                     &[],
@@ -252,7 +300,7 @@ where
                 visitor.encoded_blocks.push(vcx.mk_cfg_block(
                     vcx.alloc(vir::CfgBlockLabelData::End),
                     &[],
-                    &[],
+                    vcx.alloc_slice(&end_stmts),
                     vcx.alloc(vir::TerminatorStmtData::Exit),
                 ));
 
@@ -271,7 +319,7 @@ where
                 method: vcx.mk_method(
                     method_ref,
                     (&args, &param_ty_decls),
-                    vcx.alloc_slice(&rets),
+                    vcx.alloc_slice(&returns),
                     vcx.alloc_slice(&pres),
                     vcx.alloc_slice(&posts),
                     blocks.map(|blocks| vcx.alloc_slice(&blocks)),
