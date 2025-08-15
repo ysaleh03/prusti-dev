@@ -144,6 +144,16 @@ pub fn domain<'vir>(
         })
         .collect::<Vec<_>>();
 
+    let param_idx_offset = typarams
+        .iter()
+        .find(|typ| matches!(typ.rust_ty.kind(), TyKind::Param(_)))
+        .map_or(0, |typ| {
+            let TyKind::Param(idx) = typ.rust_ty.kind() else {
+                unreachable!()
+            };
+            idx.index
+        }) as usize;
+
     // TODO: typeof and read_type axioms
     /*
     // for struct U<T> { x: T, y: i32 }
@@ -170,7 +180,7 @@ pub fn domain<'vir>(
                 ([output_ref.typeof_function]((s) as Snap)) == ([ty_cons.ty_constructor](..[generics.iter()
                     .enumerate()
                     .map(|(param_idx, _)| {
-                        vir::expr! { [output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)) }
+                        vir::expr! { [output_ref.ty_param_accessors[param_idx - param_idx_offset]]([output_ref.typeof_function]((s) as Snap)) }
                     })
                     .collect::<Vec<_>>()
                     .as_slice()]))
@@ -208,7 +218,7 @@ pub fn domain<'vir>(
                 builder.axiom(&type_read_name, vir::expr! {
                         forall s: [builder.self_type()] ::
                             {[field_reads[idx]](s)}
-                            ([generic_enc.param_type_function](([field_reads[idx]](s)) as PSnap)) == ([output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)))
+                            ([generic_enc.param_type_function](([field_reads[idx]](s)) as PSnap)) == ([output_ref.ty_param_accessors[param_idx - param_idx_offset]]([output_ref.typeof_function]((s) as Snap)))
                         })
             }
             TyKind::Adt(_, args) => {
@@ -301,7 +311,7 @@ pub fn domain<'vir>(
                 builder.axiom(&type_read_name, vir::expr! {
                     forall s: [builder.self_type()] ::
                         {[typaram_reads[idx]](s)}
-                        ([typaram_reads[idx]](s)) == ([output_ref.ty_param_accessors[param_idx]]([output_ref.typeof_function]((s) as Snap)))
+                        ([typaram_reads[idx]](s)) == ([output_ref.ty_param_accessors[param_idx - param_idx_offset]]([output_ref.typeof_function]((s) as Snap)))
                 })
             }
             TyKind::Adt(_, args) => {
