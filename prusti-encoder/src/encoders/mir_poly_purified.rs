@@ -32,36 +32,21 @@ impl PurifiedFunctionEnc for MirPolyPurifiedEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
         task_key: &Self::TaskKey<'vir>,
         arg: &super::PurifiedLocalDef<'vir>,
-        idx: usize,
+        ty: ty::Ty<'vir>,
+        suffix: &str,
     ) -> Option<vir::ExprBool<'vir>> {
-        let mir_ty = vcx
-            .tcx()
-            .fn_sig(task_key)
-            .map_bound(|bound| {
-                if idx == mir::RETURN_PLACE.as_usize() {
-                    bound.output()
-                } else {
-                    bound.input(idx - 1)
-                }
-            })
-            .instantiate_identity()
-            .skip_binder();
-        if mir_ty.is_primitive() {
+        if ty.is_primitive() {
             return None;
         }
-        let most_generic_ty = most_generic_ty::extract_type_params(vcx.tcx(), mir_ty).0;
-        let snap = if idx == mir::RETURN_PLACE.as_usize() {
-            arg.local_ex
-        } else {
-            let name_s = vir::vir_format_identifier!(vcx, "{}_param", arg.local.name).to_str();
-            let type_s = arg.ty.snapshot;
-            vcx.mk_local_ex(name_s, type_s)
-        };
+        let most_generic_ty = most_generic_ty::extract_type_params(vcx.tcx(), ty).0;
+        let name_s = vir::vir_format_identifier!(vcx, "{}{}", arg.local.name, suffix).to_str();
+        let type_s = arg.ty.snapshot;
+        let snap = vcx.mk_local_ex(name_s, type_s);
         let lhs = (deps
             .require_ref::<crate::encoders::domain::DomainEnc>(most_generic_ty)
             .unwrap()
             .typeof_function)(snap);
-        let rhs = extract_type_expr(vcx, deps, mir_ty, most_generic_ty.into());
+        let rhs = extract_type_expr(vcx, deps, ty, most_generic_ty.into());
         Some(vcx.mk_eq_expr(lhs, rhs))
     }
 }

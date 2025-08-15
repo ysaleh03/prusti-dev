@@ -1,4 +1,7 @@
-use prusti_rustc_interface::{middle::ty::GenericArgs, span::def_id::DefId};
+use prusti_rustc_interface::{
+    middle::ty::{GenericArgs, Ty},
+    span::def_id::DefId,
+};
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
 /// Encodes a Rust function as a Viper method using the monomorphic encoding of generics.
@@ -45,7 +48,8 @@ impl PurifiedFunctionEnc for MirMonoPurifiedEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
         task_key: &Self::TaskKey<'vir>,
         arg: &crate::encoders::PurifiedLocalDef<'vir>,
-        idx: usize,
+        ty: Ty<'vir>,
+        suffix: &str,
     ) -> Option<vir::ExprBool<'vir>> {
         Some(vcx.mk_todo_expr("TODO", vir::TYPE_BOOL))
     }
