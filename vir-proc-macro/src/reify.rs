@@ -17,6 +17,11 @@ pub fn derive_reify(input: TokenStream) -> TokenStream {
                     .map(|elem| elem.reify(vcx, lctx))
                     .collect::<Vec<_>>())
             }
+            fn purified_reify<'tcx>(&self, vcx: &'vir crate::VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+                vcx.alloc_slice(&self.iter()
+                    .map(|elem| elem.purified_reify(vcx, lctx))
+                    .collect::<Vec<_>>())
+            }
         }
     };
     TokenStream::from(match input.data {
@@ -31,6 +36,19 @@ pub fn derive_reify(input: TokenStream) -> TokenStream {
                     if ReifyKind::of_field(field).should_reify() {
                         Some(quote! {
                             let #name = self.#name.reify(vcx, lctx);
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            let compute_purified_fields = named
+                .iter()
+                .filter_map(|field| {
+                    let name = field.ident.as_ref().unwrap();
+                    if ReifyKind::of_field(field).should_reify() {
+                        Some(quote! {
+                            let #name = self.#name.purified_reify(vcx, lctx);
                         })
                     } else {
                         None
@@ -57,12 +75,16 @@ pub fn derive_reify(input: TokenStream) -> TokenStream {
                         #(#compute_fields)*
                         vcx.alloc(#name { #(#fields),* })
                     }
+                    fn purified_reify<'tcx>(&self, vcx: &'vir crate::VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+                        #(#compute_purified_fields)*
+                        vcx.alloc(#name { #(#fields),* })
+                    }
                 }
                 #slice_impl
             }
         }
         syn::Data::Enum(syn::DataEnum { variants, .. }) => {
-            let variants = variants
+            let reify_variants = variants
                 .iter()
                 .map(|variant| {
                     let variant_name = &variant.ident;
@@ -116,13 +138,70 @@ pub fn derive_reify(input: TokenStream) -> TokenStream {
                     }
                 })
                 .collect::<Vec<_>>();
+            let purified_reify_variants = variants
+                .iter()
+                .map(|variant| {
+                    let variant_name = &variant.ident;
+                    match &variant.fields {
+                        syn::Fields::Unnamed(syn::FieldsUnnamed { unnamed, .. }) => {
+                            let vbinds = (0..unnamed.len())
+                                .map(|idx| quote::format_ident!("v{idx}"))
+                                .collect::<Vec<_>>();
+                            let obinds = (0..unnamed.len())
+                                .map(|idx| quote::format_ident!("opt{idx}"))
+                                .collect::<Vec<_>>();
+                            let purified_compute_fields = unnamed
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, field)| {
+                                    if ReifyKind::of_field(field).should_reify() {
+                                        let vbind = &vbinds[idx];
+                                        let obind = &obinds[idx];
+                                        Some(quote! {
+                                            let #obind = #vbind.purified_reify(vcx, lctx);
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            let fields = unnamed
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, field)| {
+                                    if ReifyKind::of_field(field).should_reify() {
+                                        let obind = &obinds[idx];
+                                        quote! { #obind }
+                                    } else {
+                                        let vbind = &vbinds[idx];
+                                        quote! { #vbind }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            quote! {
+                                #name::#variant_name(#(#vbinds),*) => {
+                                    #(#purified_compute_fields)*
+                                    vcx.alloc(#name::#variant_name(#(#fields),*))
+                                }
+                            }
+                        }
+                        syn::Fields::Unit => quote! {
+                            #name::#variant_name => &#name::#variant_name
+                        },
+                        _ => unreachable!(),
+                    }
+                })
+                .collect::<Vec<_>>();
             quote! {
                 impl<'vir, Curr: Copy, NextA, NextB> crate::Reify<'vir, Curr>
                     for &'vir #name<'vir, Curr, ExprKindGen<'vir, NextA, NextB>>
                 {
                     type Next = &'vir #name<'vir, NextA, NextB>;
                     fn reify<'tcx>(&self, vcx: &'vir crate::VirCtxt<'tcx>, lctx: Curr) -> Self::Next {
-                        match self { #(#variants),* }
+                        match self { #(#reify_variants),* }
+                    }
+                    fn purified_reify<'tcx>(&self, vcx: &'vir crate::VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+                        match self { #(#purified_reify_variants),* }
                     }
                 }
                 #slice_impl

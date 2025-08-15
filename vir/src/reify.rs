@@ -6,6 +6,7 @@ pub trait Reify<'vir, Curr> {
     type Next: Sized;
 
     fn reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: Curr) -> Self::Next;
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next;
 }
 
 impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
@@ -15,6 +16,15 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
     fn reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: Curr) -> Self::Next {
         vcx.alloc(ExprGenData {
             kind: self.kind.reify(vcx, lctx),
+            debug_info: self.debug_info,
+            span: self.span,
+            ty: self.ty,
+        })
+    }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        vcx.alloc(ExprGenData {
+            kind: self.kind.purified_reify(vcx, lctx),
             debug_info: self.debug_info,
             span: self.span,
             ty: self.ty,
@@ -57,6 +67,56 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
             ExprKindGenData::Lazy(v) => (v.func)(vcx, lctx),
         }
     }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        let pre_lctx = lctx.0;
+        let post_lctx = lctx.1;
+        match self {
+            ExprKindGenData::Field(v, f) => {
+                vcx.alloc(ExprKindGenData::Field(v.purified_reify(vcx, lctx), f))
+            }
+            ExprKindGenData::Old(v) => v.expr.reify(vcx, pre_lctx).kind,
+            ExprKindGenData::AccField(v) => {
+                vcx.alloc(ExprKindGenData::AccField(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Unfolding(v) => {
+                vcx.alloc(ExprKindGenData::Unfolding(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::UnOp(v) => {
+                vcx.alloc(ExprKindGenData::UnOp(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::BinOp(v) => {
+                vcx.alloc(ExprKindGenData::BinOp(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Ternary(v) => {
+                vcx.alloc(ExprKindGenData::Ternary(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Forall(v) => {
+                vcx.alloc(ExprKindGenData::Forall(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Exists(v) => {
+                vcx.alloc(ExprKindGenData::Exists(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Let(v) => vcx.alloc(ExprKindGenData::Let(v.purified_reify(vcx, lctx))),
+            ExprKindGenData::FuncApp(v) => {
+                vcx.alloc(ExprKindGenData::FuncApp(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::PredicateApp(v) => {
+                vcx.alloc(ExprKindGenData::PredicateApp(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Wand(v) => {
+                vcx.alloc(ExprKindGenData::Wand(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::Local(v) => vcx.alloc(ExprKindGenData::Local(v)),
+            ExprKindGenData::Const(v) => vcx.alloc(ExprKindGenData::Const(v)),
+            ExprKindGenData::Result(t) => vcx.alloc(ExprKindGenData::Result(t)),
+            ExprKindGenData::Todo(v) => vcx.alloc(ExprKindGenData::Todo(v)),
+            ExprKindGenData::Lazy(v) if v.inner.is_some() => {
+                v.inner.unwrap().purified_reify(vcx, lctx)
+            }
+            ExprKindGenData::Lazy(v) => (v.func)(vcx, post_lctx),
+        }
+    }
 }
 
 // TODO: how to make these generic? i.e. how to implement `Reify` for *any*
@@ -75,6 +135,15 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
                 .collect::<Vec<_>>(),
         )
     }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        vcx.alloc_slice(
+            &self
+                .iter()
+                .map(|elem| elem.purified_reify(vcx, lctx))
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
@@ -86,6 +155,15 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
             &self
                 .iter()
                 .map(|elem| elem.reify(vcx, lctx))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        vcx.alloc_slice(
+            &self
+                .iter()
+                .map(|elem| elem.purified_reify(vcx, lctx))
                 .collect::<Vec<_>>(),
         )
     }
@@ -113,6 +191,21 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
                 .collect::<Vec<_>>(),
         )
     }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        vcx.alloc_slice(
+            &self
+                .iter()
+                .map(|(elem, label, extra_exprs)| {
+                    (
+                        elem.purified_reify(vcx, lctx),
+                        *label,
+                        extra_exprs.purified_reify(vcx, lctx),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
@@ -121,6 +214,10 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
     type Next = Option<ExprGen<'vir, NextA, NextB, T>>;
     fn reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: Curr) -> Self::Next {
         self.map(|elem| elem.reify(vcx, lctx))
+    }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        self.map(|elem| elem.purified_reify(vcx, lctx))
     }
 }
 
@@ -131,6 +228,10 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
     fn reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: Curr) -> Self::Next {
         self.map(|elem| elem.reify(vcx, lctx))
     }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        self.map(|elem| elem.purified_reify(vcx, lctx))
+    }
 }
 
 impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
@@ -139,6 +240,10 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
     type Next = Option<MethodBodyGen<'vir, NextA, NextB>>;
     fn reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: Curr) -> Self::Next {
         self.map(|elem| elem.reify(vcx, lctx))
+    }
+
+    fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
+        self.map(|elem| elem.purified_reify(vcx, lctx))
     }
 }
 
