@@ -243,6 +243,7 @@ pub struct LazyGenData<'vir, Curr: 'vir, Next: 'vir> {
     #[allow(clippy::type_complexity)]
     pub func: Box<dyn for<'a> Fn(&'vir crate::VirCtxt<'a>, Curr) -> Next + 'vir>,
     pub ty: TypeDyn<'vir>,
+    pub inner: Option<&'vir ExprKindGenData<'vir, Curr, Next>>,
 }
 
 impl<'vir, Curr: 'vir, Next: 'vir> std::hash::Hash for LazyGenData<'vir, Curr, Next> {

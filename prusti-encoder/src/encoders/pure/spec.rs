@@ -287,45 +287,27 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             .require_local::<crate::encoders::SpecEnc>(crate::encoders::SpecEncTask { def_id })?;
 
         vir::with_vcx(|vcx| {
-            let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
-            let all_args: Vec<vir::ExprSnap<'vir>> = if pure {
-                let result_ty = local_defs.locals[mir::RETURN_PLACE].ty;
-                local_iter
-                    .map(|local| {
-                        vcx.mk_local_ex(
-                            vir::vir_format_identifier!(
-                                vcx,
-                                "{}_param",
-                                local_defs.locals[local].local.name
-                            )
-                            .to_str(),
-                            local_defs.locals[local].ty.snapshot,
+            let local_iter = (1..=local_defs.arg_count)
+                .map(mir::Local::from)
+                .collect::<Vec<_>>();
+            let result_ty = local_defs.locals[mir::RETURN_PLACE].ty;
+            let all_args: Vec<vir::ExprSnap<'vir>> = local_iter
+                .iter()
+                .map(|&local| {
+                    vcx.mk_local_ex(
+                        vir::vir_format_identifier!(
+                            vcx,
+                            "{}_param",
+                            local_defs.locals[local].local.name
                         )
-                    })
-                    .chain([vcx.mk_result(result_ty.snapshot)])
-                    .collect()
-            } else {
-                local_iter
-                    .map(|local| {
-                        vcx.mk_local_ex(
-                            vir::vir_format_identifier!(
-                                vcx,
-                                "{}_param",
-                                local_defs.locals[local].local.name
-                            )
-                            .to_str(),
-                            local_defs.locals[local].local_ex.ty(),
-                        )
-                    })
-                    .collect()
-            };
+                        .to_str(),
+                        local_defs.locals[local].ty.snapshot,
+                    )
+                })
+                .chain([vcx.mk_result(result_ty.snapshot)])
+                .collect();
             let all_args = vcx.alloc_slice(&all_args);
-            let pre_args = if pure {
-                &all_args[..all_args.len() - 1]
-            } else {
-                all_args
-            };
-
+            let pre_args = &all_args[..all_args.len() - 1];
             let to_bool = deps
                 .require_ref::<RustTyPredicatesEnc>(vcx.tcx().types.bool)?
                 .generic_predicate
@@ -364,9 +346,19 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             let post_args = if pure {
                 all_args
             } else {
-                let post_args: Vec<vir::ExprSnap<'vir>> = pre_args
+                let post_args: Vec<vir::ExprSnap<'vir>> = local_iter
                     .iter()
-                    .map(|arg| vcx.mk_old_expr(arg))
+                    .map(|&local| {
+                        vcx.mk_local_ex(
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "{}_return",
+                                local_defs.locals[local].local.name
+                            )
+                            .to_str(),
+                            local_defs.locals[local].ty.snapshot,
+                        )
+                    })
                     .chain([local_defs.locals[mir::RETURN_PLACE].local_ex])
                     .collect();
                 vcx.alloc_slice(&post_args)
@@ -398,20 +390,21 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                             .unwrap()
                             .expr
                             .downcast_ty();
-                        let expr = expr.reify(vcx, (*spec_def_id, post_args));
+                        let expr = expr.purified_reify(
+                            vcx,
+                            ((*spec_def_id, pre_args), (*spec_def_id, post_args)),
+                        );
                         to_bool(expr).downcast_ty()
                     })
                 })
                 .collect::<Vec<vir::ExprBool<'_>>>();
             let pledge_args = vcx.alloc_slice(
-                &pre_args
-                    .iter()
-                    .map(|arg| vcx.mk_old_expr(arg))
+                &[
+                    pre_args,
                     // TODO: this looks a bit hardcoded...
-                    .chain([
-                        vcx.mk_local_ex("_0s", local_defs.locals[mir::RETURN_PLACE].ty.snapshot)
-                    ])
-                    .collect::<Vec<_>>(),
+                    &[vcx.mk_local_ex("_0s", local_defs.locals[mir::RETURN_PLACE].ty.snapshot)],
+                ]
+                .concat(),
             );
             let pledges = specs
                 .pledges

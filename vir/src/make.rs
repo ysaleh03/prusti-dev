@@ -258,12 +258,14 @@ impl<'tcx> VirCtxt<'tcx> {
         name: &'vir str,
         ty: Type<'vir, T>,
         func: Box<dyn for<'a> Fn(&'vir VirCtxt<'a>, Curr) -> Next + 'vir>,
+        inner: Option<&'vir ExprKindGenData<'vir, Curr, Next>>,
     ) -> ExprGen<'vir, Curr, Next, T> {
         self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::Lazy(
             self.alloc(LazyGenData {
                 name,
                 func,
                 ty: ty.as_dyn(),
+                inner,
             }),
         ))))
     }

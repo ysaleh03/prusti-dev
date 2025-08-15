@@ -163,6 +163,7 @@ impl TaskEncoder for MirPureEnc {
                     use vir::Reify;
                     expr_inner.kind.reify(vcx, lctx)
                 }),
+                Some(expr_inner.kind),
             );
             add_debug_note!(expr.debug_info, "Inner expr: {}", expr_inner.debug_info);
             Ok(expr)
@@ -413,6 +414,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 vir::vir_format!(self.vcx, "pure in _{local}"),
                 self.get_ty_for_local(local.into()),
                 Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local - 1].kind),
+                None,
             );
             // check that `local` and `expr` type correspond
             init.binds
@@ -873,11 +875,12 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         };
 
         let mut expr = if should_wrap {
-            let local_as_uzize = place.local.as_usize();
+            let local_as_usize = place.local.as_usize();
             self.vcx.mk_lazy_expr(
-                vir::vir_format!(self.vcx, "wraped in _{}", local_as_uzize),
+                vir::vir_format!(self.vcx, "wrapped in _{}", local_as_usize),
                 self.get_ty_for_local(place.local),
-                Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local_as_uzize - 1].kind),
+                Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local_as_usize - 1].kind),
+                None,
             )
         } else {
             self.mk_local_ex(place.local, curr_ver[&place.local])
@@ -1237,7 +1240,7 @@ fn encode_place_with_ref<'vir, 'enc>(
         let local_as_uzize = place.local.as_usize();
 
         self.vcx.mk_lazy_expr(
-            vir::vir_format!(self.vcx, "wraped in _{}", local_as_uzize),
+            vir::vir_format!(self.vcx, "wrapped in _{}", local_as_uzize),
             Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local_as_uzize - 1].kind),
         )
     } else {
