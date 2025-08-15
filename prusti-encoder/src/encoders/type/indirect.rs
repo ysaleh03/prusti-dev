@@ -79,25 +79,29 @@ impl TaskEncoder for IndirectPredicatesEnc {
             let mut contravariant = Vec::<ExprOutput<'vir>>::new();
             match ty.kind() {
                 ty::TyKind::Ref(ref_region, inner_ty, ty::Mutability::Mut) => {
-                    let ref_domain = self_ty_enc.generic_snapshot.specifics.expect_mutref();
-                    if IndirectKey::from_region(*ref_region)
-                        .is_some_and(|indirect| &indirect == proj_region)
-                    {
-                        let inner_ty_enc = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty)?;
-                        covariant.push(vcx.mk_lazy_expr(
-                            "ref_indirect",
-                            vir::TYPE_BOOL,
-                            Box::new(move |vcx, self_expr| {
-                                inner_ty_enc
-                                    .ref_to_pred(
-                                        vcx,
-                                        (ref_domain.deref_access)(self_expr.downcast_ty()),
-                                        None,
-                                    )
-                                    .kind
-                            }),
-                        ));
-                    }
+                    let ref_domain = self_ty_enc
+                        .generic_snapshot
+                        .specifics
+                        .expect_purified_mutref();
+                    // if IndirectKey::from_region(*ref_region)
+                    //     .is_some_and(|indirect| &indirect == proj_region)
+                    // {
+                    //     let inner_ty_enc = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty)?;
+                    //     covariant.push(vcx.mk_lazy_expr(
+                    //         "ref_indirect",
+                    //         vir::TYPE_BOOL,
+                    //         Box::new(move |vcx, self_expr| {
+                    //             inner_ty_enc
+                    //                 .ref_to_pred(
+                    //                     vcx,
+                    //                     (ref_domain.value_access)(self_expr.downcast_ty()),
+                    //                     None,
+                    //                 )
+                    //                 .kind
+                    //         }),
+                    //         None,
+                    //     ));
+                    // }
                     // TODO: is this correct??? do we always project into the inner type, regardless of region?
                     let inner_indirect =
                         deps.require_ref::<IndirectPredicatesEnc>((*inner_ty, *proj_region))?;
@@ -118,6 +122,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                         )
                                         .kind
                                 }),
+                                None,
                             )
                         })
                         .collect::<Vec<_>>();
@@ -140,6 +145,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                         .reify(vcx, (accessor.read)(self_expr.downcast_ty()))
                                         .kind
                                 }),
+                                None,
                             )
                         };
 
