@@ -75,16 +75,16 @@ impl From<mir::BinOp> for BinOpKind {
             }
             mir::BinOp::Div => BinOpKind::Div,
             mir::BinOp::Rem => BinOpKind::Mod,
-            mir::BinOp::BitXor => todo!(),
+            mir::BinOp::BitXor => todo!("bitwise operations"),
             // TODO: this is a temporary workaround,
             // we need to fix this for integers and
             // do non-short-circuiting for booleans.
             mir::BinOp::BitAnd => BinOpKind::And,
             mir::BinOp::BitOr => BinOpKind::Or,
-            mir::BinOp::Shl => todo!(),
-            mir::BinOp::ShlUnchecked => todo!(),
-            mir::BinOp::Shr => todo!(),
-            mir::BinOp::ShrUnchecked => todo!(),
+            mir::BinOp::Shl => todo!("bitwise operations"),
+            mir::BinOp::ShlUnchecked => todo!("bitwise operations"),
+            mir::BinOp::Shr => todo!("bitwise operations"),
+            mir::BinOp::ShrUnchecked => todo!("bitwise operations"),
             mir::BinOp::Eq => BinOpKind::CmpEq,
             mir::BinOp::Lt => BinOpKind::CmpLt,
             mir::BinOp::Le => BinOpKind::CmpLe,
@@ -168,6 +168,7 @@ pub enum TypeKind<'vir> {
     Ref, // TODO: typed references ?
     Perm,
     Unsupported(UnsupportedType<'vir>),
+    Err,
 }
 
 #[derive(PartialEq, Eq, Clone, Ord, PartialOrd, Serialize, Deserialize, Hash)]
@@ -193,13 +194,20 @@ pub struct FieldData<'vir, T: CompType> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
-pub struct AdtDestructorData<'vir, T: CompType> {
+pub struct AdtDestructorData<'vir, T: CompType, R: CompType> {
     #[serde(with = "crate::serde::serde_str")]
     pub name: &'vir str, // TODO: identifiers
     #[serde(with = "crate::serde::serde_ref")]
-    pub input: TypeCSnap<'vir>,
+    pub input: Type<'vir, T>,
     #[serde(with = "crate::serde::serde_ref")]
-    pub ty: Type<'vir, T>,
+    pub ty: Type<'vir, R>,
+}
+
+impl<'vir, T: CompType, R: CompType> AdtDestructorData<'vir, T, R> {
+    pub fn as_dyn(&self) -> &AdtDestructorData<'vir, crate::Dyn, crate::Dyn> {
+        let ptr = self as *const Self as *const AdtDestructorData<'vir, crate::Dyn, crate::Dyn>;
+        unsafe { &*ptr }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]

@@ -23,6 +23,9 @@ pub trait CompType:
     fn check(ty: Type<impl CompType>);
 }
 
+/// # Safety
+///
+/// Types must be safe to transmute between each other.
 pub unsafe trait TransmuteFrom<T: CompType>: Sized {}
 
 pub trait CastType<'a, 'vir: 'a, T: CompType>: private::UnsafeCastType<'a, 'vir, T> {
@@ -40,10 +43,7 @@ pub trait CastType<'a, 'vir: 'a, T: CompType>: private::UnsafeCastType<'a, 'vir,
     }
 
     /// Cannot panic.
-    fn upcast_ty<U: CompType>(&self) -> &Self::Output<U>
-    where
-        U: TransmuteFrom<T>,
-    {
+    fn upcast_ty<U: CompType + TransmuteFrom<T>>(&self) -> &Self::Output<U> {
         unsafe { self.cast_unchecked::<U>() }
     }
 
@@ -96,6 +96,8 @@ impl_exp_type!(Int[TYPE_INT = Int] => Prim | Dyn, "The Viper `Int` type");
 impl_exp_type!(Perm[TYPE_PERM = Perm] => Prim | Dyn, "The Viper `Perm` type (reals)");
 impl_exp_type!(Ref[TYPE_REF = Ref] => Prim | Dyn, "The Viper `Ref` type");
 
+impl_exp_type!(Err[TYPE_ERR = Err] => Prim | Dyn, "Type for encoding errors");
+
 impl_exp_type!(CSnap => Snap | Dyn, TypeKind::Domain(name, ..) if name.starts_with("s_") && name != "s_Param", "A concrete Prusti snapshot type");
 impl_exp_type!(PSnap[TYPE_PSNAP = Domain("s_Param", &[])] => Snap | Dyn, "The generic snapshot domain (`s_Param`)");
 impl_exp_type!(TyVal[TYPE_TYVAL = Domain("Type", &[])] => Dyn, "The type domain (`ExpType`) which gives values to types");
@@ -107,15 +109,15 @@ impl_exp_type!(Dyn, TypeKind::Unsupported(..) => false, "Represents a dynamicall
 #[macro_export]
 macro_rules! typecheck_error {
     ($($arg:tt)*) => {
-        if cfg!(feature = "vir_panic_on_typecheck_error") || cfg!(debug_assertions) {
-            panic!($($arg)*);
-        } else {
+        // if cfg!(feature = "vir_panic_on_typecheck_error") || cfg!(debug_assertions) {
+        //     panic!($($arg)*);
+        // } else {
             tracing::error!(
                 "{}\nThe error occurred at: {}",
                 format_args!($($arg)*),
                 std::backtrace::Backtrace::capture()
-            );
-        }
+            )
+        // }
     };
 }
 
@@ -149,8 +151,8 @@ mod private {
     }
 
     macro_rules! impl_unsafe_cast {
-        ($($name:ident$(<$($g:ident),+>)?);+) => {
-            $(impl<'a, 'vir: 'a$($(, $g)*)?, T: CompType> UnsafeCastType<'a, 'vir, T> for $crate::$name<'vir$($(, $g)*)?, T> {
+        ($($name:ident$(<$($g:ident$(: $bound:ident)?),+>)?);+) => {
+            $(impl<'a, 'vir: 'a$($(, $g$(: $bound)?)*)?, T: CompType> UnsafeCastType<'a, 'vir, T> for $crate::$name<'vir$($(, $g)*)?, T> {
                 type Output<U: CompType> = crate::$name<'vir$($(, $g)*)?, U>;
                 fn check<U: CompType>(&self) {
                     U::check(self.ty());
@@ -165,7 +167,7 @@ mod private {
             })*
         };
     }
-    impl_unsafe_cast!(LocalData; LocalDeclData; FieldData; AdtDestructorData; ExprGenData<Curr, Next>; TypeData);
+    impl_unsafe_cast!(LocalData; LocalDeclData; FieldData; AdtDestructorData<I: CompType>; ExprGenData<Curr, Next>; TypeData);
 }
 
 pub trait HasType<'vir, T: CompType> {
@@ -176,8 +178,8 @@ pub trait HasType<'vir, T: CompType> {
 }
 
 macro_rules! impl_has_type {
-    ($($name:ident$(<$($g:ident),+>)?$(.$t0:tt)?$(($t1:tt))?);+) => {
-        $(impl<'vir$($(, $g)*)?, T: CompType> HasType<'vir, T> for $crate::$name<'vir$($(, $g)*)?, T> {
+    ($($name:ident$(<$($g:ident$(: $bound:ident)?),+>)?$(.$t0:tt)?$(($t1:tt))?);+) => {
+        $(impl<'vir$($(, $g$(: $bound)?)*)?, T: CompType> HasType<'vir, T> for $crate::$name<'vir$($(, $g)*)?, T> {
             fn ty(&'vir self) -> $crate::Type<'vir, T> {
                 self$(.$t0)?$(.$t1())?
             }
@@ -185,4 +187,4 @@ macro_rules! impl_has_type {
     };
 }
 
-impl_has_type!(LocalData.ty; LocalDeclData.ty; FieldData.ty; AdtDestructorData.ty; ExprGenData<Curr, Next>(ty); TypeData);
+impl_has_type!(LocalData.ty; LocalDeclData.ty; FieldData.ty; AdtDestructorData<I: CompType>.ty; ExprGenData<Curr, Next>(ty); TypeData);

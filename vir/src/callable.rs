@@ -55,7 +55,7 @@ impl<'vir, R: CompType> DomainIdn<'vir, R> {
     }
 }
 
-impl<'a, 'vir, R: CompType> FnOnce<()> for DomainIdn<'vir, R> {
+impl<'vir, R: CompType> FnOnce<()> for DomainIdn<'vir, R> {
     type Output = crate::Type<'vir, R>;
     extern "rust-call" fn call_once(self, _args: ()) -> Self::Output {
         with_vcx(|vcx| {
@@ -80,21 +80,21 @@ impl<'a, 'vir, T: CompType, R: CompType> FnOnce<(&'a [crate::Type<'vir, T>],)>
 
 // An Adt destructor
 
-pub struct AdtDestructorWrapper<'vir, T: CompType>(AdtDestructor<'vir, T>);
+pub struct AdtDestructorWrapper<'vir, T: CompType, R: CompType>(AdtDestructor<'vir, T, R>);
 
-impl<'vir, T: CompType> crate::AdtDestructorData<'vir, T> {
-    pub fn gen(&'vir self) -> AdtDestructorWrapper<'vir, T> {
+impl<'vir, T: CompType, R: CompType> crate::AdtDestructorData<'vir, T, R> {
+    pub fn call(&'vir self) -> AdtDestructorWrapper<'vir, T, R> {
         AdtDestructorWrapper(self)
     }
 }
 
-impl<'a, 'vir, Curr, Next, T: CompType> FnOnce<(crate::ExprGenCSnap<'vir, Curr, Next>,)>
-    for AdtDestructorWrapper<'vir, T>
+impl<'vir, Curr, Next, T: CompType, R: CompType> FnOnce<(crate::ExprGen<'vir, Curr, Next, T>,)>
+    for AdtDestructorWrapper<'vir, T, R>
 {
-    type Output = crate::ExprGen<'vir, Curr, Next, T>;
+    type Output = crate::ExprGen<'vir, Curr, Next, R>;
     extern "rust-call" fn call_once(
         self,
-        args: (crate::ExprGenCSnap<'vir, Curr, Next>,),
+        args: (crate::ExprGen<'vir, Curr, Next, T>,),
     ) -> Self::Output {
         with_vcx(|vcx| vcx.mk_adt_destructor_expr(args.0, self.0))
     }
@@ -157,7 +157,7 @@ impl<'vir, A: Arity, R: CompType> FunctionIdn<'vir, A, R> {
         }
     }
 
-    pub fn gen<Curr, Next>(self) -> FunctionIdnGen<'vir, Curr, Next, A, R> {
+    pub fn call<Curr, Next>(self) -> FunctionIdnGen<'vir, Curr, Next, A, R> {
         FunctionIdnGen {
             inner: self,
             _p: core::marker::PhantomData,
@@ -187,7 +187,7 @@ impl<'a, 'vir, A: Arity, R: CompType> FnOnce<A::Exprs<'a, 'vir, (), !>>
 {
     type Output = crate::Expr<'vir, R>;
     extern "rust-call" fn call_once(self, args: A::Exprs<'a, 'vir, (), !>) -> Self::Output {
-        self.gen().call_once(args)
+        self.call().call_once(args)
     }
 }
 
@@ -249,7 +249,7 @@ impl<'vir, A: Arity> MethodIdn<'vir, A> {
         }
     }
 
-    pub fn gen<Curr, Next>(self) -> MethodIdnGen<'vir, Curr, Next, A> {
+    pub fn call<Curr, Next>(self) -> MethodIdnGen<'vir, Curr, Next, A> {
         MethodIdnGen {
             inner: self,
             _p: core::marker::PhantomData,
@@ -264,7 +264,7 @@ impl<'a, 'vir, A: Arity> FnOnce<(A::Exprs<'a, 'vir, (), !>, &'vir [LocalDyn<'vir
         self,
         (args, targets): (A::Exprs<'a, 'vir, (), !>, &'vir [LocalDyn<'vir>]),
     ) -> Self::Output {
-        self.gen().call_once((args, targets))
+        self.call().call_once((args, targets))
     }
 }
 impl<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity>
@@ -319,9 +319,11 @@ impl<'vir, A: Arity> CallableIdn<'vir, A> for PredicateIdn<'vir, A> {
     }
 }
 
+type VarianceBound<'a, Curr, Next> = core::marker::PhantomData<(Box<dyn Fn(&'a ())>, Curr, Next)>;
+
 pub struct PredicateIdnGen<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity> {
     inner: PredicateIdn<'vir, A>,
-    _p: core::marker::PhantomData<(Box<dyn Fn(&'a ())>, Curr, Next)>,
+    _p: VarianceBound<'a, Curr, Next>,
 }
 
 impl<'vir, A: Arity> PredicateIdn<'vir, A> {
@@ -333,14 +335,14 @@ impl<'vir, A: Arity> PredicateIdn<'vir, A> {
         }
     }
 
-    pub fn call<'a, Curr, Next>(
+    pub fn call_once<'a, Curr, Next>(
         self,
         args: A::Exprs<'a, 'vir, Curr, Next>,
     ) -> PredicateIdnCurry<'vir, Curr, Next> {
-        self.gen().call_once(args)
+        self.call().call_once(args)
     }
 
-    pub fn gen<'a, Curr, Next>(self) -> PredicateIdnGen<'a, 'vir, Curr, Next, A> {
+    pub fn call<'a, Curr, Next>(self) -> PredicateIdnGen<'a, 'vir, Curr, Next, A> {
         PredicateIdnGen {
             inner: self,
             _p: core::marker::PhantomData,
@@ -351,7 +353,7 @@ impl<'vir, A: Arity> PredicateIdn<'vir, A> {
 impl<'a, 'vir, A: Arity> FnOnce<A::Exprs<'a, 'vir, (), !>> for PredicateIdn<'vir, A> {
     type Output = PredicateIdnCurry<'vir, (), !>;
     extern "rust-call" fn call_once(self, args: A::Exprs<'a, 'vir, (), !>) -> Self::Output {
-        self.gen().call_once(args)
+        self.call().call_once(args)
     }
 }
 
@@ -522,11 +524,11 @@ pub trait Arity:
                 args.len()
             );
         }
-        for (i, param) in params.iter().enumerate() {
-            if param.kind() != args[i].ty().kind() {
+        for (i, (param, arg)) in params.iter().zip(args).enumerate() {
+            if param.kind() != arg.ty().kind() {
                 crate::typecheck_error!(
                     "Argument {i} has type {:?}, expected {:?}, Debug info: {debug_info}",
-                    args[i].ty().ty(),
+                    arg.ty().ty(),
                     param,
                 );
             }

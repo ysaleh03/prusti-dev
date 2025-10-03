@@ -1,26 +1,24 @@
 #![feature(rustc_private)]
 #![feature(associated_type_defaults)]
-#![feature(let_chains)]
 #![feature(box_patterns)]
 #![feature(never_type)]
 #![feature(allocator_api)]
 #![allow(clippy::needless_lifetimes)]
 
 mod encoders;
-mod encoder_traits;
 mod trait_support;
 pub mod request;
 
-use prusti_interface::{environment::EnvBody, specs::specifications::SpecQuery, PrustiError};
-use prusti_rustc_interface::{hir, middle::ty};
+use prusti_interface::{PrustiError, environment::EnvBody};
+use prusti_rustc_interface::middle::ty;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    lifted::{
-        casters::{CastTypeImpure, CastTypePure, CastersEnc},
-        ty_constructor::TyConstructorEnc,
+    Impure, MirPolyImpureEnc, MirPolyPurifiedEnc, Pure,
+    ty::{
+        generics::GArgsCastEnc,
+        lifted::{TyConstructorEnc, TypeOfEnc},
     },
-    MirPolyImpureEnc, MirPolyPurifiedEnc,
 };
 
 pub fn test_entrypoint<'tcx>(
@@ -29,174 +27,48 @@ pub fn test_entrypoint<'tcx>(
     def_spec: prusti_interface::specs::typed::DefSpecificationMap,
 ) -> request::RequestWithContext {
     vir::init_vcx(vir::VirCtxt::new(tcx, body, def_spec));
+    unsafe { backtrace_on_stack_overflow::enable() };
 
     // TODO: this should be a "crate" encoder, which will deps.require all the methods in the crate
 
-    for def_id in tcx.hir().body_owners() {
-        tracing::debug!("test_entrypoint item: {def_id:?}");
-        let kind = tcx.def_kind(def_id);
-        match kind {
-            hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                let def_id = def_id.to_def_id();
-                if prusti_interface::specs::is_spec_fn(tcx, def_id) {
-                    continue;
-                }
+    crate::encoders::encode_all_in_crate(tcx);
 
-                let (is_pure, is_trusted) = crate::encoders::with_proc_spec(
-                    SpecQuery::GetProcKind(def_id, ty::List::identity_for_item(tcx, def_id)),
-                    |proc_spec| {
-                        let is_pure = proc_spec.kind.is_pure().unwrap_or_default();
-                        let is_trusted = proc_spec.trusted.extract_inherit().unwrap_or_default();
-                        (is_pure, is_trusted)
-                    },
-                )
-                .unwrap_or_default();
-
-                // if !(is_trusted && is_pure) {
-                //     let res = MirPolyImpureEnc::encode(def_id, false);
-                //     assert!(res.is_ok());
-                // }
-
-                if !(is_trusted && is_pure) {
-                    let res = MirPolyPurifiedEnc::encode(def_id, false);
-                    assert!(res.is_ok());
-                }
-            }
-            unsupported_item_kind => {
-                tracing::debug!("unsupported item: {unsupported_item_kind:?}");
-            }
-        }
-    }
-
-    fn header(code: &mut String, title: &str) {
-        code.push_str("// -----------------------------\n");
-        code.push_str(&format!("// {}\n", title));
-        code.push_str("// -----------------------------\n");
-    }
-    let mut viper_code = String::new();
-
-    let mut program_fields = vec![];
-    let mut program_adts = vec![];
-    let mut program_domains = vec![];
-    let mut program_predicates = vec![];
-    let mut program_functions = vec![];
-    let mut program_methods = vec![];
+    let mut program = task_encoder::Program::default();
 
     // We output results from both monomorphic and polymorphic encoding of
     // functions, because even when Prusti is configured to use the monomorphic
     // it will still use `MirPolyImpureEnc` directly sometimes (see usages
     // earlier in this file).
-    header(&mut viper_code, "methods");
-    for output in crate::encoders::MirMonoPurifiedEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.method));
-        program_methods.push(output.method);
-    }
-    for output in crate::encoders::MirPolyPurifiedEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.method));
-        program_methods.push(output.method);
-    }
-    // header(&mut viper_code, "methods");
-    // for output in crate::encoders::MirMonoImpureEnc::all_outputs() {
-    //     viper_code.push_str(&format!("{:?}\n", output.method));
-    //     program_methods.push(output.method);
-    // }
-    // for output in crate::encoders::MirPolyImpureEnc::all_outputs() {
-    //     viper_code.push_str(&format!("{:?}\n", output.method));
-    //     program_methods.push(output.method);
-    // }
+    program.header("user methods");
+    crate::encoders::FunctionCallEnc::emit_outputs(&mut program);
 
-    header(&mut viper_code, "functions");
-    for output in crate::encoders::PureFunctionEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.function));
-        program_functions.push(output.function);
-    }
+    program.header("user functions");
+    crate::encoders::MethodCallEnc::emit_outputs(&mut program);
 
-    header(&mut viper_code, "MIR builtins");
-    for output in crate::encoders::MirBuiltinEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.function));
-        program_functions.push(output.function);
-    }
+    program.header("MIR builtins");
+    crate::encoders::MirBuiltinEnc::emit_outputs(&mut program);
 
-    header(&mut viper_code, "generics");
-    for output in crate::encoders::GenericEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.type_snapshot));
-        viper_code.push_str(&format!("{:?}\n", output.param_snapshot));
-        program_domains.push(output.type_snapshot);
-        program_domains.push(output.param_snapshot);
-    }
+    program.header("pure generic casts");
+    GArgsCastEnc::<Pure>::emit_outputs(&mut program);
 
-    header(&mut viper_code, "pure generic casts");
-    for cast_functions in CastersEnc::<CastTypePure>::all_outputs() {
-        for cast_function in cast_functions {
-            viper_code.push_str(&format!("{:?}\n", cast_function));
-            program_functions.push(cast_function);
-        }
-    }
+    program.header("impure generic casts");
+    GArgsCastEnc::<Impure>::emit_outputs(&mut program);
 
-    header(&mut viper_code, "impure generic casts");
-    for cast_methods in CastersEnc::<CastTypeImpure>::all_outputs() {
-        for cast_method in cast_methods {
-            viper_code.push_str(&format!("{:?}\n", cast_method));
-            program_methods.push(cast_method);
-        }
-    }
+    program.header("snapshots");
+    crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
 
-    header(&mut viper_code, "snapshots");
-    let (domains, adts) = crate::encoders::DomainEnc_all_outputs();
-    for (output, discr_fn) in adts {
-        viper_code.push_str(&format!("{:?}\n", output));
-        program_adts.push(output);
-        if let Some(discr_fn) = discr_fn {
-            program_functions.push(discr_fn);
-        }
-    }
-    for output in domains {
-        viper_code.push_str(&format!("{:?}\n", output));
-        program_domains.push(output);
-    }
+    program.header("predicates");
+    crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
 
-    header(&mut viper_code, "type constructors");
-    for output in TyConstructorEnc::all_outputs() {
-        viper_code.push_str(&format!("{:?}\n", output.domain));
-        program_domains.push(output.domain);
-    }
-
-    header(&mut viper_code, "types");
-    for output in crate::encoders::PredicateEnc::all_outputs() {
-        for field in output.fields {
-            viper_code.push_str(&format!("{:?}", field));
-            program_fields.push(field);
-        }
-        for field_projection in output.ref_to_field_refs {
-            viper_code.push_str(&format!("{:?}", field_projection));
-            program_functions.push(field_projection);
-        }
-        viper_code.push_str(&format!("{:?}\n", output.unreachable_to_snap));
-        program_functions.push(output.unreachable_to_snap);
-        viper_code.push_str(&format!("{:?}\n", output.function_snap));
-        program_functions.push(output.function_snap);
-        for pred in output.predicates {
-            viper_code.push_str(&format!("{:?}\n", pred));
-            program_predicates.push(pred);
-        }
-        viper_code.push_str(&format!("{:?}\n", output.method_assign));
-        program_methods.push(output.method_assign);
-    }
+    program.header("type constructors");
+    TyConstructorEnc::emit_outputs(&mut program);
+    TypeOfEnc::emit_outputs(&mut program);
 
     if std::env::var("LOCAL_TESTING").is_ok() {
-        std::fs::write("local-testing/simple.vpr", viper_code).unwrap();
+        std::fs::write("local-testing/simple.vpr", program.code()).unwrap();
     }
 
-    let program = vir::with_vcx(|vcx| {
-        vcx.mk_program(
-            vcx.alloc_slice(&program_fields),
-            vcx.alloc_slice(&program_adts),
-            vcx.alloc_slice(&program_domains),
-            vcx.alloc_slice(&program_predicates),
-            vcx.alloc_slice(&program_functions),
-            vcx.alloc_slice(&program_methods),
-        )
-    });
+    let program = program.mk_program();
 
     /*
     let source_path = std::path::Path::new("source/path"); // TODO: env.name.source_path();
@@ -211,6 +83,10 @@ pub fn test_entrypoint<'tcx>(
     request::RequestWithContext {
         program: program.to_ref(),
     }
+}
+
+pub fn early_errors() -> Vec<PrustiError> {
+    vir::with_vcx(|vcx| vcx.early_errors())
 }
 
 pub fn backtranslate_error(

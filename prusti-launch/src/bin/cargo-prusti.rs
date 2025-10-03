@@ -3,7 +3,6 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#![feature(let_chains)]
 
 use prusti_utils::{config, launch};
 use std::{env, fs, io, path::PathBuf, process::Command};
@@ -135,14 +134,13 @@ fn copy_exported_specs(cargo_target: PathBuf) -> io::Result<()> {
                 let entry = entry?.path();
                 if let Some(ext) = entry.extension()
                     && ext == "specs"
+                    && let Some(fname) = entry.file_name()
                 {
-                    if let Some(fname) = entry.file_name() {
-                        let pkg_name = fname.to_string_lossy();
-                        if let Some(pkg_name) = pkg_name.split('-').next() {
-                            let mut tgt = build_dir.join(pkg_name);
-                            tgt.set_extension("specs");
-                            fs::copy(entry, tgt)?;
-                        }
+                    let pkg_name = fname.to_string_lossy();
+                    if let Some(pkg_name) = pkg_name.split('-').next() {
+                        let mut tgt = build_dir.join(pkg_name);
+                        tgt.set_extension("specs");
+                        fs::copy(entry, tgt)?;
                     }
                 }
             }

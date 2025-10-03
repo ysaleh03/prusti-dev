@@ -1,10 +1,9 @@
-// compile-flags: -Puse_more_complete_exhale=false -Passert_timeout=1200000
+//@ compile-flags: -Puse_more_complete_exhale=false -Passert_timeout=1200000
 // https://codeforces.com/problemset/problem/110/E
 //
 // Original PR: https://github.com/viperproject/prusti-dev/pull/405
 
 #![feature(box_patterns)]
-#![feature(box_syntax)]
 
 use prusti_contracts::*;
 

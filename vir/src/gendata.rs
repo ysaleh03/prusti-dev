@@ -1,7 +1,12 @@
 use std::fmt::Debug;
 
 use crate::{
-    data::*, debug_info::{DebugInfo, DEBUGINFO_NONE}, genrefs::*, refs::*, spans::VirSpan, typecheck_error, with_vcx, CastType, CompType
+    data::*,
+    debug_info::{DebugInfo, DEBUGINFO_NONE},
+    genrefs::*,
+    refs::*,
+    spans::VirSpan,
+    typecheck_error, with_vcx, CastType, CompType, Dyn,
 };
 
 use vir_proc_macro::*;
@@ -167,8 +172,13 @@ impl<'vir, Curr: 'vir, Next: 'vir, T: CompType> ExprGenData<'vir, Curr, Next, T>
         with_vcx(|vcx| Self::new_inner(kind, DebugInfo::new(vcx), vcx.top_span(), ty))
     }
 
-    pub(crate) fn new_inner(kind: ExprKindGen<'vir, Curr, Next>, debug_info: DebugInfo<'vir>, span: Option<&'vir VirSpan<'vir>>, ty: Type<'vir, T>) -> Self {
-        if kind.ty() != ty.as_dyn() {
+    pub(crate) fn new_inner(
+        kind: ExprKindGen<'vir, Curr, Next>,
+        debug_info: DebugInfo<'vir>,
+        span: Option<&'vir VirSpan<'vir>>,
+        ty: Type<'vir, T>,
+    ) -> Self {
+        if kind.ty() != ty.as_dyn() && !matches!(kind.ty().kind(), crate::TypeKind::Err) {
             typecheck_error!(
                 "ExprGenData new_inner: kind {:?} has type {:?}, but trying to create with type {:?}",
                 kind,
@@ -192,9 +202,16 @@ impl<'tcx> crate::VirCtxt<'tcx> {
 
     pub const fn mk_int<'vir, const VALUE: i128>(&'vir self) -> ExprInt<'vir> {
         if VALUE < 0 {
+            // Hack to get a const-promoted absolute value, otherwise rustc
+            // would complain that `VALUE.unsigned_abs()` does not have a static
+            // lifetime.
+            struct Math<const V: i128>;
+            impl<const V: i128> Math<V> {
+                const ABS: u128 = V.unsigned_abs();
+            }
             const_expr!(&ExprKindGenData::UnOp(&UnOpData {
                 kind: UnOpKind::Neg,
-                expr: const_expr!(&ExprKindGenData::Const(&ConstData::Int((-VALUE) as u128)), Int => TypePrim),
+                expr: const_expr!(&ExprKindGenData::Const(&ConstData::Int(Math::<VALUE>::ABS)), Int => TypePrim),
             }), Int => TypeInt)
         } else {
             const_expr!(&ExprKindGenData::<(), !>::Const(&ConstData::Int(VALUE as u128)), Int => TypeInt)
@@ -242,10 +259,10 @@ pub enum ExprKindGenData<'vir, Curr: 'vir, Next: 'vir> {
     Lazy(LazyGen<'vir, Curr, Next>),
 
     // Adt ops
-    AdtDestructor(ExprGenCSnap<'vir, Curr, Next>, AdtDestructorDyn<'vir>),
+    AdtDestructor(ExprGenDyn<'vir, Curr, Next>, AdtDestructor<'vir, Dyn, Dyn>),
     AdtConstructor(FuncAppGen<'vir, Curr, Next>),
     // TODO: make this not a &str
-    AdtDiscriminator(ExprGenCSnap<'vir, Curr, Next>, &'vir str),
+    AdtDiscriminator(ExprGenDyn<'vir, Curr, Next>, &'vir str),
 
     Todo(&'vir str),
 }
@@ -276,7 +293,7 @@ impl<'vir, Curr, Next> ExprKindGenData<'vir, Curr, Next> {
             ExprKindGenData::AdtDestructor(_, destr) => destr.ty,
             ExprKindGenData::AdtConstructor(a) => a.result_ty,
             ExprKindGenData::AdtDiscriminator(_, _) => crate::TYPE_BOOL.as_dyn(),
-            ExprKindGenData::Todo(msg) => panic!("{msg}"),
+            ExprKindGenData::Todo(_msg) => crate::TYPE_ERR.as_dyn(), // panic!("{msg}"),
         }
     }
 }
@@ -300,12 +317,11 @@ impl<'vir, Curr, Next, T: CompType> ExprGenData<'vir, Curr, Next, T> {
 }
 
 impl<'vir, T: CompType> ExprGenData<'vir, (), !, T> {
-    pub fn gen<Curr, Next>(&'vir self) -> ExprGen<'vir, Curr, Next, T> {
+    pub fn lazy<Curr, Next>(&'vir self) -> ExprGen<'vir, Curr, Next, T> {
         unsafe {
-            std::mem::transmute::<
-                &ExprGenData<'vir, (), !, T>,
-                &ExprGenData<'vir, Curr, Next, T>,
-            >(self)
+            std::mem::transmute::<&ExprGenData<'vir, (), !, T>, &ExprGenData<'vir, Curr, Next, T>>(
+                self,
+            )
         }
     }
 }

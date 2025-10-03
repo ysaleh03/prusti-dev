@@ -1,11 +1,6 @@
 use crate::{
-    callable::*,
-    data::*,
-    debug_info::DebugInfo,
-    gendata::*,
-    genrefs::*,
-    refs::*,
-    typecheck_error, CastType, CompType, HasType, ViperIdent, VirCtxt,
+    callable::*, data::*, debug_info::DebugInfo, gendata::*, genrefs::*, refs::*, typecheck_error,
+    CastType, CompType, HasType, ViperIdent, VirCtxt,
 };
 use cfg_if::cfg_if;
 use prusti_rustc_interface::middle::ty;
@@ -182,18 +177,6 @@ cfg_if! {
 }
 
 impl<'tcx> VirCtxt<'tcx> {
-    pub fn mk_local<'vir, T: CompType>(
-        &'vir self,
-        name: &'vir str,
-        ty: Type<'vir, T>,
-    ) -> Local<'vir, T> {
-        self.alloc(LocalData {
-            name,
-            ty,
-            debug_info: DebugInfo::new(self),
-        })
-    }
-
     pub fn mk_local_decl<'vir, T: CompType>(
         &'vir self,
         name: &'vir str,
@@ -202,31 +185,21 @@ impl<'tcx> VirCtxt<'tcx> {
         self.alloc(LocalDeclData { name, ty })
     }
 
-    pub fn mk_local_decl_local<'vir, T: CompType>(
-        &'vir self,
-        local: Local<'vir, T>,
-    ) -> LocalDecl<'vir, T> {
-        self.alloc(LocalDeclData {
-            name: local.name,
-            ty: local.ty,
+    fn mk_local<'vir, T: CompType>(&'vir self, decl: LocalDecl<'vir, T>) -> Local<'vir, T> {
+        self.alloc(LocalData {
+            name: decl.name,
+            ty: decl.ty,
+            debug_info: DebugInfo::new(self),
         })
-    }
-
-    pub fn mk_local_ex_local<'vir, Curr, Next, T: CompType>(
-        &'vir self,
-        local: Local<'vir, T>,
-    ) -> ExprGen<'vir, Curr, Next, T> {
-        self.alloc(ExprGenData::new(
-            self.alloc(ExprKindGenData::Local(local.as_dyn())),
-        ))
     }
 
     pub fn mk_local_ex<'vir, Curr, Next, T: CompType>(
         &'vir self,
-        name: &'vir str,
-        ty: Type<'vir, T>,
+        decl: LocalDecl<'vir, T>,
     ) -> ExprGen<'vir, Curr, Next, T> {
-        self.mk_local_ex_local(self.mk_local(name, ty))
+        self.alloc(ExprGenData::new(
+            self.alloc(ExprKindGenData::Local(self.mk_local(decl.as_dyn()))),
+        ))
     }
 
     pub(crate) fn mk_func_app<'vir, Curr, Next, R: CompType>(
@@ -369,13 +342,21 @@ impl<'tcx> VirCtxt<'tcx> {
 
     pub fn mk_let_expr<'vir, Curr, Next, V: CompType, T: CompType>(
         &'vir self,
-        name: &'vir str,
+        decl: LocalDecl<'vir, V>,
         val: ExprGen<'vir, Curr, Next, V>,
         expr: ExprGen<'vir, Curr, Next, T>,
     ) -> ExprGen<'vir, Curr, Next, T> {
+        if decl.ty != val.ty() {
+            typecheck_error!(
+                "Type mismatch in let-binding for {}. Expected: {:?}, Actual: {:?}",
+                decl.name,
+                decl.ty,
+                val.ty()
+            );
+        }
         let let_expr: ExprGen<'vir, Curr, Next, T> = self.alloc(ExprGenData::new(self.alloc(
             ExprKindGenData::Let(self.alloc(LetGenData {
-                name,
+                name: decl.name,
                 val: val.as_dyn(),
                 expr: expr.as_dyn(),
             })),
@@ -458,11 +439,11 @@ impl<'tcx> VirCtxt<'tcx> {
         ))
     }
 
-    pub(crate) fn mk_adt_destructor_expr<'vir, Curr, Next, T: CompType>(
+    pub(crate) fn mk_adt_destructor_expr<'vir, Curr, Next, T: CompType, R: CompType>(
         &'vir self,
-        recv: ExprGenCSnap<'vir, Curr, Next>,
-        destr: AdtDestructor<'vir, T>,
-    ) -> ExprGen<'vir, Curr, Next, T> {
+        recv: ExprGen<'vir, Curr, Next, T>,
+        destr: AdtDestructor<'vir, T, R>,
+    ) -> ExprGen<'vir, Curr, Next, R> {
         if recv.ty() != destr.input {
             typecheck_error!(
                 "Unexpected type for adt field {}. Expected: {:?}, Actual: {:?}",
@@ -471,18 +452,18 @@ impl<'tcx> VirCtxt<'tcx> {
                 recv.ty()
             );
         }
-        self.alloc(ExprGenData::new(
-            self.alloc(ExprKindGenData::AdtDestructor(recv, destr.as_dyn())),
-        ))
+        self.alloc(ExprGenData::new(self.alloc(
+            ExprKindGenData::AdtDestructor(recv.as_dyn(), destr.as_dyn()),
+        )))
     }
 
-    pub fn mk_adt_discriminator_expr<'vir, Curr, Next>(
+    pub fn mk_adt_discriminator_expr<'vir, Curr, Next, T: CompType>(
         &'vir self,
-        recv: ExprGenCSnap<'vir, Curr, Next>,
+        recv: ExprGen<'vir, Curr, Next, T>,
         discr: &'vir str,
     ) -> ExprGenBool<'vir, Curr, Next> {
         self.alloc(ExprGenData::new(
-            self.alloc(ExprKindGenData::AdtDiscriminator(recv, discr)),
+            self.alloc(ExprKindGenData::AdtDiscriminator(recv.as_dyn(), discr)),
         ))
     }
 
@@ -551,12 +532,12 @@ impl<'tcx> VirCtxt<'tcx> {
         self.alloc(FieldData { name, ty })
     }
 
-    pub fn mk_adt_destructor<'vir, T: CompType>(
+    pub fn mk_adt_destructor<'vir, T: CompType, R: CompType>(
         &'vir self,
         name: &'vir str,
-        input: TypeCSnap<'vir>,
-        ty: Type<'vir, T>,
-    ) -> AdtDestructor<'vir, T> {
+        input: Type<'vir, T>,
+        ty: Type<'vir, R>,
+    ) -> AdtDestructor<'vir, T, R> {
         self.alloc(AdtDestructorData { name, input, ty })
     }
 
@@ -567,6 +548,25 @@ impl<'tcx> VirCtxt<'tcx> {
     ) -> DomainAxiomGen<'vir, Curr, Next> {
         self.alloc(DomainAxiomGenData {
             name: name.to_str(),
+            expr,
+        })
+    }
+
+    pub fn mk_domain_axiom_inverse<'vir, T: CompType, U: CompType>(
+        &'vir self,
+        a: FunctionIdn<'vir, T, U>,
+        b: FunctionIdn<'vir, U, T>,
+    ) -> DomainAxiomGen<'vir, (), !> {
+        let val = self.mk_local_decl("val", b.arity().ty());
+        let val_ex = self.mk_local_ex(val);
+        let inner = b(val_ex);
+        let expr = self.mk_forall_expr(
+            self.alloc_slice(&[val]),
+            self.alloc_slice(&[self.mk_trigger(self.alloc_slice(&[inner]))]),
+            self.mk_eq_expr(a(inner), val_ex),
+        );
+        self.alloc(DomainAxiomGenData {
+            name: self.alloc_str(&format!("ax_inverse_{}_{}", a.name(), b.name(),)),
             expr,
         })
     }
@@ -929,7 +929,7 @@ impl<'tcx> VirCtxt<'tcx> {
                         .downcast_ty()
                 })
             })
-            .unwrap_or_else(|| self.mk_bool::<true>().gen())
+            .unwrap_or_else(|| self.mk_bool::<true>().lazy())
     }
 
     pub fn mk_disj<'vir>(&'vir self, elems: &[ExprBool<'vir>]) -> ExprBool<'vir> {

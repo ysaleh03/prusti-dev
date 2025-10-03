@@ -1,6 +1,8 @@
+#![feature(rustc_private)]
 #![feature(associated_type_defaults)]
 
 use hashlink::LinkedHashMap;
+use prusti_rustc_interface::span::Span;
 use std::cell::RefCell;
 
 mod cache;
@@ -10,6 +12,76 @@ mod result;
 pub use cache::*;
 pub use dependencies::*;
 pub use result::*;
+
+#[derive(Debug, Default)]
+pub struct Program<'vir> {
+    fields: Vec<vir::FieldDyn<'vir>>,
+    adts: Vec<vir::Adt<'vir>>,
+    domains: Vec<vir::Domain<'vir>>,
+    predicates: Vec<vir::Predicate<'vir>>,
+    functions: Vec<vir::Function<'vir>>,
+    methods: Vec<vir::Method<'vir>>,
+
+    code: String,
+}
+
+impl<'vir> Program<'vir> {
+    pub fn header(&mut self, title: &str) {
+        self.code.push_str("// -----------------------------\n");
+        self.code.push_str(&format!("// {title}\n"));
+        self.code.push_str("// -----------------------------\n");
+    }
+
+    pub fn add_field(&mut self, field: vir::FieldDyn<'vir>) {
+        self.fields.push(field);
+        self.code.push_str(&format!("{field:?}\n"));
+    }
+
+    pub fn add_adt(&mut self, adt: vir::Adt<'vir>) {
+        self.adts.push(adt);
+        self.code.push_str(&format!("{adt:?}\n"));
+    }
+
+    pub fn add_domain(&mut self, domain: vir::Domain<'vir>) {
+        self.domains.push(domain);
+        self.code.push_str(&format!("{domain:?}\n"));
+    }
+
+    pub fn add_predicate(&mut self, predicate: vir::Predicate<'vir>) {
+        self.predicates.push(predicate);
+        self.code.push_str(&format!("{predicate:?}\n"));
+    }
+
+    pub fn add_function(&mut self, function: vir::Function<'vir>) {
+        self.functions.push(function);
+        self.code.push_str(&format!("{function:?}\n"));
+    }
+
+    pub fn add_method(&mut self, method: vir::Method<'vir>) {
+        self.methods.push(method);
+        self.code.push_str(&format!("{method:?}\n"));
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn mk_program(self) -> vir::Program<'vir> {
+        vir::with_vcx(|vcx| {
+            vcx.mk_program(
+                vcx.alloc_slice(&self.fields),
+                vcx.alloc_slice(&self.adts),
+                vcx.alloc_slice(&self.domains),
+                vcx.alloc_slice(&self.predicates),
+                vcx.alloc_slice(&self.functions),
+                vcx.alloc_slice(&self.methods),
+            )
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NeverError {}
 
 pub trait OutputRefAny {}
 impl OutputRefAny for () {}
@@ -38,6 +110,7 @@ pub trait TaskEncoder {
     /// dependencies (such as methods), this output should only be emitted in
     /// one Viper program.
     type OutputFullLocal<'vir>: Clone
+        = ()
     where
         Self: 'vir;
 
@@ -49,8 +122,19 @@ pub trait TaskEncoder {
     where
         Self: 'vir;
 
-    type EnqueueingError: Clone + std::fmt::Debug = ();
-    type EncodingError: Clone + std::fmt::Debug;
+    type EnqueueingError: Clone + std::fmt::Debug = NeverError;
+    type EncodingError: Clone + std::fmt::Debug = NeverError;
+
+    /// User-presentable name of this encoder.
+    const ENCODER_NAME: &'static str = "<untitled encoder>";
+
+    fn describe_task<'vir>(task: Self::TaskDescription<'vir>) -> String {
+        format!("{task:?}")
+    }
+
+    fn describe_error(error: Self::EncodingError) -> String {
+        format!("{error:?}")
+    }
 
     /// Enters the given function with a reference to the cache for this
     /// encoder.
@@ -112,7 +196,11 @@ pub trait TaskEncoder {
         // same task was (recursively) requested from the same encoder, before
         // its first invocation reached a call to `emit_output_ref`.
         // TODO: we should still make sure that *some* progress is done, because an actual cyclic dependency could cause a stack overflow?
-        Self::encode(task, false)?;
+        let encode_res = Self::encode(task, false);
+        match encode_res {
+            Ok(_) | Err(TaskEncoderError::DependencyError(..)) => (), // pass, check for output ref
+            Err(err) => return Err(err),
+        }
 
         let task_key_clone = task_key.clone();
         if let Some(output_ref) =
@@ -245,7 +333,28 @@ pub trait TaskEncoder {
                     }
                 })
             }
-            Err(EncodeFullError::DependencyError) => todo!(),
+            Err(EncodeFullError::DependencyError(stack)) => {
+                let owned_stack =
+                    std::iter::once((Self::ENCODER_NAME, Self::describe_task(task), Vec::new()))
+                        .chain(
+                            stack
+                                .into_iter()
+                                .map(|(encoder, task, spans)| (encoder, task, spans.clone())),
+                        )
+                        .collect::<Vec<_>>();
+                Self::with_cache(|cache| {
+                    cache.borrow_mut().insert(
+                        task_key,
+                        TaskEncoderCacheState::ErrorEncode {
+                            output_ref: output_ref.clone(),
+                            deps,
+                            error: TaskEncoderError::DependencyError(owned_stack.clone()),
+                            output_dep: None,
+                        },
+                    )
+                });
+                Err(TaskEncoderError::DependencyError(owned_stack))
+            }
             Err(EncodeFullError::EncodingError(err, maybe_output_dep)) => {
                 Self::with_cache(|cache| {
                     cache.borrow_mut().insert(
@@ -375,23 +484,47 @@ pub trait TaskEncoder {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self>;
 
-    fn all_outputs<'vir>() -> Vec<Self::OutputFullLocal<'vir>>
+    #[track_caller]
+    fn all_outputs_local_no_errors<'vir>() -> Vec<Self::OutputFullLocal<'vir>>
+    where
+        Self: 'vir,
+    {
+        let (outputs, errored) = Self::all_outputs_local();
+        assert!(errored.is_empty());
+        outputs
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn all_outputs_local<'vir>() -> (
+        Vec<Self::OutputFullLocal<'vir>>,
+        Vec<(
+            Self::TaskKey<'vir>,
+            Self::OutputRef<'vir>,
+            TaskEncoderError<Self>,
+        )>,
+    )
     where
         Self: 'vir,
     {
         Self::with_cache(|cache| {
-            cache
-                .borrow()
-                .iter()
-                .flat_map(|(_, cache_state)| {
-                    if let TaskEncoderCacheState::Encoded { output_local, .. } = cache_state {
-                        Some(output_local)
-                    } else {
-                        None
+            let mut outputs = Vec::new();
+            let mut errored = Vec::new();
+            for (key, cache_state) in cache.borrow().iter() {
+                match cache_state {
+                    TaskEncoderCacheState::Encoded { output_local, .. } => {
+                        outputs.push(output_local.clone());
                     }
-                })
-                .cloned()
-                .collect()
+                    TaskEncoderCacheState::ErrorEncode {
+                        output_ref, error, ..
+                    } => {
+                        errored.push((key.clone(), output_ref.clone(), error.clone()));
+                    }
+                    _ => panic!("task encoder not completed: {key:?}"),
+                }
+            }
+            (outputs, errored)
         })
     }
+
+    fn emit_outputs<'vir>(_program: &mut Program<'vir>) {}
 }
