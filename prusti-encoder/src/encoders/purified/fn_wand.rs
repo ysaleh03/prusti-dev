@@ -11,6 +11,7 @@ use prusti_rustc_interface::{
     span::{def_id::DefId, Span},
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
+use vir::{ManySnap, MethodIdn, ViperIdent};
 
 /// Encodes the magic wands given a function signature.
 pub struct PurifiedWandEnc;
@@ -97,7 +98,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         })
     }
 
-    pub fn apply_wands<E: TaskEncoder>(
+    pub fn apply_proofs<E: TaskEncoder>(
         &self,
         arguments: &[vir::ExprSnap<'vir>],
         label_pre: &'vir str,
@@ -105,76 +106,65 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
     ) {
         let vcx = visitor.vcx;
-        let snap_lhs = |l: mir::Local| {
-            if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_post)
-            } else {
-                vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre)
-            }
-        };
-        let snap_rhs =
-            |l: mir::Local| vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre);
-        for (lhs, rhs, pledge) in self.viper_wands() {
-            if lhs.is_empty() {
-                continue;
-            }
-            let wand = self
-                .mk_wand(&lhs, &rhs, &pledge, snap_lhs, snap_rhs, vcx, visitor.deps)
-                .unwrap();
-            visitor.stmt(visitor.vcx.mk_apply_stmt(wand));
-        }
-    }
+        let def_id = visitor.def_id;
+        let fn_sig = vcx
+            .tcx()
+            .fn_sig(def_id)
+            .instantiate_identity()
+            .skip_binder();
 
-    pub fn mk_proof_methods<E: TaskEncoder>(
-        &self,
-        final_borrow_state: &BorrowsState<'vir>,
-        visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
-    ) -> Vec<vir::Method<'vir>> {
-        let vcx = visitor.vcx;
-        let label = visitor.new_label("package_post");
-        let snap_lhs = |l| {
-            if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].local_ex, label)
-            } else {
-                vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex)
-            }
-        };
-        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex);
+        // let snap_lhs = |l: mir::Local| {
+        //     if l == mir::RETURN_PLACE {
+        //         vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_post)
+        //     } else {
+        //         vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre)
+        //     }
+        // };
+        // let snap_rhs =
+        //     |l: mir::Local| vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre);
+
+        let arg_count = visitor.local_defs.arg_count + 1;
+        let mut args = Vec::with_capacity(arg_count);
+        for arg_idx in 1..arg_count {
+            let local_ty = visitor.local_defs.locals[arg_idx.into()].local.ty;
+            args.push(local_ty);
+        }
+        let args = vcx.alloc_slice(&args);
+
+        let method_name =
+            vir::vir_format_identifier!(vcx, "app_{}", vcx.tcx().def_path_str(def_id));
+        let method_ref: MethodIdn<'_, ManySnap> = MethodIdn::new(method_name, args);
+
+        // let apply_method = vcx.mk_method(apply_name, &[], &[], &[], &[], &[]);
 
         for (lhs, rhs, pledge) in self.viper_wands() {
             if lhs.is_empty() {
                 continue;
             }
+            // let wand = self
+            //     .mk_wand(&lhs, &rhs, &pledge, snap_lhs, snap_rhs, vcx, visitor.deps)
+            //     .unwrap();
+            let pledge_assert = pledge
+                .iter()
+                .map(|(_, assertion, _)| assertion)
+                .copied()
+                .collect::<Vec<_>>();
+            visitor.stmt(vcx.mk_exhale_stmt(visitor.vcx.mk_conj(&pledge_assert)));
         }
-
-        todo!()
     }
 
-    pub fn package_wands<E: TaskEncoder>(
+    pub fn prove_wands<E: TaskEncoder>(
         &self,
         final_borrow_state: &BorrowsState<'vir>,
         visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
     ) -> Vec<vir::Stmt<'vir>> {
-        let mut wand_packages = Vec::new();
-        let vcx = visitor.vcx;
-        let label = visitor.new_label("package_post");
-        let snap_lhs = |l| {
-            if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(visitor.local_defs.locals[l].local_ex, label)
-            } else {
-                vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex)
-            }
-        };
-        let snap_rhs = |l| vcx.mk_old_expr(visitor.local_defs.locals[l].local_ex);
-
+        let mut wand_proofs = Vec::new();
+        let label = visitor.new_label("wand_proof");
         for (lhs, rhs, pledge) in self.viper_wands() {
             if lhs.is_empty() {
                 continue;
             }
-            let wand = self
-                .mk_wand(&lhs, &rhs, &pledge, snap_lhs, snap_rhs, vcx, visitor.deps)
-                .unwrap();
-            let mut package_script = Vec::new();
+            let mut proof_script = Vec::new();
             for (rhs, _) in rhs
                 .iter()
                 .filter(|g| self.generic_to_param.contains_key(g))
@@ -192,7 +182,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
                 let unblock = visitor.block(|visitor| {
                     visitor.pcs_unblock_actions(final_borrow_state, &actions, Some(label));
                 });
-                package_script.extend(unblock);
+                proof_script.extend(unblock);
             }
 
             for &(_, spec, span) in pledge.iter() {
@@ -203,16 +193,12 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
                             span.into(),
                         )])
                     });
-                    package_script.push(vcx.mk_exhale_stmt(spec));
+                    // proof_script.push(vcx.mk_exhale_stmt(spec));
                 });
             }
-            wand_packages.push(
-                visitor
-                    .vcx
-                    .mk_package_stmt(wand, visitor.vcx.alloc_slice(&package_script)),
-            );
+            wand_proofs.extend(proof_script);
         }
-        wand_packages
+        wand_proofs
     }
 
     fn mk_wand<'a, E: TaskEncoder>(

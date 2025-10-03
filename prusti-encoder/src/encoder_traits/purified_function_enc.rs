@@ -122,6 +122,8 @@ where
             let spec = deps.require_local::<PurifiedMirSpecEnc>((def_id, substs, None, false))?;
             let wands = deps.require_local::<PurifiedWandEnc>(PurifiedWandEncTask { def_id })?;
 
+            // println!("purified_wand_enc: {wands:#?}");
+
             // Add direct resources for inputs and outputs to the pre- and
             // postconditions, respectively. "Direct" here refers to owned
             // Viper resources that must be passed in/out given the signature,
@@ -163,10 +165,11 @@ where
                 .copied()
                 .collect::<FxHashMap<mir::Local, vir::ExprSnap<'vir>>>();
 
-            // ..
-            // pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
-            // posts.extend(wands.indirect_posts(vcx, &local_defs, deps));
-            posts.extend(wands.wand_posts(vcx, &local_defs, deps));
+            let exhales = wands
+                .pledges
+                .iter()
+                .map(|(_, pledge, _)| vcx.mk_exhale_stmt(pledge))
+                .collect::<Vec<_>>();
 
             // Do not encode the method body if it is external, trusted, just
             // a call stub, or a trait function without a default implementation
@@ -224,8 +227,6 @@ where
                     }));
                 }
 
-                // returns.extend(remotes.as_dyn().iter());
-
                 // This will be overwritten later.
                 encoded_blocks.push(vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
@@ -250,7 +251,7 @@ where
 
                     declared_remotes: Default::default(),
                     remote_place_to_local_data: Default::default(),
-                    return_to_remote: return_to_remote,
+                    return_to_remote,
 
                     declared_vars: Default::default(),
                     place_to_local_data: Default::default(),
@@ -290,6 +291,8 @@ where
                     let lhs = returns[local.as_usize()];
                     vcx.mk_pure_assign_stmt(vcx.mk_local_ex(lhs.name, lhs.ty), rhs.as_dyn())
                 }));
+                end_stmts.extend(exhales.iter());
+
                 visitor.encoded_blocks[0] = vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
                     &[],

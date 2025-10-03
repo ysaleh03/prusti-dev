@@ -377,7 +377,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                                 }))
                                 .collect::<Vec<_>>();
                         let (label_pre, label_post) = self.call_labels[&call.location().block];
-                        wands.apply_wands(&wand_args, label_pre, label_post, self);
+                        wands.apply_proofs(&wand_args, label_pre, label_post, self);
                     }
                     _ => unreachable!(),
                 }
@@ -1746,10 +1746,10 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 let borrows = current_fpcs.statements.last().unwrap().states
                     [EvalStmtPhase::PostMain]
                     .borrow_pcg();
-                let wand_packages = wands.package_wands(borrows, self);
+                let wand_proofs = wands.prove_wands(borrows, self);
                 self.wands = wands;
                 self.current_fpcs = Some(current_fpcs);
-                self.stmts(wand_packages);
+                self.stmts(wand_proofs);
 
                 self.vcx
                     .mk_goto_stmt(self.vcx.alloc(vir::CfgBlockLabelData::End))

@@ -398,9 +398,17 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                     })
                 })
                 .collect::<Vec<vir::ExprBool<'_>>>();
-            let pledge_args = vcx.alloc_slice(
+            let pre_pledge_args = vcx.alloc_slice(
                 &[
                     pre_args,
+                    // TODO: this looks a bit hardcoded...
+                    &[vcx.mk_local_ex("_0s", local_defs.locals[mir::RETURN_PLACE].ty.snapshot)],
+                ]
+                .concat(),
+            );
+            let post_pledge_args = vcx.alloc_slice(
+                &[
+                    post_args,
                     // TODO: this looks a bit hardcoded...
                     &[vcx.mk_local_ex("_0s", local_defs.locals[mir::RETURN_PLACE].ty.snapshot)],
                 ]
@@ -442,9 +450,22 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                         .unwrap()
                         .expr
                         .downcast_ty();
-                    let lhs_expr = lhs_expr
-                        .map(|lhs_expr| lhs_expr.reify(vcx, (lhs_def_id.unwrap(), pledge_args)));
-                    let rhs_expr = rhs_expr.reify(vcx, (*rhs_def_id, pledge_args));
+                    let lhs_expr = lhs_expr.map(|lhs_expr| {
+                        lhs_expr.purified_reify(
+                            vcx,
+                            (
+                                (lhs_def_id.unwrap(), pre_pledge_args),
+                                (lhs_def_id.unwrap(), post_pledge_args),
+                            ),
+                        )
+                    });
+                    let rhs_expr = rhs_expr.purified_reify(
+                        vcx,
+                        (
+                            (*rhs_def_id, pre_pledge_args),
+                            (*rhs_def_id, post_pledge_args),
+                        ),
+                    );
                     let rhs_span = vcx.tcx().def_span(rhs_def_id);
                     (
                         lhs_expr.map(|lhs_expr| {
