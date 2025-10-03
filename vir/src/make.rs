@@ -1,7 +1,7 @@
 use crate::{
     callable::*,
     data::*,
-    debug_info::{DebugInfo, DEBUGINFO_NONE},
+    debug_info::DebugInfo,
     gendata::*,
     genrefs::*,
     refs::*,
@@ -11,17 +11,6 @@ use cfg_if::cfg_if;
 use prusti_rustc_interface::middle::ty;
 use std::fmt::Debug;
 
-macro_rules! const_expr {
-    ($expr_kind:expr, $ty:ident => $ety:ident) => {{
-        const TY: $crate::$ety = unsafe { &$crate::TypeData::new_unchecked($crate::TypeKind::$ty) };
-        &ExprGenData {
-            kind: $expr_kind,
-            debug_info: DEBUGINFO_NONE,
-            span: None,
-            ty: TY,
-        }
-    }};
-}
 cfg_if! {
     if #[cfg(debug_assertions)] {
 
@@ -128,7 +117,7 @@ cfg_if! {
                     check_expr_bindings(m, *expr);
                     m.remove(name);
                 },
-                ExprKindGenData::FuncApp(FuncAppGenData { args, .. }) => {
+                ExprKindGenData::FuncApp(FuncAppGenData { args, .. }) | ExprKindGenData::AdtConstructor(FuncAppGenData { args, .. }) => {
                     for arg in args.iter() {
                         check_expr_bindings(m, *arg);
                     }
@@ -147,6 +136,9 @@ cfg_if! {
                     }
                 },
                 ExprKindGenData::Field(e, _) => {
+                    check_expr_bindings(m, e.as_dyn());
+                },
+                ExprKindGenData::AdtDestructor(e, _) | ExprKindGenData::AdtDiscriminator(e, _) => {
                     check_expr_bindings(m, e.as_dyn());
                 },
                 ExprKindGenData::Unfolding(UnfoldingGenData { target, expr }) => {
@@ -345,7 +337,7 @@ impl<'tcx> VirCtxt<'tcx> {
     ) -> ExprGen<'vir, Curr, Next, T> {
         let v = self.mk_const_expr(ConstData::Int(exec as u128));
         let args = [expr.as_dyn(), v.as_dyn()];
-        self.mk_func_app("rel", self.alloc_array(&args), expr.ty)
+        self.mk_func_app("rel", self.alloc_array(&args), expr.ty())
     }
 
     pub fn mk_forall_expr<'vir, Curr, Next, T: CompType>(
@@ -466,6 +458,34 @@ impl<'tcx> VirCtxt<'tcx> {
         ))
     }
 
+    pub(crate) fn mk_adt_destructor_expr<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        recv: ExprGenCSnap<'vir, Curr, Next>,
+        destr: AdtDestructor<'vir, T>,
+    ) -> ExprGen<'vir, Curr, Next, T> {
+        if recv.ty() != destr.input {
+            typecheck_error!(
+                "Unexpected type for adt field {}. Expected: {:?}, Actual: {:?}",
+                destr.name,
+                destr.input,
+                recv.ty()
+            );
+        }
+        self.alloc(ExprGenData::new(
+            self.alloc(ExprKindGenData::AdtDestructor(recv, destr.as_dyn())),
+        ))
+    }
+
+    pub fn mk_adt_discriminator_expr<'vir, Curr, Next>(
+        &'vir self,
+        recv: ExprGenCSnap<'vir, Curr, Next>,
+        discr: &'vir str,
+    ) -> ExprGenBool<'vir, Curr, Next> {
+        self.alloc(ExprGenData::new(
+            self.alloc(ExprKindGenData::AdtDiscriminator(recv, discr)),
+        ))
+    }
+
     pub fn mk_unfolding_expr<'vir, Curr, Next, T: CompType>(
         &'vir self,
         target: PredicateAppGen<'vir, Curr, Next>,
@@ -514,40 +534,6 @@ impl<'tcx> VirCtxt<'tcx> {
         ))
     }
 
-    pub const fn mk_bool<'vir, const VALUE: bool>(&'vir self) -> ExprBool<'vir> {
-        self.mk_bool_gen::<!, !, VALUE>()
-    }
-
-    // TODO: can this simply replace mk_bool?
-    pub const fn mk_bool_gen<'vir, Curr, Next, const VALUE: bool>(
-        &'vir self,
-    ) -> ExprGenBool<'vir, Curr, Next> {
-        const_expr!(&ExprKindGenData::Const(&ConstData::Bool(VALUE)), Bool => TypeBool)
-    }
-
-    pub const fn mk_int<'vir, const VALUE: i128>(&'vir self) -> ExprInt<'vir> {
-        if VALUE < 0 {
-            const_expr!(&ExprKindGenData::UnOp(&UnOpData {
-                kind: UnOpKind::Neg,
-                expr: const_expr!(&ExprKindGenData::Const(&ConstData::Int((-VALUE) as u128)), Int => TypePrim),
-            }), Int => TypeInt)
-        } else {
-            const_expr!(&ExprKindGenData::<!, !>::Const(&ConstData::Int(VALUE as u128)), Int => TypeInt)
-        }
-    }
-
-    pub const fn mk_uint<'vir, const VALUE: u128>(&'vir self) -> ExprInt<'vir> {
-        const_expr!(&ExprKindGenData::<!, !>::Const(&ConstData::Int(VALUE)), Int => TypeInt)
-    }
-
-    pub const fn mk_wildcard<'vir, Curr, Next>(&'vir self) -> ExprGenPerm<'vir, Curr, Next> {
-        const_expr!(&ExprKindGenData::<Curr, Next>::Const(&ConstData::Wildcard), Perm => TypePerm)
-    }
-
-    pub const fn mk_null<'vir, Curr, Next>(&'vir self) -> ExprGenRef<'vir, Curr, Next> {
-        const_expr!(&ExprKindGenData::<Curr, Next>::Const(&ConstData::Null), Ref => TypeRef)
-    }
-
     pub fn mk_result<'vir, Curr, Next, T: CompType>(
         &'vir self,
         ty: Type<'vir, T>,
@@ -563,6 +549,15 @@ impl<'tcx> VirCtxt<'tcx> {
         ty: Type<'vir, T>,
     ) -> Field<'vir, T> {
         self.alloc(FieldData { name, ty })
+    }
+
+    pub fn mk_adt_destructor<'vir, T: CompType>(
+        &'vir self,
+        name: &'vir str,
+        input: TypeCSnap<'vir>,
+        ty: Type<'vir, T>,
+    ) -> AdtDestructor<'vir, T> {
+        self.alloc(AdtDestructorData { name, input, ty })
     }
 
     pub fn mk_domain_axiom<'vir, Curr, Next>(
@@ -651,6 +646,32 @@ impl<'tcx> VirCtxt<'tcx> {
         expr: Option<ExprGenBool<'vir, Curr, Next>>,
     ) -> PredicateGen<'vir, Curr, Next> {
         self.alloc(PredicateGenData { name, args, expr })
+    }
+
+    pub fn mk_adt<'vir, Curr, Next>(
+        &'vir self,
+        name: ViperIdent<'vir>,
+        typarams: &'vir [DomainParam<'vir>],
+        constructors: &'vir [AdtConstructorGen<'vir, Curr, Next>],
+    ) -> AdtGen<'vir, Curr, Next> {
+        self.alloc(AdtGenData {
+            name: name.to_str(),
+            typarams,
+            constructors,
+        })
+    }
+
+    pub fn mk_adt_constructor<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        name: &'vir str,
+        args: &'vir [LocalDecl<'vir, T>],
+        // TODO: axiom support
+    ) -> AdtConstructorGen<'vir, Curr, Next> {
+        self.alloc(AdtConstructorGenData {
+            name,
+            args: args.as_dyn(),
+            axiom: None,
+        })
     }
 
     pub fn mk_domain<'vir, Curr, Next>(
@@ -880,6 +901,7 @@ impl<'tcx> VirCtxt<'tcx> {
     pub fn mk_program<'vir, Curr, Next>(
         &'vir self,
         fields: &'vir [FieldDyn<'vir>],
+        adts: &'vir [AdtGen<'vir, Curr, Next>],
         domains: &'vir [DomainGen<'vir, Curr, Next>],
         predicates: &'vir [PredicateGen<'vir, Curr, Next>],
         functions: &'vir [FunctionGen<'vir, Curr, Next>],
@@ -887,6 +909,7 @@ impl<'tcx> VirCtxt<'tcx> {
     ) -> ProgramGen<'vir, Curr, Next> {
         self.alloc(ProgramGenData {
             fields,
+            adts,
             domains,
             predicates,
             functions,
@@ -906,7 +929,7 @@ impl<'tcx> VirCtxt<'tcx> {
                         .downcast_ty()
                 })
             })
-            .unwrap_or_else(|| self.mk_bool_gen::<Curr, Next, true>())
+            .unwrap_or_else(|| self.mk_bool::<true>().gen())
     }
 
     pub fn mk_disj<'vir>(&'vir self, elems: &[ExprBool<'vir>]) -> ExprBool<'vir> {

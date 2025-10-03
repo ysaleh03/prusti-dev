@@ -192,6 +192,16 @@ pub struct FieldData<'vir, T: CompType> {
     pub ty: Type<'vir, T>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
+pub struct AdtDestructorData<'vir, T: CompType> {
+    #[serde(with = "crate::serde::serde_str")]
+    pub name: &'vir str, // TODO: identifiers
+    #[serde(with = "crate::serde::serde_ref")]
+    pub input: TypeCSnap<'vir>,
+    #[serde(with = "crate::serde::serde_ref")]
+    pub ty: Type<'vir, T>,
+}
+
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
 #[serde(bound(deserialize = "'de: 'vir"))]
 pub struct DomainFunctionData<'vir> {
@@ -230,77 +240,35 @@ pub enum OldLabel<'vir> {
     Label(#[serde(with = "crate::serde::serde_str")] &'vir str),
 }
 
-// macro_rules! impl_ty_casts {
-//     ($($name:ident),*) => {
-//         $(
-//             impl<'vir, T: CompType> $name<'vir, T> {
-//                 /// The most general type cast. Always use `upcast_ty` or `downcast_ty` if
-//                 /// possible. The only reason to use this if casting e.g. a generic
-//                 /// `ExprGen<T>` type to a `ExprDyn` type.
-//                 fn cast_ty<U: CompType>(&self) -> &$name<'vir, U> {
-//                     U::check(self.ty.ty());
-//                     // SAFETY: all `ExpType` types have the same layout, the above `new`
-//                     // call checks that the contained type is valid for the new type.
-//                     unsafe { std::mem::transmute(self) }
-//                 }
-
-//                 /// Will panic if casting to an incorrect type.
-//                 pub fn downcast_ty<U: CompType>(&self) -> &$name<'vir, U> where T: TransmuteFrom<U> {
-//                     self.cast_ty::<U>()
-//                 }
-
-//                 /// Cannot panic.
-//                 pub fn upcast_ty<U: CompType>(&self) -> &$name<'vir, U> where U: TransmuteFrom<T> {
-//                     // Should never panic
-//                     self.cast_ty::<U>()
-//                 }
-
-//                 /// Cannot panic.
-//                 pub fn as_dyn(&self) -> &$name<'vir, crate::Dyn> {
-//                     self.cast_ty()
-//                 }
-//             }
-
-//             // impl<'vir, T: CompTypeUpcast<'vir, U>, U: CompType> Deref for $name<'vir, T> {
-//             //     type Target = $name<'vir, U>;
-//             //     fn deref(&self) -> &Self::Target {
-//             //         // The inner type check should never fail
-//             //         self.upcast_ty()
-//             //     }
-//             // }
-//         )*
-//     };
-// }
-
-// impl_ty_casts!(LocalData, LocalDeclData, FieldData);
-
-pub type AccFieldData<'vir> = crate::gendata::AccFieldGenData<'vir, !, !>;
-pub type BinOpData<'vir> = crate::gendata::BinOpGenData<'vir, !, !>;
-pub type CfgBlockData<'vir> = crate::gendata::CfgBlockGenData<'vir, !, !>;
-pub type CfgLabelData<'vir> = crate::gendata::CfgLabelGenData<'vir, !, !>;
-pub type DomainAxiomData<'vir> = crate::gendata::DomainAxiomGenData<'vir, !, !>;
-pub type DomainData<'vir> = crate::gendata::DomainGenData<'vir, !, !>;
-pub type ExprData<'vir, T> = crate::gendata::ExprGenData<'vir, !, !, T>;
-pub type ExprKindData<'vir> = crate::gendata::ExprKindGenData<'vir, !, !>;
-pub type ForallData<'vir> = crate::gendata::ForallGenData<'vir, !, !>;
-pub type FuncAppData<'vir> = crate::gendata::FuncAppGenData<'vir, !, !>;
-pub type FunctionData<'vir> = crate::gendata::FunctionGenData<'vir, !, !>;
-pub type GotoIfData<'vir> = crate::gendata::GotoIfGenData<'vir, !, !>;
-pub type LetData<'vir> = crate::gendata::LetGenData<'vir, !, !>;
-pub type MethodData<'vir> = crate::gendata::MethodGenData<'vir, !, !>;
-pub type MethodBodyData<'vir> = crate::gendata::MethodBodyGenData<'vir, !, !>;
-pub type MethodCallData<'vir> = crate::gendata::MethodCallGenData<'vir, !, !>;
-pub type OldData<'vir> = crate::gendata::OldGenData<'vir, !, !>;
-pub type PredicateAppData<'vir> = crate::gendata::PredicateAppGenData<'vir, !, !>;
-pub type PredicateData<'vir> = crate::gendata::PredicateGenData<'vir, !, !>;
-pub type ProgramData<'vir> = crate::gendata::ProgramGenData<'vir, !, !>;
-pub type PureAssignData<'vir> = crate::gendata::PureAssignGenData<'vir, !, !>;
-pub type StmtData<'vir> = crate::gendata::StmtGenData<'vir, !, !>;
-pub type StmtKindData<'vir> = crate::gendata::StmtKindGenData<'vir, !, !>;
-pub type TerminatorStmtData<'vir> = crate::gendata::TerminatorStmtGenData<'vir, !, !>;
-pub type TernaryData<'vir> = crate::gendata::TernaryGenData<'vir, !, !>;
-pub type TriggerData<'vir> = crate::gendata::TriggerGenData<'vir, !, !>;
-pub type UnOpData<'vir> = crate::gendata::UnOpGenData<'vir, !, !>;
-pub type UnfoldingData<'vir> = crate::gendata::UnfoldingGenData<'vir, !, !>;
-pub type WandData<'vir> = crate::gendata::WandGenData<'vir, !, !>;
+pub type AccFieldData<'vir> = crate::gendata::AccFieldGenData<'vir, (), !>;
+pub type AdtData<'vir> = crate::gendata::AdtGenData<'vir, (), !>;
+pub type AdtConstructorData<'vir> = crate::gendata::AdtConstructorGenData<'vir, (), !>;
+pub type BinOpData<'vir> = crate::gendata::BinOpGenData<'vir, (), !>;
+pub type CfgBlockData<'vir> = crate::gendata::CfgBlockGenData<'vir, (), !>;
+pub type CfgLabelData<'vir> = crate::gendata::CfgLabelGenData<'vir, (), !>;
+pub type DomainAxiomData<'vir> = crate::gendata::DomainAxiomGenData<'vir, (), !>;
+pub type DomainData<'vir> = crate::gendata::DomainGenData<'vir, (), !>;
+pub type ExprData<'vir, T> = crate::gendata::ExprGenData<'vir, (), !, T>;
+pub type ExprKindData<'vir> = crate::gendata::ExprKindGenData<'vir, (), !>;
+pub type ForallData<'vir> = crate::gendata::ForallGenData<'vir, (), !>;
+pub type FuncAppData<'vir> = crate::gendata::FuncAppGenData<'vir, (), !>;
+pub type FunctionData<'vir> = crate::gendata::FunctionGenData<'vir, (), !>;
+pub type GotoIfData<'vir> = crate::gendata::GotoIfGenData<'vir, (), !>;
+pub type LetData<'vir> = crate::gendata::LetGenData<'vir, (), !>;
+pub type MethodData<'vir> = crate::gendata::MethodGenData<'vir, (), !>;
+pub type MethodBodyData<'vir> = crate::gendata::MethodBodyGenData<'vir, (), !>;
+pub type MethodCallData<'vir> = crate::gendata::MethodCallGenData<'vir, (), !>;
+pub type OldData<'vir> = crate::gendata::OldGenData<'vir, (), !>;
+pub type PredicateAppData<'vir> = crate::gendata::PredicateAppGenData<'vir, (), !>;
+pub type PredicateData<'vir> = crate::gendata::PredicateGenData<'vir, (), !>;
+pub type ProgramData<'vir> = crate::gendata::ProgramGenData<'vir, (), !>;
+pub type PureAssignData<'vir> = crate::gendata::PureAssignGenData<'vir, (), !>;
+pub type StmtData<'vir> = crate::gendata::StmtGenData<'vir, (), !>;
+pub type StmtKindData<'vir> = crate::gendata::StmtKindGenData<'vir, (), !>;
+pub type TerminatorStmtData<'vir> = crate::gendata::TerminatorStmtGenData<'vir, (), !>;
+pub type TernaryData<'vir> = crate::gendata::TernaryGenData<'vir, (), !>;
+pub type TriggerData<'vir> = crate::gendata::TriggerGenData<'vir, (), !>;
+pub type UnOpData<'vir> = crate::gendata::UnOpGenData<'vir, (), !>;
+pub type UnfoldingData<'vir> = crate::gendata::UnfoldingGenData<'vir, (), !>;
+pub type WandData<'vir> = crate::gendata::WandGenData<'vir, (), !>;
 pub type PurifiedWandData<'vir> = crate::gendata::WandGenData<'vir, !, !>;

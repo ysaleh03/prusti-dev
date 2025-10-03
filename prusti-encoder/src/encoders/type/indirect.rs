@@ -29,11 +29,11 @@ impl IndirectKey {
         match region.kind() {
             RegionKind::ReEarlyParam(e) => Some(IndirectKey::Early(e)),
             RegionKind::ReBound(_, g) => Some(IndirectKey::Late(g.kind)),
+            RegionKind::ReLateParam(r) => Some(IndirectKey::Late(r.bound_region)),
             RegionKind::ReVar(r) => Some(IndirectKey::Var(r)),
-            RegionKind::RePlaceholder(..)
-            | RegionKind::ReError(..)
-            | RegionKind::ReErased
-            | RegionKind::ReLateParam(..) => unreachable!("{region:?}"),
+            RegionKind::RePlaceholder(..) | RegionKind::ReError(..) | RegionKind::ReErased => {
+                unreachable!("{region:?}")
+            }
             RegionKind::ReStatic => None,
         }
     }
@@ -94,12 +94,11 @@ impl TaskEncoder for IndirectPredicatesEnc {
                     //             inner_ty_enc
                     //                 .ref_to_pred(
                     //                     vcx,
-                    //                     (ref_domain.value_access)(self_expr.downcast_ty()),
+                    //                     ref_domain.value_access.gen()(self_expr.downcast_ty()),
                     //                     None,
                     //                 )
                     //                 .kind
-                    //         }),
-                    //         None,
+                    //         })
                     //     ));
                     // }
                     // TODO: is this correct??? do we always project into the inner type, regardless of region?
@@ -117,7 +116,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                     inner_expr
                                         .reify(
                                             vcx,
-                                            (ref_domain.value_access)(self_expr.downcast_ty())
+                                            ref_domain.value_access.gen()(self_expr.downcast_ty())
                                                 .upcast_ty(),
                                         )
                                         .kind
@@ -142,7 +141,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                 vir::TYPE_BOOL,
                                 Box::new(move |vcx, self_expr: vir::ExprGenSnap<_, _>| {
                                     inner_expr
-                                        .reify(vcx, (accessor.read)(self_expr.downcast_ty()))
+                                        .reify(vcx, accessor.gen()(self_expr.downcast_ty()))
                                         .kind
                                 }),
                                 None,
