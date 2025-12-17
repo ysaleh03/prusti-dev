@@ -949,7 +949,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         };
 
         let expr = if should_wrap {
-            let local_as_uzize = place.local.as_usize();
+            let local_as_usize = place.local.as_usize();
             self.vcx.mk_lazy_expr(
                 vir::vir_format!(self.vcx, "wrapped in _{}", local_as_usize),
                 self.get_ty_for_local(place.local),
