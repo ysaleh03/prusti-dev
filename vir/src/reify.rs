@@ -23,12 +23,12 @@ impl<'vir, Curr: Copy, NextA, NextB, T: CompType> Reify<'vir, Curr>
     }
 
     fn purified_reify<'tcx>(&self, vcx: &'vir VirCtxt<'tcx>, lctx: (Curr, Curr)) -> Self::Next {
-        vcx.alloc(ExprGenData {
-            kind: self.kind.purified_reify(vcx, lctx),
-            debug_info: self.debug_info,
-            span: self.span,
-            ty: self.ty,
-        })
+        vcx.alloc(ExprGenData::new_inner(
+            self.kind.purified_reify(vcx, lctx),
+            self.debug_info,
+            self.span,
+            self.ty(),
+        ))
     }
 }
 
@@ -125,6 +125,17 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
                 v.inner.unwrap().purified_reify(vcx, lctx)
             }
             ExprKindGenData::Lazy(v) => (v.func)(vcx, post_lctx),
+
+            ExprKindGenData::AdtConstructor(v) => {
+                vcx.alloc(ExprKindGenData::AdtConstructor(v.purified_reify(vcx, lctx)))
+            }
+            ExprKindGenData::AdtDestructor(v, field) => vcx.alloc(ExprKindGenData::AdtDestructor(
+                v.purified_reify(vcx, lctx),
+                field,
+            )),
+            ExprKindGenData::AdtDiscriminator(v, cons) => vcx.alloc(
+                ExprKindGenData::AdtDiscriminator(v.purified_reify(vcx, lctx), cons),
+            ),
         }
     }
 }

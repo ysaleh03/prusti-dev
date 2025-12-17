@@ -1,74 +1,58 @@
 use pcg::{
     borrow_pcg::region_projection::{
-        MaybeRemoteRegionProjectionBase, RegionProjection, RegionProjectionBaseLike,
+        LifetimeProjection, PcgLifetimeProjectionBase, PcgLifetimeProjectionBaseLike,
     },
-    free_pcs::PcgBasicBlock,
-    pcg::{EvalStmtPhase, PCGNode},
-    r#loop::LoopId,
-    utils::{maybe_old::MaybeOldPlace, maybe_remote::MaybeRemotePlace, Place, SnapshotLocation},
+    r#loop::PlaceUsages,
+    pcg::{EvalStmtPhase, PcgNode},
+    results::PcgBasicBlock,
+    utils::{
+        HasCompilerCtxt, Place, SnapshotLocation, maybe_old::MaybeLabelledPlace,
+        maybe_remote::MaybeRemotePlace,
+    },
 };
 use prusti_rustc_interface::middle::mir;
 
 use task_encoder::TaskEncoder;
-use vir::{CastType, Reify};
+use vir::Reify;
 
 use crate::encoders::{
-    indirect::{IndirectKey, IndirectPredicatesEnc},
-    rust_ty_predicates::{RustTyPredicatesEnc, RustTyPredicatesEncOutputRef},
-    PurifiedEncVisitor,
+    PurifiedEncVisitor, TyUsePurifiedEnc,
+    ty::{RustTyDecomposition, indirect::IndirectPredicatesEnc, use_purified::TyUsePurified},
 };
 
-pub(super) enum PurifiedWandOldOuter<'vir> {
-    LetBind(Vec<(&'vir str, Result<vir::ExprSnap<'vir>, vir::ExprSnap<'vir>>)>),
+pub(super) enum WandOldOuter<'vir> {
+    LetBind(Vec<LetBind<'vir>>),
     Label(Option<&'vir str>),
 }
 
 impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     /// Calculate invariant at loop head
-    pub(crate) fn get_loop_inv(
+    pub(crate) fn get_loop_inv<'a>(
         &mut self,
-        _lh: LoopId,
-        cfpcs: &PcgBasicBlock<'vir>,
+        cfpcs: &PcgBasicBlock<'_, 'vir>,
+        loop_place_usages: &PlaceUsages<'vir>,
+        ctxt: impl HasCompilerCtxt<'a, 'vir>,
     ) -> &'vir [vir::ExprBool<'vir>] {
         let mut inv = Vec::new();
         let start = &cfpcs.statements[0];
         let state = &start.states[EvalStmtPhase::PreOperands];
-        // let borrows = &*start.borrows[EvalStmtPhase::PreOperands];
-        // self.stmt(self.vcx.mk_comment_stmt(
-        //     vir::vir_format!(self.vcx, "_borrows: {:#?}", borrows),
-        // ));
-        for cap_local in state.owned_pcg().locals().iter() {
-            if cap_local.is_unallocated() {
-                continue;
-            }
-            let cap = cap_local.get_allocated();
-            for place in cap.leaves(self.pcg_ctxt()).iter() {
-                if !state.capabilities().is_exclusive(*place) {
-                    continue;
-                }
-                let (place_res, snap, _, _) = self.encode_place_snap(*place);
-                let ty = (*place).ty(self.pcg_ctxt());
-                let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(ty.ty).unwrap();
-                // let pred = ty_out.ref_to_pred(self.vcx, place_res.expr, None);
-                // inv.push(pred);
+        let loop_invariant_place_capabilities =
+            cfpcs.loop_invariant_place_capabilities(loop_place_usages, ctxt);
 
-                let regions = ty.ty.walk().flat_map(IndirectKey::from_generic_arg);
-                for region in regions {
-                    let indirect = self
-                        .deps
-                        .require_ref::<IndirectPredicatesEnc>((ty.ty, region))
-                        .unwrap();
-                    inv.extend(
-                        indirect
-                            .covariant
-                            .into_iter()
-                            .map(|expr| expr.reify(self.vcx, snap)),
-                    );
-                }
+        for (place, capability) in loop_invariant_place_capabilities.iter() {
+            if capability.is_write() {
+                continue; // No permissions are encoded for places with write capabilities currently
             }
+            let (place_res, _snap, _, _) = self.encode_place_snap(*place);
+            let ty = (*place).ty(self.pcg_ctxt());
+            let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
+            let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
+            let pred = ty_out.ref_to_pred(self.vcx, place_res.expr.expect_predicate(), None);
+            inv.push(pred);
         }
-        for (_edge, inputs, outputs) in Self::get_abstraction_edges(state.borrow_pcg().graph()) {
-            let mut let_bind = PurifiedWandOldOuter::LetBind(Vec::new());
+
+        for (inputs, outputs) in self.get_abstraction_edges(state.borrow_pcg().graph()) {
+            let mut let_bind = WandOldOuter::LetBind(Vec::new());
             let mut wand_rhs = Vec::new();
             for i in inputs {
                 self.encode_pcg_node(&i, &mut wand_rhs, &mut let_bind);
@@ -76,10 +60,10 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             let mut wand_lhs = Vec::new();
             for i in outputs {
                 let i = match *i {
-                    PCGNode::RegionProjection(region_projection) => region_projection,
-                    PCGNode::Place(_) => unreachable!(),
+                    PcgNode::LifetimeProjection(region_projection) => region_projection,
+                    PcgNode::Place(_) => unreachable!(),
                 };
-                let exprs = self.encode_region_projection(i, &mut let_bind);
+                let exprs = self.encode_lifetime_projection(i, &mut let_bind);
                 wand_lhs.extend(exprs);
             }
             let wand = self.vcx.mk_wand(
@@ -87,69 +71,65 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 self.vcx.mk_conj(self.vcx.alloc_slice(&wand_rhs)),
             );
             let mut wand = self.vcx.mk_wand_expr(wand);
-            let PurifiedWandOldOuter::LetBind(let_bind) = let_bind else {
+            let WandOldOuter::LetBind(let_bind) = let_bind else {
                 unreachable!()
             };
-            for (ident, expr) in let_bind {
-                let expr = expr.map_or_else(|e| e.as_dyn(), |e| e.as_dyn());
-                wand = self.vcx.mk_let_expr(ident, expr, wand);
+            for lb in let_bind {
+                wand = lb.map_or_else(
+                    |(d, e)| self.vcx.mk_let_expr(d, e, wand),
+                    |(d, e)| self.vcx.mk_let_expr(d, e, wand),
+                );
             }
             inv.push(wand);
         }
         self.vcx.alloc_slice(&inv)
     }
 
-    pub(super) fn encode_pcg_node<T: RegionProjectionBaseLike<'vir>>(
+    pub(super) fn encode_pcg_node<T: PcgLifetimeProjectionBaseLike<'vir>>(
         &mut self,
-        node: &PCGNode<'vir, MaybeRemotePlace<'vir>, T>,
+        node: &PcgNode<'vir, MaybeRemotePlace<'vir>, T>,
         wand_rhs: &mut Vec<vir::ExprBool<'vir>>,
-        old_outer: &mut PurifiedWandOldOuter<'vir>,
+        old_outer: &mut WandOldOuter<'vir>,
     ) {
         match node {
-            PCGNode::Place(MaybeRemotePlace::Remote(_)) => unreachable!(),
-            PCGNode::Place(place @ MaybeRemotePlace::Local(_)) => {
+            PcgNode::Place(MaybeRemotePlace::Remote(_)) => unreachable!(),
+            PcgNode::Place(place @ MaybeRemotePlace::Local(_)) => {
                 let p = Self::get_place(*place);
                 let ty = (*p).ty(self.local_decls, self.vcx.tcx());
-                let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(ty.ty).unwrap();
+                let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
+                let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
                 let p = self.encode_place(p);
-                let p = self.configure_old(*place, p.expr, old_outer);
+                let p = self.configure_old(*place, p.expr.expect_predicate(), old_outer);
 
-                // let pred = ty_out.ref_to_pred(self.vcx, p, None);
-                // wand_rhs.push(pred);
+                let pred = ty_out.ref_to_pred(self.vcx, p, None);
+                wand_rhs.push(pred);
             }
-            PCGNode::RegionProjection(r) => {
-                let exprs = self.encode_region_projection(*r, old_outer);
+            PcgNode::LifetimeProjection(r) => {
+                let exprs = self.encode_lifetime_projection(*r, old_outer);
                 wand_rhs.extend(exprs);
             }
         }
     }
 
-    pub(super) fn encode_region_projection<T: RegionProjectionBaseLike<'vir>>(
+    pub(super) fn encode_lifetime_projection<T: PcgLifetimeProjectionBaseLike<'vir>>(
         &mut self,
-        r: RegionProjection<'vir, T>,
-        old_outer: &mut PurifiedWandOldOuter<'vir>,
+        r: LifetimeProjection<'vir, T>,
+        old_outer: &mut WandOldOuter<'vir>,
     ) -> Vec<vir::ExprBool<'vir>> {
-        let place = r.place().to_maybe_remote_region_projection_base();
+        let place = r.base().to_pcg_lifetime_projection_base();
         let (place_snap, ty, _) = match place {
-            MaybeRemoteRegionProjectionBase::Place(p) => {
+            PcgLifetimeProjectionBase::Place(p) => {
                 self.encode_maybe_remote_place_snap(p, old_outer)
             }
-            MaybeRemoteRegionProjectionBase::Const(c) => todo!("{c:?}"),
+            PcgLifetimeProjectionBase::Const(c) => todo!("{c:?}"),
         };
-        let mut regions = ty.ty.walk().flat_map(IndirectKey::from_generic_arg);
-        let region = regions.next().unwrap();
-        // TODO:
-        assert!(
-            regions.next().is_none(),
-            "multiple regions in a type not supported ({:?})",
-            ty.ty
-        );
+        let ty = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
         let indirect = self
             .deps
-            .require_ref::<IndirectPredicatesEnc>((ty.ty, region))
+            .require_dep::<IndirectPredicatesEnc>(r.with_base(ty))
             .unwrap();
         indirect
-            .covariant
+            .predicate_applications
             .into_iter()
             .map(|expr| expr.reify(self.vcx, place_snap))
             .collect::<Vec<_>>()
@@ -157,8 +137,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
 
     fn get_place(place: MaybeRemotePlace<'vir>) -> Place<'vir> {
         match place {
-            MaybeRemotePlace::Local(MaybeOldPlace::Current { place }) => place,
-            MaybeRemotePlace::Local(MaybeOldPlace::OldPlace(place)) => place.place(),
+            MaybeRemotePlace::Local(MaybeLabelledPlace::Current(place)) => place,
+            MaybeRemotePlace::Local(MaybeLabelledPlace::Labelled(place)) => place.place(),
             MaybeRemotePlace::Remote(r) => r.assigned_local().into(),
         }
     }
@@ -166,29 +146,25 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     fn encode_maybe_remote_place_snap(
         &mut self,
         place: MaybeRemotePlace<'vir>,
-        old_outer: &mut PurifiedWandOldOuter<'vir>,
-    ) -> (
-        vir::ExprSnap<'vir>,
-        mir::tcx::PlaceTy<'vir>,
-        RustTyPredicatesEncOutputRef<'vir>,
-    ) {
+        old_outer: &mut WandOldOuter<'vir>,
+    ) -> (vir::ExprSnap<'vir>, mir::PlaceTy<'vir>, TyUsePurified<'vir>) {
         let p = Self::get_place(place);
         let (_, place_snap, ty, ty_out) = self.encode_place_snap(p);
         let place_snap = self.configure_old(place, place_snap, old_outer);
         (place_snap, ty, ty_out)
     }
 
-    fn configure_old(
+    fn configure_old<T: SnapOrRef>(
         &mut self,
         place: MaybeRemotePlace,
-        expr: vir::ExprSnap<'vir>,
-        old_outer: &mut PurifiedWandOldOuter<'vir>,
-    ) -> vir::ExprSnap<'vir> {
+        expr: vir::Expr<'vir, T>,
+        old_outer: &mut WandOldOuter<'vir>,
+    ) -> vir::Expr<'vir, T> {
         match place {
-            MaybeRemotePlace::Local(MaybeOldPlace::Current { .. }) => {
+            MaybeRemotePlace::Local(MaybeLabelledPlace::Current { .. }) => {
                 self.mk_wand_outer(expr, old_outer)
             }
-            MaybeRemotePlace::Local(MaybeOldPlace::OldPlace(place)) => {
+            MaybeRemotePlace::Local(MaybeLabelledPlace::Labelled(place)) => {
                 let label = Self::get_location_label(self.vcx, place.at());
                 self.vcx.mk_old(expr, label)
             }
@@ -200,17 +176,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         vcx: &'vir vir::VirCtxt<'vir>,
         at: SnapshotLocation,
     ) -> vir::OldLabel<'vir> {
-        if let SnapshotLocation::Start(bb) | SnapshotLocation::Loop(bb) = at {
+        if let SnapshotLocation::BeforeJoin(bb) | SnapshotLocation::Loop(bb) = at {
             return vir::OldLabel::Block(vir::CfgBlockLabelData::BasicBlock(bb.as_usize()));
         }
         let label_identifier = match at {
-            SnapshotLocation::Start(_) => "start",
-            SnapshotLocation::Prepare(_) => "prepare",
-            SnapshotLocation::BeforeCollapse(_) => "before_collapse",
-            SnapshotLocation::Mid(_) => "mid",
-            SnapshotLocation::After(_) => "after",
-            SnapshotLocation::Loop(_) => "loop",
-            SnapshotLocation::BeforeRefReassignment(_) => "before_ref_reassignment",
+            SnapshotLocation::Before(..) => "before",
+            SnapshotLocation::After(..) => "after",
+            SnapshotLocation::BeforeRefReassignment(..) => "before_ref_reassignment",
+            SnapshotLocation::Loop(_) | SnapshotLocation::BeforeJoin(_) => unreachable!(),
         };
         let location = at.location();
         let label = vir::vir_format!(
@@ -223,21 +196,43 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         vir::OldLabel::Label(label)
     }
 
-    fn mk_wand_outer(
+    fn mk_wand_outer<T: SnapOrRef>(
         &mut self,
-        expr: vir::ExprSnap<'vir>,
-        old_outer: &mut PurifiedWandOldOuter<'vir>,
-    ) -> vir::ExprSnap<'vir> {
+        expr: vir::Expr<'vir, T>,
+        old_outer: &mut WandOldOuter<'vir>,
+    ) -> vir::Expr<'vir, T> {
         match old_outer {
-            PurifiedWandOldOuter::LetBind(let_bind) => {
+            WandOldOuter::LetBind(let_bind) => {
                 let ident = vir::vir_format!(self.vcx, "_lb{}", let_bind.len());
-                let_bind.push((ident, Ok(expr)));
-                self.vcx.mk_local_ex(ident, expr.ty())
+                let decl = self.vcx.mk_local_decl(ident, expr.ty());
+                let_bind.push(T::as_result(decl, expr));
+                self.vcx.mk_local_ex(decl)
             }
-            PurifiedWandOldOuter::Label(label) => {
+            WandOldOuter::Label(label) => {
                 let label = *label.get_or_insert_with(|| self.new_label("outer_package"));
                 self.vcx.mk_local_labelled_old_expr(expr, label)
             }
         }
+    }
+}
+
+type LetBind<'vir> = Result<
+    (vir::LocalDeclSnap<'vir>, vir::ExprSnap<'vir>),
+    (vir::LocalDeclRef<'vir>, vir::ExprRef<'vir>),
+>;
+
+trait SnapOrRef: vir::CompType {
+    fn as_result<'vir>(d: vir::LocalDecl<'vir, Self>, e: vir::Expr<'vir, Self>) -> LetBind<'vir>;
+}
+
+impl SnapOrRef for vir::Snap {
+    fn as_result<'vir>(d: vir::LocalDecl<'vir, Self>, e: vir::Expr<'vir, Self>) -> LetBind<'vir> {
+        Ok((d, e))
+    }
+}
+
+impl SnapOrRef for vir::Ref {
+    fn as_result<'vir>(d: vir::LocalDecl<'vir, Self>, e: vir::Expr<'vir, Self>) -> LetBind<'vir> {
+        Err((d, e))
     }
 }

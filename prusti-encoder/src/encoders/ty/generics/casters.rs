@@ -4,7 +4,7 @@ use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{FunctionIdn, MethodIdn};
 
 use crate::encoders::{
-    Impure, Pure, Purity,
+    Impure, Pure, Purified, Purity,
     ty::{
         RustTy,
         impure::TyImpureEnc,
@@ -43,6 +43,13 @@ impl PurityCasters for Pure {
 impl PurityCasters for Impure {
     type MakeGeneric<'vir> = MethodIdn<'vir, (vir::Ref, vir::ManyTyVal, vir::ManyCSnap)>;
     type MakeConcrete<'vir> = MethodIdn<'vir, (vir::Ref, vir::ManyTyVal, vir::ManyCSnap)>;
+}
+
+impl PurityCasters for Purified {
+    type MakeGeneric<'vir> =
+        FunctionIdn<'vir, (vir::CSnap, vir::ManyTyVal, vir::ManyCSnap), vir::PSnap>;
+    type MakeConcrete<'vir> =
+        FunctionIdn<'vir, (vir::PSnap, vir::ManyTyVal, vir::ManyCSnap), vir::CSnap>;
 }
 
 impl<'vir, P: PurityCasters> task_encoder::OutputRefAny for GArgCasters<'vir, P> {}

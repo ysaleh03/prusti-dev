@@ -14,7 +14,7 @@ use prusti_rustc_interface::middle::ty;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    Impure, MirPolyImpureEnc, MirPolyPurifiedEnc, Pure,
+    Impure, Pure, Purified,
     ty::{
         generics::GArgsCastEnc,
         lifted::{TyConstructorEnc, TypeOfEnc},

@@ -4,12 +4,14 @@ use vir::CastType;
 use crate::encoders::{
     TyUseImpureEnc,
     ty::{
-        RustTyDatas, RustTyDecomposition,
+        RustTyDatas,
+        RustTyDecomposition,
         data::{EnumData, TyData, VariantData},
         impure::{
             ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureEnumData, TyImpureVariantData,
         },
         pure::{AdtBuilder, PureTyDatas, TyPureEnc, TyPureEnumData, TyPureVariantData},
+        // purified::{PurifiedTyDatas, TyPurifiedEnc, TyPurifiedEnumData, TyPurifiedVariantData},
     },
 };
 
@@ -183,3 +185,53 @@ pub(crate) fn ty_impure<'vir>(
         variants.into_iter().map(|v| v.3).collect::<Vec<_>>(),
     ))
 }
+
+// pub(crate) fn ty_purified<'vir>(
+//     task_key: &TyData<'vir, RustTyDatas>,
+//     data: &EnumData<'vir, RustTyDatas>,
+//     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+//     builder: &mut AdtBuilder<'vir>,
+// ) -> Result<EnumData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
+//     let discr_ty =
+//         deps.require_dep::<TyPurifiedEnc>(RustTyDecomposition::from_prim_ty(data.discr).ty)?;
+//     let discr_prim = discr_ty.expect_primitive();
+//     let discr_ty = (discr_ty.domain)();
+
+//     let variants = data
+//         .variants
+//         .iter()
+//         .map(|variant| {
+//             let var_idx_num = variant.vid.as_u32();
+//             let discr =
+//                 (discr_prim.prim_to_snap)(discr_prim.expr_from_bits(data.discr, variant.discr_val));
+
+//             let specifics = super::structlike::ty_purified_variant(
+//                 &format!("{var_idx_num}_"),
+//                 Some(discr),
+//                 task_key,
+//                 &variant.inner,
+//                 deps,
+//                 builder,
+//             )?;
+
+//             Ok(VariantData::new(
+//                 TyPurifiedVariantData { discr },
+//                 variant.inhabited,
+//                 specifics,
+//             ))
+//         })
+//         .collect::<Result<Vec<_>, _>>()?;
+
+//     // discriminant can only have the selected values
+//     let snap_to_discr_snap = builder.build_discr_fn(discr_ty.downcast_ty());
+
+//     Ok(EnumData::new(
+//         TyPurifiedEnumData {
+//             discr_ty,
+//             discr_prim: *discr_prim,
+//             snap_to_discr_snap,
+//         },
+//         data.inhabited,
+//         variants,
+//     ))
+// }

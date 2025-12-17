@@ -5,7 +5,9 @@ use crate::encoders::{
         data::{StructData, TyData},
         impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
         pure::{AdtBuilder, PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
+        // purified::{PurifiedTyDatas, TyPurifiedEnc, TyPurifiedFieldData, TyPurifiedStructData},
         use_pure::TyUsePureEnc,
+        // use_purified::TyUsePurifiedEnc,
     },
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
@@ -199,3 +201,46 @@ pub(crate) fn ty_impure_variant<'vir>(
         variant_snap_expr,
     ))
 }
+
+// pub(crate) fn ty_purified<'vir>(
+//     task_key: &TyData<'vir, RustTyDatas>,
+//     data: &StructData<'vir, RustTyDatas>,
+//     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+//     builder: &mut AdtBuilder<'vir>,
+// ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
+//     ty_purified_variant("", None, task_key, data, deps, builder)
+// }
+
+// pub(super) fn ty_purified_variant<'vir>(
+//     prefix: &str,
+//     discr: Option<vir::ExprCSnap<'vir>>,
+//     task_key: &TyData<'vir, RustTyDatas>,
+//     data: &StructData<'vir, RustTyDatas>,
+//     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+//     builder: &mut AdtBuilder<'vir>,
+// ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
+//     let field_tys = data
+//         .fields
+//         .iter()
+//         .map(|f| {
+//             let ty = f.decompose(task_key.params);
+//             Ok(deps.require_ref::<TyUsePurifiedEnc>(ty)?.snapshot)
+//         })
+//         .collect::<Result<Vec<_>, _>>()?;
+//     let field_tys = builder.vcx.alloc_slice(&field_tys);
+//     let (field_snaps_to_snap, des) = builder.constructor(prefix, field_tys, discr);
+//     assert_eq!(des.len(), data.fields.len());
+//     let des = des
+//         .iter()
+//         .map(|read| TyPurifiedFieldData {
+//             read: read.downcast_ty(),
+//         })
+//         .collect::<Vec<_>>();
+//     Ok(StructData::new(
+//         TyPurifiedStructData {
+//             field_snaps_to_snap,
+//         },
+//         data.inhabited,
+//         des,
+//     ))
+// }

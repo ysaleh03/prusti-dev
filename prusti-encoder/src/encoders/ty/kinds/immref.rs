@@ -2,6 +2,7 @@ use crate::encoders::ty::{
     RustImmRef,
     impure::{PredicateBuilder, TyImpureEnc, TyImpureImmRef, TyImpureImmRefData},
     pure::{AdtBuilder, TyPureEnc, TyPureImmRef, TyPureImmRefData},
+    purified::{TyPurifiedEnc, TyPurifiedImmRef, TyPurifiedImmRefData},
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::{CastType, HasType};
@@ -70,4 +71,17 @@ pub(crate) fn ty_impure<'vir>(
     ).1);
 
     Ok(TyImpureImmRefData {})
+}
+
+pub(crate) fn ty_purified<'vir>(
+    _data: &RustImmRef<'vir>,
+    _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
+    builder: &mut AdtBuilder<'vir>,
+) -> Result<TyPurifiedImmRef<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
+    let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None);
+
+    Ok(TyPurifiedImmRefData {
+        prim_to_snap: field_snaps_to_snap,
+        value_access: field_access[1].downcast_ty(),
+    })
 }

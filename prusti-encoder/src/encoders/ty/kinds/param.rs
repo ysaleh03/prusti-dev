@@ -21,3 +21,11 @@ pub(crate) fn ty_impure<'vir>(
     super::opaque::set_opaque(builder);
     Ok(())
 }
+
+pub(crate) fn ty_purified<'vir>(
+    _data: &RustParam<'vir>,
+    _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
+    _builder: &mut DomainBuilder<'vir>,
+) -> Result<TyPureParam<'vir>, EncodeFullError<'vir, TyPureEnc>> {
+    Ok(())
+}

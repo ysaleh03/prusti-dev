@@ -640,7 +640,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 let rvalue_snapshot_encoding = self.ty_use(rvalue_ty);
                 let (snap, place_ref) = self.encode_place_with_ref(curr_ver, place);
                 if kind.mutability().is_mut() {
-                    let e_rvalue_ty = rvalue_snapshot_encoding.expect_purified_mutref();
+                    let e_rvalue_ty = rvalue_snapshot_encoding.expect_mutref();
                     // We want to distinguish if `place` is a value that lives
                     // in pure code or not. If it lives in impure (the only way
                     // that this can happen is that we have a `&mut` argument)
@@ -653,7 +653,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     let place_ref = place_ref.unwrap_or_else(|| self.vcx.mk_null().lazy());
                     e_rvalue_ty.prim_to_snap(place_ref, snap).upcast_ty()
                 } else {
-                    let e_rvalue_ty = rvalue_snapshot_encoding.expect_purified_immref();
+                    let e_rvalue_ty = rvalue_snapshot_encoding.expect_immref();
                     // For shared borrows we want to use just the snapshot
                     // without the reference so that snapshot equality compares
                     // only values.
@@ -1227,7 +1227,7 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                     let e_ty = deps
                         .require_dep::<TyUsePureEnc>(ty_task)
                         .unwrap()
-                        .expect_purified_immref();
+                        .expect_immref();
                     let val_expr = e_ty.value_access(expr);
                     (val_expr, place_ref)
                 }
@@ -1235,7 +1235,7 @@ pub fn encode_place_element<'vir, 'enc, T: TaskEncoder>(
                     let e_ty = deps
                         .require_dep::<TyUsePureEnc>(ty_task)
                         .unwrap()
-                        .expect_purified_mutref();
+                        .expect_mutref();
                     let inner_ty = vir::with_vcx(|vcx| {
                         RustTyDecomposition::from_ty(*inner_ty, vcx.tcx(), context)
                     });
