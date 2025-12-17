@@ -10,7 +10,8 @@ use prusti_rustc_interface::{
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{
-    AdtDestructor, Arity, CastType, CompType, DomainAxiomData, DomainIdnSnap, FunctionIdn, Type,
+    AdtDestructor, Arity, BackendInterpretationPair, CastType, CompType, DomainAxiomData,
+    DomainIdnSnap, FunctionIdn, Type,
 };
 
 use crate::encoders::Pure;
@@ -19,6 +20,7 @@ use super::{
     RustTy, ViperTyDatas,
     data::*,
     generics::{GenericParams, GenericParamsEnc},
+    interpretation::float::FloatDomain,
 };
 
 pub(super) type PureTyDatas = ViperTyDatas<Pure>;
@@ -52,10 +54,43 @@ pub struct TyPureOpaqueData<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct TyPurePrimData<'vir> {
     pub prim_type: vir::TypePrim<'vir>,
-    /// Snapshot of self as argument. Returns Viper primitive value.
-    pub snap_to_prim: FunctionIdn<'vir, vir::CSnap, vir::Prim>,
     /// Viper primitive value as argument. Returns domain.
     pub prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
+    pub kind: TyPurePrimDataKind<'vir>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TyPurePrimDataKind<'vir> {
+    Native(TyPurePrimDataNative<'vir>),
+    Float(FloatDomain<'vir>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TyPurePrimDataNative<'vir> {
+    /// Snapshot of self as argument. Returns Viper primitive value.
+    pub snap_to_prim: FunctionIdn<'vir, vir::CSnap, vir::Prim>,
+}
+
+impl<'vir> TyPurePrimData<'vir> {
+    pub fn expect_native(&self) -> &TyPurePrimDataNative<'vir> {
+        match &self.kind {
+            TyPurePrimDataKind::Native(native) => native,
+            _ => panic!(),
+        }
+    }
+}
+
+impl<'vir, D: TyDatas<'vir, PrimitiveData = TyPurePrimData<'vir>>> TyData<'vir, D> {
+    pub fn expect_native(&self) -> &TyPurePrimDataNative<'vir> {
+        self.expect_primitive().expect_native()
+    }
+
+    pub fn expect_float(&self) -> &FloatDomain<'vir> {
+        match &self.expect_primitive().kind {
+            TyPurePrimDataKind::Float(fl) => fl,
+            _ => panic!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -71,11 +106,9 @@ pub struct TyPureImmRefData<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct TyPureMutRefData<'vir> {
     /// Construct domain from a `Ref` value.
-    pub(super) prim_to_snap: FunctionIdn<'vir, (vir::Ref, vir::PSnap), vir::CSnap>,
+    pub(super) prim_to_snap: FunctionIdn<'vir, vir::Ref, vir::CSnap>,
     /// Function to access the referee.
     pub(super) deref_access: AdtDestructor<'vir, vir::CSnap, vir::Ref>,
-    /// Function to access the snapshot value.
-    pub(super) value_access: AdtDestructor<'vir, vir::CSnap, vir::PSnap>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,9 +169,7 @@ pub enum TyPureEncLocalKind<'vir> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum TyPureEncError {
-    Unimplemented,
-}
+pub enum TyPureEncError {}
 
 impl TaskEncoder for TyPureEnc {
     task_encoder::encoder_cache!(TyPureEnc);
@@ -179,15 +210,17 @@ impl TaskEncoder for TyPureEnc {
                 }
                 TySpecifics::Primitive(prim) => {
                     let builder = builder.set_domain_builder();
-                    TySpecifics::Primitive(super::kinds::primitive::ty_pure(prim, deps, builder)?)
+                    TySpecifics::Primitive(super::kinds::primitive::ty_pure(
+                        vcx, prim, deps, builder,
+                    )?)
                 }
                 TySpecifics::ImmRef(immref) => {
                     let builder = builder.set_adt_builder();
                     TySpecifics::ImmRef(super::kinds::immref::ty_pure(immref, deps, builder)?)
                 }
-                TySpecifics::MutRef(mutref) => {
+                TySpecifics::MutRef(_) => {
                     let builder = builder.set_adt_builder();
-                    TySpecifics::MutRef(super::kinds::mutref::ty_pure(mutref, deps, builder)?)
+                    TySpecifics::MutRef(super::kinds::mutref::ty_pure(builder)?)
                 }
                 TySpecifics::StructLike(structlike) => {
                     let builder = builder.set_adt_builder();
@@ -287,6 +320,7 @@ pub(crate) struct AdtBuilderData<'vir> {
 pub(crate) struct DomainBuilderData<'vir> {
     axioms: Vec<vir::DomainAxiom<'vir>>,
     functions: Vec<vir::DomainFunction<'vir>>,
+    interpretation: Option<&'vir [&'vir BackendInterpretationPair<'vir>]>,
 }
 
 #[derive(Clone, Copy)]
@@ -307,7 +341,7 @@ impl<'vir> TyPureBuilder<'vir> {
     ) -> Self {
         let params = deps.require_dep::<GenericParamsEnc>(ty.params).unwrap();
         let name = vir::vir_format!(vcx, "s_{}", ty.name());
-        let domain_ident = DomainIdnSnap::new(vir::ViperIdent::new(name));
+        let domain_ident = DomainIdnSnap::new(vir::ViperIdent::new(name), 0);
         let self_type = domain_ident();
         let unreachable_to_snap = FunctionIdn::new(
             vir::ViperIdent::new(vir::vir_format!(vcx, "{name}_unreachable")),
@@ -389,6 +423,7 @@ impl<'vir> TyPureBuilder<'vir> {
                     &[],
                     self.vcx.alloc_slice(data.axioms.as_slice()),
                     self.vcx.alloc_slice(data.functions.as_slice()),
+                    data.interpretation,
                 );
                 TyPureEncLocalKind::Domain { domain }
             }
@@ -520,7 +555,21 @@ impl<'vir> DomainBuilder<'vir> {
     ) -> FunctionIdn<'vir, A, T> {
         let name = vir::vir_format!(self.vcx, "{}_{name}", self.name);
         let ident = FunctionIdn::new(vir::ViperIdent::new(name), args, ret);
-        let function = self.vcx.mk_domain_function(ident, false);
+        let function = self.vcx.mk_domain_function(ident, false, None);
+        self.data().functions.push(function);
+        ident
+    }
+
+    pub(crate) fn backend_func<A: Arity, T: CompType>(
+        &mut self,
+        name: &str,
+        args: A::Tys<'vir>,
+        ret: Type<'vir, T>,
+        interpretation: Option<&'static str>,
+    ) -> FunctionIdn<'vir, A, T> {
+        let name = vir::vir_format!(self.vcx, "{}_{name}", self.name);
+        let ident = FunctionIdn::new(vir::ViperIdent::new(name), args, ret);
+        let function = self.vcx.mk_domain_function(ident, false, interpretation);
         self.data().functions.push(function);
         ident
     }
@@ -529,6 +578,13 @@ impl<'vir> DomainBuilder<'vir> {
         let name = vir::vir_format!(self.vcx, "{}_ax_{name}", self.name);
         let axiom = self.vcx.alloc(DomainAxiomData { name, expr });
         self.data().axioms.push(axiom);
+    }
+
+    pub(crate) fn set_interpretation(
+        &mut self,
+        interp: &'vir [&'vir BackendInterpretationPair<'vir>],
+    ) {
+        self.data().interpretation = Some(interp);
     }
 }
 
@@ -547,6 +603,8 @@ impl<'vir> TyPurePrimData<'vir> {
                     }
                     TyKind::Uint(ty) => (ty.bit_width().unwrap(), false),
                     TyKind::Char => (32, false),
+                    // The float prim_to_snap takes the raw bits as an unsigned integer.
+                    TyKind::Float(..) => (0, false),
                     kind => unreachable!("{kind:?}"),
                 };
                 let size = abi::Size::from_bits(bit_width);

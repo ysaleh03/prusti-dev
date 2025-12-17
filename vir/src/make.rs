@@ -112,7 +112,8 @@ cfg_if! {
                     check_expr_bindings(m, *expr);
                     m.remove(name);
                 },
-                ExprKindGenData::FuncApp(FuncAppGenData { args, .. }) | ExprKindGenData::AdtConstructor(FuncAppGenData { args, .. }) => {
+                ExprKindGenData::FuncApp(FuncAppGenData { args, .. })
+                | ExprKindGenData::SetLiteral(SetLiteralGenData { values: args, .. }) => {
                     for arg in args.iter() {
                         check_expr_bindings(m, *arg);
                     }
@@ -152,7 +153,8 @@ cfg_if! {
                     check_expr_bindings(m, *then);
                     check_expr_bindings(m, *else_);
                 }
-                ExprKindGenData::Forall(ForallGenData { qvars, triggers, body }) => {
+                ExprKindGenData::Forall(ForallGenData { qvars, triggers, body })
+                | ExprKindGenData::Exists(ExistsGenData { qvars, triggers, body }) => {
                     for qvar in qvars.iter() {
                         m.insert(qvar.name, qvar.ty_dyn());
                     }
@@ -169,8 +171,8 @@ cfg_if! {
                 ExprKindGenData::Wand(WandGenData { lhs, rhs }) => {
                     check_expr_bindings(m, lhs.as_dyn());
                     check_expr_bindings(m, rhs.as_dyn());
-                }
-                other => todo!("{other:?}")
+                },
+                other@(ExprKindGenData::Result(_) | ExprKindGenData::Todo(_)) =>  todo!("{other:?}"),
             }
         }
     }
@@ -207,12 +209,14 @@ impl<'tcx> VirCtxt<'tcx> {
         target: &'vir str,
         args: &'vir [ExprGenDyn<'vir, Curr, Next>],
         result_ty: Type<'vir, R>,
+        typ_var_map: &'vir [TypeDyn<'vir>],
     ) -> ExprGen<'vir, Curr, Next, R> {
         self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::FuncApp(
             self.arena.alloc(FuncAppGenData {
                 target,
                 args,
                 result_ty: result_ty.as_dyn(),
+                typ_var_map,
             }),
         ))))
     }
@@ -231,6 +235,32 @@ impl<'tcx> VirCtxt<'tcx> {
                 func,
                 ty: ty.as_dyn(),
                 inner,
+            }),
+        ))))
+    }
+
+    pub fn mk_ty_set<'vir, T: CompType>(&'vir self, elem_ty: Type<'vir, T>) -> TypeSet<'vir> {
+        self.alloc(TypeData::new(TypeKind::Set(elem_ty.as_dyn())))
+    }
+
+    pub fn mk_set_literal_expr<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        values: &'vir [&'vir ExprGenData<'vir, Curr, Next, T>],
+        elem_ty: Type<'vir, T>,
+    ) -> ExprGenSet<'vir, Curr, Next> {
+        for value in values {
+            if value.ty() != elem_ty {
+                typecheck_error!(
+                    "Type mismatch in set literal. Expected element type: {:?}, actual: {:?}",
+                    elem_ty,
+                    value.ty(),
+                );
+            }
+        }
+        self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::SetLiteral(
+            self.alloc(SetLiteralGenData {
+                values: values.as_dyn(),
+                ty: self.mk_ty_set(elem_ty).as_dyn(),
             }),
         ))))
     }
@@ -295,6 +325,23 @@ impl<'tcx> VirCtxt<'tcx> {
         self.mk_old(expr, label.map(OldLabel::Block).unwrap_or(OldLabel::None))
     }
 
+    pub fn maybe_apply_label<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        expr: ExprGen<'vir, Curr, Next, T>,
+        label: Option<OldLabel<'vir>>,
+    ) -> ExprGen<'vir, Curr, Next, T> {
+        if let Some(label) = label {
+            match label {
+                OldLabel::Block(block) => self.mk_labelled_old_expr(expr, Some(block)),
+                OldLabel::Label(label) => self.mk_local_labelled_old_expr(expr, label),
+                OldLabel::None => self.mk_old_expr(expr),
+                OldLabel::Lhs => self.mk_old_lhs_expr(expr),
+            }
+        } else {
+            expr
+        }
+    }
+
     pub fn mk_local_labelled_old_expr<'vir, Curr, Next, T: CompType>(
         &'vir self,
         expr: ExprGen<'vir, Curr, Next, T>,
@@ -310,7 +357,7 @@ impl<'tcx> VirCtxt<'tcx> {
     ) -> ExprGen<'vir, Curr, Next, T> {
         let v = self.mk_const_expr(ConstData::Int(exec as u128));
         let args = [expr.as_dyn(), v.as_dyn()];
-        self.mk_func_app("rel", self.alloc_array(&args), expr.ty())
+        self.mk_func_app("rel", self.alloc_array(&args), expr.ty(), &[])
     }
 
     pub fn mk_forall_expr<'vir, Curr, Next, T: CompType>(
@@ -324,6 +371,24 @@ impl<'tcx> VirCtxt<'tcx> {
         }
         self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::Forall(
             self.alloc(ForallGenData {
+                qvars: qvars.as_dyn(),
+                triggers,
+                body,
+            }),
+        ))))
+    }
+
+    pub fn mk_exists_expr<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        qvars: &'vir [LocalDecl<'vir, T>],
+        triggers: &'vir [TriggerGen<'vir, Curr, Next>],
+        body: ExprGenBool<'vir, Curr, Next>,
+    ) -> ExprGenBool<'vir, Curr, Next> {
+        if qvars.is_empty() {
+            return body;
+        }
+        self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::Exists(
+            self.alloc(ExistsGenData {
                 qvars: qvars.as_dyn(),
                 triggers,
                 body,
@@ -393,6 +458,7 @@ impl<'tcx> VirCtxt<'tcx> {
         self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::Wand(wand))))
     }
 
+    /// Use `mk_set_in_expr` for set in
     pub fn mk_bin_op_expr<'vir, Curr, Next, T: CompType>(
         &'vir self,
         kind: BinOpKind,
@@ -400,7 +466,18 @@ impl<'tcx> VirCtxt<'tcx> {
         rhs: ExprGen<'vir, Curr, Next, T>,
     ) -> ExprGenPrim<'vir, Curr, Next> {
         assert!(kind != BinOpKind::CmpEq, "Use mk_eq_expr instead");
-        self.mk_bin_op_expr_inner(kind, lhs, rhs)
+        assert!(kind != BinOpKind::SetIn, "Use mk_set_in_expr instead");
+        assert!(kind != BinOpKind::SetUnion, "Use mk_set_union_expr instead");
+        if lhs.ty() != rhs.ty() {
+            typecheck_error!(
+                "Type mismatch in binary operation {:?}. LHS type: {:?}, RHS type: {:?}",
+                kind,
+                lhs.ty(),
+                rhs.ty(),
+            );
+        }
+        self.mk_bin_op_expr_inner(kind, lhs.as_dyn(), rhs.as_dyn())
+            .downcast_ty()
     }
 
     pub fn mk_eq_expr<'vir, Curr, Next, T: CompType>(
@@ -408,24 +485,60 @@ impl<'tcx> VirCtxt<'tcx> {
         lhs: ExprGen<'vir, Curr, Next, T>,
         rhs: ExprGen<'vir, Curr, Next, T>,
     ) -> ExprGenBool<'vir, Curr, Next> {
-        self.mk_bin_op_expr_inner(BinOpKind::CmpEq, lhs, rhs)
+        if lhs.ty() != rhs.ty() {
+            typecheck_error!(
+                "Type mismatch in equality expression. LHS type: {:?}, RHS type: {:?}",
+                lhs.ty(),
+                rhs.ty(),
+            );
+        }
+        self.mk_bin_op_expr_inner(BinOpKind::CmpEq, lhs.as_dyn(), rhs.as_dyn())
+            .downcast_ty()
+    }
+
+    pub fn mk_set_in_expr<'vir, Curr, Next, T: CompType>(
+        &'vir self,
+        elem: ExprGen<'vir, Curr, Next, T>,
+        set: ExprGenSet<'vir, Curr, Next>,
+    ) -> ExprGenBool<'vir, Curr, Next> {
+        if !matches!(set.ty().kind(), TypeKind::Set(set_elem_ty) if elem.ty().as_dyn() == *set_elem_ty)
+        {
+            typecheck_error!(
+                "Type mismatch in 'set in' expression. Have set type: {:?}, actual element type: {:?}",
+                set.ty(),
+                elem.ty(),
+            );
+        }
+        self.mk_bin_op_expr_inner(BinOpKind::SetIn, elem.as_dyn(), set.as_dyn())
+            .downcast_ty()
+    }
+
+    pub fn mk_set_union_expr<'vir, Curr, Next>(
+        &'vir self,
+        lhs: ExprGenSet<'vir, Curr, Next>,
+        rhs: ExprGenSet<'vir, Curr, Next>,
+    ) -> ExprGenSet<'vir, Curr, Next> {
+        if lhs.ty() != rhs.ty() {
+            typecheck_error!(
+                "Type mismatch in set union expression. LHS type: {:?}, RHS type: {:?}",
+                lhs.ty(),
+                rhs.ty(),
+            );
+        }
+        self.mk_bin_op_expr_inner(BinOpKind::SetUnion, lhs.as_dyn(), rhs.as_dyn())
             .downcast_ty()
     }
 
     /// To be used only when `kind` is generated e.g. with a `from` call.
     /// Otherwise always use either `mk_eq_expr` or `mk_bin_op_expr`.
-    pub fn mk_bin_op_expr_inner<'vir, Curr, Next, T: CompType>(
+    pub fn mk_bin_op_expr_inner<'vir, Curr, Next>(
         &'vir self,
         kind: BinOpKind,
-        lhs: ExprGen<'vir, Curr, Next, T>,
-        rhs: ExprGen<'vir, Curr, Next, T>,
-    ) -> ExprGenPrim<'vir, Curr, Next> {
+        lhs: ExprGenDyn<'vir, Curr, Next>,
+        rhs: ExprGenDyn<'vir, Curr, Next>,
+    ) -> ExprGenDyn<'vir, Curr, Next> {
         self.alloc(ExprGenData::new(self.alloc(ExprKindGenData::BinOp(
-            self.alloc(BinOpGenData {
-                kind,
-                lhs: lhs.as_dyn(),
-                rhs: rhs.as_dyn(),
-            }),
+            self.alloc(BinOpGenData { kind, lhs, rhs }),
         ))))
     }
 
@@ -575,6 +688,7 @@ impl<'tcx> VirCtxt<'tcx> {
         &'vir self,
         ident: FunctionIdn<'vir, A, impl CompType>,
         unique: bool,
+        interpretation: Option<&'static str>,
     ) -> DomainFunction<'vir> {
         let params = A::params(ident.arity());
         self.alloc(DomainFunctionData {
@@ -582,6 +696,7 @@ impl<'tcx> VirCtxt<'tcx> {
             name: ident.name(),
             args: self.alloc_slice(params.as_slice()),
             ret: ident.result().as_dyn(),
+            interpretation: interpretation.map(|i| InterpretationData { interpretation: i }),
         })
     }
 
@@ -680,12 +795,16 @@ impl<'tcx> VirCtxt<'tcx> {
         typarams: &'vir [DomainParam<'vir>],
         axioms: &'vir [DomainAxiomGen<'vir, Curr, Next>],
         functions: &'vir [DomainFunction<'vir>],
+        interpretation: Option<&'vir [&'vir BackendInterpretationPair]>,
     ) -> DomainGen<'vir, Curr, Next> {
+        assert_eq!(typarams.len(), 0, "Domain type parameters are not yet supported (because `FunctionIdn` doesn't have a mechanism to add a type_map for calls)");
         self.alloc(DomainGenData {
             name: name.to_str(),
             typarams,
             axioms,
             functions,
+            interpretation: interpretation
+                .map(|i| self.alloc(BackendInterpretationData { interpretation: i })),
         })
     }
 
@@ -944,7 +1063,7 @@ impl<'tcx> VirCtxt<'tcx> {
             .unwrap_or_else(|| self.mk_bool::<false>())
     }
 
-    const fn get_int_data(rust_ty: &ty::TyKind) -> (u32, bool) {
+    pub const fn get_int_data(rust_ty: &ty::TyKind) -> (u32, bool) {
         match rust_ty {
             ty::Int(ty::IntTy::Isize) => ((std::mem::size_of::<isize>() * 8) as u32, true),
             ty::Int(ty::IntTy::I8) => (8, true),
@@ -958,6 +1077,8 @@ impl<'tcx> VirCtxt<'tcx> {
             ty::Uint(ty::UintTy::U32) => (32, false),
             ty::Uint(ty::UintTy::U64) => (64, false),
             ty::Uint(ty::UintTy::U128) => (128, false),
+            // See https://doc.rust-lang.org/book/ch03-02-data-types.html#the-character-type
+            ty::Char => (32, false),
             _ => unreachable!(),
         }
     }

@@ -59,6 +59,9 @@ pub enum BinOpKind {
     Div,
     DivRational,
     Mod,
+    // Set ops
+    SetUnion,
+    SetIn,
     // ...
 }
 impl From<mir::BinOp> for BinOpKind {
@@ -75,10 +78,10 @@ impl From<mir::BinOp> for BinOpKind {
             }
             mir::BinOp::Div => BinOpKind::Div,
             mir::BinOp::Rem => BinOpKind::Mod,
-            mir::BinOp::BitXor => todo!("bitwise operations"),
             // TODO: this is a temporary workaround,
             // we need to fix this for integers and
             // do non-short-circuiting for booleans.
+            mir::BinOp::BitXor => BinOpKind::CmpNe,
             mir::BinOp::BitAnd => BinOpKind::And,
             mir::BinOp::BitOr => BinOpKind::Or,
             mir::BinOp::Shl => todo!("bitwise operations"),
@@ -167,6 +170,7 @@ pub enum TypeKind<'vir> {
     // TODO: separate `TyParam` variant? `Domain` used for now
     Ref, // TODO: typed references ?
     Perm,
+    Set(#[serde(with = "crate::serde::serde_ref")] TypeDyn<'vir>),
     Unsupported(UnsupportedType<'vir>),
     Err,
 }
@@ -183,6 +187,7 @@ pub type TySubsts<'vir> = HashMap<&'vir str, TypeDyn<'vir>>;
 pub struct DomainParamData<'vir> {
     #[serde(with = "crate::serde::serde_str")]
     pub name: &'vir str, // TODO: identifiers
+    pub index: usize,
 }
 
 #[derive(PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
@@ -211,6 +216,33 @@ impl<'vir, T: CompType, R: CompType> AdtDestructorData<'vir, T, R> {
 }
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
+pub struct BackendInterpretationPair<'vir> {
+    #[serde(with = "crate::serde::serde_str")]
+    pub key: &'vir str,
+    #[serde(with = "crate::serde::serde_str")]
+    pub value: &'vir str,
+}
+
+impl<'vir> BackendInterpretationPair<'vir> {
+    pub fn to_tuple(&self) -> (&'vir str, &'vir str) {
+        (self.key, self.value)
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
+#[serde(bound(deserialize = "'de: 'vir"))]
+pub struct BackendInterpretationData<'vir> {
+    #[serde(with = "crate::serde::serde_slice")]
+    pub interpretation: &'vir [&'vir BackendInterpretationPair<'vir>],
+}
+
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
+pub struct InterpretationData<'vir> {
+    #[serde(with = "crate::serde::serde_str")]
+    pub interpretation: &'vir str,
+}
+
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
 #[serde(bound(deserialize = "'de: 'vir"))]
 pub struct DomainFunctionData<'vir> {
     pub unique: bool,
@@ -219,6 +251,7 @@ pub struct DomainFunctionData<'vir> {
     pub args: &'vir [TypeDyn<'vir>],
     #[serde(with = "crate::serde::serde_ref")]
     pub ret: TypeDyn<'vir>,
+    pub interpretation: Option<InterpretationData<'vir>>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
@@ -256,6 +289,7 @@ pub type CfgBlockData<'vir> = crate::gendata::CfgBlockGenData<'vir, (), !>;
 pub type CfgLabelData<'vir> = crate::gendata::CfgLabelGenData<'vir, (), !>;
 pub type DomainAxiomData<'vir> = crate::gendata::DomainAxiomGenData<'vir, (), !>;
 pub type DomainData<'vir> = crate::gendata::DomainGenData<'vir, (), !>;
+pub type ExistsData<'vir> = crate::gendata::ExistsGenData<'vir, (), !>;
 pub type ExprData<'vir, T> = crate::gendata::ExprGenData<'vir, (), !, T>;
 pub type ExprKindData<'vir> = crate::gendata::ExprKindGenData<'vir, (), !>;
 pub type ForallData<'vir> = crate::gendata::ForallGenData<'vir, (), !>;
@@ -271,6 +305,7 @@ pub type PredicateAppData<'vir> = crate::gendata::PredicateAppGenData<'vir, (), 
 pub type PredicateData<'vir> = crate::gendata::PredicateGenData<'vir, (), !>;
 pub type ProgramData<'vir> = crate::gendata::ProgramGenData<'vir, (), !>;
 pub type PureAssignData<'vir> = crate::gendata::PureAssignGenData<'vir, (), !>;
+pub type SetLiteralData<'vir> = &'vir crate::gendata::SetLiteralGenData<'vir, (), !>;
 pub type StmtData<'vir> = crate::gendata::StmtGenData<'vir, (), !>;
 pub type StmtKindData<'vir> = crate::gendata::StmtKindGenData<'vir, (), !>;
 pub type TerminatorStmtData<'vir> = crate::gendata::TerminatorStmtGenData<'vir, (), !>;

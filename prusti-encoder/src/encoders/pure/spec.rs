@@ -11,7 +11,7 @@ use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, HasType, Reify};
 
 use crate::encoders::{
-    MirPureEnc,
+    MirLocalDefEncTask, MirPureEnc,
     mir_pure::PureKind,
     ty::{RustTyDecomposition, use_pure::TyUsePureEnc},
 };
@@ -96,8 +96,12 @@ impl TaskEncoder for MirSpecEnc {
         let (def_id, pure) = *task_key;
         deps.emit_output_ref(*task_key, ())?;
 
-        let local_defs =
-            deps.require_dep::<crate::encoders::local_def::MirLocalDefEnc>((def_id, false))?;
+        let local_defs = deps.require_dep::<crate::encoders::local_def::MirLocalDefEnc>(
+            MirLocalDefEncTask::Local {
+                def_id,
+                all_locals: false,
+            },
+        )?;
         let specs =
             deps.require_dep::<crate::encoders::SpecEnc>(crate::encoders::SpecEncTask { def_id })?;
 
@@ -126,7 +130,7 @@ impl TaskEncoder for MirSpecEnc {
                 .require_dep::<TyUsePureEnc>(RustTyDecomposition::from_prim_ty(
                     vcx.tcx().types.bool,
                 ))?
-                .expect_primitive()
+                .expect_native()
                 .snap_to_prim;
 
             let substs = find_trait_method_substs(vcx.tcx(), def_id, substs)
@@ -191,15 +195,14 @@ impl TaskEncoder for MirSpecEnc {
                                     // TODO: should this be `def_id` or `caller_def_id`
                                     caller_def_id: Some(def_id),
                                 },
-                            )
-                            .unwrap()
+                            )?
                             .expr
                             .downcast_ty();
                         let expr = expr.reify(vcx, (*spec_def_id, post_args));
-                        to_bool(expr).downcast_ty()
+                        Ok(to_bool(expr).downcast_ty())
                     })
                 })
-                .collect::<Vec<vir::ExprBool<'_>>>();
+                .collect::<Result<Vec<vir::ExprBool<'_>>, _>>()?;
             let pledge_args = vcx.alloc_slice(
                 &pre_args
                     .iter()

@@ -2,6 +2,7 @@ mod mir_builtin;
 mod mir_pure;
 mod mir_impure;
 mod mir_purified;
+mod mir_shared;
 mod spec;
 mod pure;
 mod local_def;
@@ -13,6 +14,7 @@ pub mod impure;
 pub mod purified;
 /// Encoders for Rust functions (pure and impure)
 pub mod mir_fn;
+pub mod custom;
 
 pub use r#const::ConstEnc;
 pub use impure::fn_wand::{WandEnc, WandEncOutput, WandEncTask};

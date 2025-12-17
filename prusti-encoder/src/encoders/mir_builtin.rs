@@ -3,7 +3,13 @@ use prusti_utils::config;
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CallableIdn, CastType, FunctionIdn};
 
-use crate::encoders::ty::{RustTyDecomposition, use_pure::TyUsePureEnc};
+use crate::encoders::ty::{
+    RustTyDecomposition,
+    generics::GParams,
+    interpretation::float::FloatDomain,
+    pure::{TyPurePrimData, TyPurePrimDataKind},
+    use_pure::TyUsePureEnc,
+};
 
 pub struct MirBuiltinEnc;
 
@@ -15,6 +21,7 @@ pub enum MirBuiltinEncError {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum MirBuiltinEncTask<'tcx> {
+    Len(ty::Ty<'tcx>),
     UnOp(ty::Ty<'tcx>, mir::UnOp, ty::Ty<'tcx>),
     BinOp(ty::Ty<'tcx>, mir::BinOp, ty::Ty<'tcx>, ty::Ty<'tcx>),
     CheckedBinOp(ty::Ty<'tcx>, mir::BinOp, ty::Ty<'tcx>, ty::Ty<'tcx>),
@@ -22,22 +29,30 @@ pub enum MirBuiltinEncTask<'tcx> {
 
 #[derive(Copy, Clone, Debug)]
 pub enum MirBuiltinEncOutputRef<'vir> {
+    Len(FunctionIdn<'vir, vir::CSnap, vir::CSnap>),
     UnOp(FunctionIdn<'vir, vir::CSnap, vir::CSnap>),
     BinOp(FunctionIdn<'vir, (vir::CSnap, vir::CSnap), vir::CSnap>),
 }
 impl<'vir> task_encoder::OutputRefAny for MirBuiltinEncOutputRef<'vir> {}
 impl<'vir> MirBuiltinEncOutputRef<'vir> {
+    pub fn len(self) -> Option<FunctionIdn<'vir, vir::CSnap, vir::CSnap>> {
+        match self {
+            MirBuiltinEncOutputRef::Len(idn) => Some(idn),
+            _ => None,
+        }
+    }
+
     pub fn un_op(self) -> Option<FunctionIdn<'vir, vir::CSnap, vir::CSnap>> {
         match self {
             MirBuiltinEncOutputRef::UnOp(idn) => Some(idn),
-            MirBuiltinEncOutputRef::BinOp(_) => None,
+            _ => None,
         }
     }
 
     pub fn bin_op(self) -> Option<FunctionIdn<'vir, (vir::CSnap, vir::CSnap), vir::CSnap>> {
         match self {
-            MirBuiltinEncOutputRef::UnOp(_) => None,
             MirBuiltinEncOutputRef::BinOp(idn) => Some(idn),
+            _ => None,
         }
     }
 }
@@ -65,22 +80,20 @@ impl TaskEncoder for MirBuiltinEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-        vir::with_vcx(|vcx| match *task_key {
+        let function = vir::with_vcx(|vcx| match *task_key {
+            MirBuiltinEncTask::Len(arg_ty) => Self::handle_len(vcx, deps, *task_key, arg_ty),
             MirBuiltinEncTask::UnOp(res_ty, op, operand_ty) => {
                 assert_eq!(res_ty, operand_ty);
-                let function = Self::handle_un_op(vcx, deps, *task_key, op, operand_ty)?;
-                Ok((MirBuiltinEncOutput { function }, ()))
+                Self::handle_un_op(vcx, deps, *task_key, op, operand_ty)
             }
             MirBuiltinEncTask::BinOp(res_ty, op, l_ty, r_ty) => {
-                let function = Self::handle_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)?;
-                Ok((MirBuiltinEncOutput { function }, ()))
+                Self::handle_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)
             }
             MirBuiltinEncTask::CheckedBinOp(res_ty, op, l_ty, r_ty) => {
-                let function =
-                    Self::handle_checked_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)?;
-                Ok((MirBuiltinEncOutput { function }, ()))
+                Self::handle_checked_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)
             }
-        })
+        })?;
+        Ok((MirBuiltinEncOutput { function }, ()))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -97,11 +110,40 @@ fn int_name(ty: ty::Ty<'_>) -> &'static str {
         ty::TyKind::Char => "char",
         ty::TyKind::Int(kind) => kind.name_str(),
         ty::TyKind::Uint(kind) => kind.name_str(),
+        ty::TyKind::Float(kind) => kind.name_str(),
         _ => unreachable!("non-integer type"),
     }
 }
 
 impl MirBuiltinEnc {
+    fn handle_len<'vir>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+        key: <Self as TaskEncoder>::TaskKey<'vir>,
+        arg_ty: ty::Ty<'vir>,
+    ) -> Result<vir::Function<'vir>, EncodeFullError<'vir, Self>> {
+        let ty_task = RustTyDecomposition::from_prim_ty(arg_ty);
+        let arg_ty = deps.require_dep::<TyUsePureEnc>(ty_task)?;
+
+        let ty_task = RustTyDecomposition::from_prim_ty(vcx.tcx().types.usize);
+        let res_ty = deps.require_dep::<TyUsePureEnc>(ty_task)?;
+
+        let name = vir::vir_format_identifier!(vcx, "mir_len"); // TODO: name (Slice or Array)
+        let arg_ty_snap = arg_ty.snapshot.downcast_ty();
+        let res_ty_snap = res_ty.snapshot.downcast_ty();
+        let function = FunctionIdn::new(name, arg_ty_snap, res_ty_snap);
+        deps.emit_output_ref(key, MirBuiltinEncOutputRef::Len(function))?;
+
+        let snap_arg_decl = vcx.mk_local_decl("arg", arg_ty_snap);
+        /*let prim_res_ty = e_ty.expect_primitive();
+        let snap_arg = vcx.mk_local_ex(snap_arg_decl);
+        let prim_arg = (prim_res_ty.snap_to_prim)(snap_arg);
+        let mut val =
+            (prim_res_ty.prim_to_snap)(vcx.mk_unary_op_expr(vir::UnOpKind::from(op), prim_arg));
+        */
+        Ok(vcx.mk_function(function, (snap_arg_decl,), &[], &[], None, None))
+    }
+
     fn handle_un_op<'vir>(
         vcx: &'vir vir::VirCtxt<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
@@ -120,23 +162,32 @@ impl MirBuiltinEnc {
         let snap_arg_decl = vcx.mk_local_decl("arg", e_ty_snap);
         let prim_res_ty = e_ty.expect_primitive();
         let snap_arg = vcx.mk_local_ex(snap_arg_decl);
-        let prim_arg = (prim_res_ty.snap_to_prim)(snap_arg);
-        let mut val =
-            (prim_res_ty.prim_to_snap)(vcx.mk_unary_op_expr(vir::UnOpKind::from(op), prim_arg));
-        // Can overflow when doing `- iN::MIN -> iN::MIN`. There is no
-        // `CheckedUnOp`, instead the compiler puts an `TerminatorKind::Assert`
-        // before in debug mode. We should still produce the correct result in
-        // release mode, which the code under this branch does.
-        if op == mir::UnOp::Neg && ty.is_signed() {
-            let bound = vcx.get_min_int(ty.kind());
-            // `snap_to_prim(arg) == -iN::MIN`
-            let cond = vcx.mk_eq_expr(prim_arg.downcast_ty(), bound);
-            // `snap_to_prim(arg) == -iN::MIN ? arg :
-            // prim_to_snap(-snap_to_prim(arg))`
-            val = vcx.mk_ternary_expr(cond, snap_arg, val)
-        }
-
-        Ok(vcx.mk_function(function, (snap_arg_decl,), &[], &[], None, Some(val)))
+        let body = match prim_res_ty.kind {
+            TyPurePrimDataKind::Native(native) => {
+                let prim_arg = (native.snap_to_prim)(snap_arg);
+                let mut val = (prim_res_ty.prim_to_snap)(
+                    vcx.mk_unary_op_expr(vir::UnOpKind::from(op), prim_arg),
+                );
+                // Can overflow when doing `- iN::MIN -> iN::MIN`. There is no
+                // `CheckedUnOp`, instead the compiler puts an `TerminatorKind::Assert`
+                // before in debug mode. We should still produce the correct result in
+                // release mode, which the code under this branch does.
+                if op == mir::UnOp::Neg && ty.is_signed() {
+                    let bound = vcx.get_min_int(ty.kind());
+                    // `snap_to_prim(arg) == -iN::MIN`
+                    let cond = vcx.mk_eq_expr(prim_arg.downcast_ty(), bound);
+                    // `snap_to_prim(arg) == -iN::MIN ? arg :
+                    // prim_to_snap(-snap_to_prim(arg))`
+                    val = vcx.mk_ternary_expr(cond, snap_arg, val)
+                }
+                val
+            }
+            TyPurePrimDataKind::Float(float) => {
+                assert!(matches!(op, mir::UnOp::Neg));
+                (float.fp_neg)(snap_arg)
+            }
+        };
+        Ok(vcx.mk_function(function, (snap_arg_decl,), &[], &[], None, Some(body)))
     }
 
     fn handle_bin_op<'vir>(
@@ -148,7 +199,6 @@ impl MirBuiltinEnc {
         l_ty: ty::Ty<'vir>,
         r_ty: ty::Ty<'vir>,
     ) -> Result<vir::Function<'vir>, EncodeFullError<'vir, Self>> {
-        use mir::BinOp::*;
         let l_ty_task = RustTyDecomposition::from_prim_ty(l_ty);
         let e_l_ty = deps.require_dep::<TyUsePureEnc>(l_ty_task)?;
         let r_ty_task = RustTyDecomposition::from_prim_ty(r_ty);
@@ -172,8 +222,41 @@ impl MirBuiltinEnc {
         deps.emit_output_ref(key, MirBuiltinEncOutputRef::BinOp(function))?;
         let lhs_decl = vcx.mk_local_decl("arg1", e_l_ty_snap);
         let rhs_decl = vcx.mk_local_decl("arg2", e_r_ty_snap);
-        let lhs = (prim_l_ty.snap_to_prim)(vcx.mk_local_ex(lhs_decl));
-        let mut rhs = (prim_r_ty.snap_to_prim)(vcx.mk_local_ex(rhs_decl));
+        let lhs = vcx.mk_local_ex(lhs_decl);
+        let rhs = vcx.mk_local_ex(rhs_decl);
+        match prim_l_ty.kind {
+            TyPurePrimDataKind::Native(prim_l_ty) => {
+                let lhs = (prim_l_ty.snap_to_prim)(lhs);
+                let rhs = (prim_r_ty.expect_native().snap_to_prim)(rhs);
+                let (pres, val) = Self::handle_bin_op_native(vcx, lhs, rhs, res_ty, op, l_ty, r_ty);
+                let val = (prim_res_ty.prim_to_snap)(val);
+                Ok(vcx.mk_function(
+                    function,
+                    (lhs_decl, rhs_decl),
+                    vcx.alloc_slice(&pres),
+                    &[],
+                    None,
+                    Some(val),
+                ))
+            }
+            TyPurePrimDataKind::Float(float) => {
+                assert!(matches!(prim_r_ty.kind, TyPurePrimDataKind::Float(_)));
+                let body = Self::handle_bin_op_float(vcx, lhs, rhs, op, float, *prim_res_ty);
+                Ok(vcx.mk_function(function, (lhs_decl, rhs_decl), &[], &[], None, Some(body)))
+            }
+        }
+    }
+
+    fn handle_bin_op_native<'vir>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        lhs: vir::ExprPrim<'vir>,
+        mut rhs: vir::ExprPrim<'vir>,
+        res_ty: ty::Ty<'vir>,
+        op: mir::BinOp,
+        l_ty: ty::Ty<'vir>,
+        _r_ty: ty::Ty<'vir>,
+    ) -> (Vec<vir::ExprBool<'vir>>, vir::ExprPrim<'vir>) {
+        use mir::BinOp::*;
         if matches!(op, Shl | Shr) {
             // RHS must be smaller than the bit width of the LHS, this is
             // implicit in the `Shl` and `Shr` operators.
@@ -184,7 +267,7 @@ impl MirBuiltinEnc {
             );
         }
 
-        let (pres, val) = if matches!(op, Cmp) {
+        if matches!(op, Cmp) {
             // Cmp does not have a direct analogue to VIR binary operations,
             // so we treat it specially.
             // a > b ? 1 : (b > a ? -1 : 0)
@@ -204,7 +287,9 @@ impl MirBuiltinEnc {
             (vec![], val)
         } else {
             let op_kind = vir::BinOpKind::from(op);
-            let viper_val = vcx.mk_bin_op_expr_inner(op_kind, lhs, rhs);
+            let viper_val = vcx
+                .mk_bin_op_expr_inner(op_kind, lhs.as_dyn(), rhs.as_dyn())
+                .downcast_ty();
             match op {
                 // Overflow well defined as wrapping (implicit) and for the shifts
                 // the RHS will be masked to the bit width.
@@ -278,7 +363,7 @@ impl MirBuiltinEnc {
                                 vcx.mk_int::<1>(),
                             );
                             let common_div = vcx
-                                .mk_bin_op_expr_inner(op_kind, lhs_sub, rhs)
+                                .mk_bin_op_expr_inner(op_kind, lhs_sub.as_dyn(), rhs.as_dyn())
                                 .downcast_ty();
                             let neg_pos = vcx.mk_bin_op_expr(
                                 vir::BinOpKind::Add,
@@ -345,16 +430,64 @@ impl MirBuiltinEnc {
                 // this is handled separately, earlier
                 Cmp => unreachable!(),
             }
-        };
-        let val = (prim_res_ty.prim_to_snap)(val);
-        Ok(vcx.mk_function(
-            function,
-            (lhs_decl, rhs_decl),
-            vcx.alloc_slice(&pres),
-            &[],
-            None,
-            Some(val),
-        ))
+        }
+    }
+
+    fn handle_bin_op_float<'vir>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        lhs: vir::ExprCSnap<'vir>,
+        rhs: vir::ExprCSnap<'vir>,
+        op: mir::BinOp,
+        float: FloatDomain<'vir>,
+        prim_res_ty: TyPurePrimData<'vir>,
+    ) -> vir::ExprCSnap<'vir> {
+        use mir::BinOp::*;
+        match op {
+            Add => (float.fp_add)(lhs, rhs),
+            AddUnchecked | AddWithOverflow => unreachable!(),
+            Sub => (float.fp_sub)(lhs, rhs),
+            SubUnchecked | SubWithOverflow => unreachable!(),
+            Mul => (float.fp_mul)(lhs, rhs),
+            MulUnchecked | MulWithOverflow => unreachable!(),
+            Div => (float.fp_div)(lhs, rhs),
+            Rem => {
+                // SMT uses n = x / y -> round to nearest
+                // Rust truncates
+                // Therefore we cannot use SMT rem
+                let div_res = (float.fp_div)(lhs, rhs);
+                let div_trunc = (float.fp_trunc)(div_res);
+                let mul_res = (float.fp_mul)(div_trunc, rhs);
+                (float.fp_sub)(lhs, mul_res)
+            }
+            BitXor | BitAnd | BitOr | Shl | ShlUnchecked | Shr | ShrUnchecked => unreachable!(),
+            Eq => {
+                let prim_res = (float.fp_eq)(lhs, rhs);
+                (prim_res_ty.prim_to_snap)(prim_res.upcast_ty())
+            }
+            Lt => {
+                let prim_res = (float.fp_lt)(lhs, rhs);
+                (prim_res_ty.prim_to_snap)(prim_res.upcast_ty())
+            }
+            Le => {
+                let prim_res = (float.fp_leq)(lhs, rhs);
+                (prim_res_ty.prim_to_snap)(prim_res.upcast_ty())
+            }
+            Ne => {
+                let prim_res = (float.fp_eq)(lhs, rhs);
+                let neq = vcx.mk_unary_op_expr(vir::UnOpKind::Not, prim_res.upcast_ty());
+                (prim_res_ty.prim_to_snap)(neq)
+            }
+            Ge => {
+                let prim_res = (float.fp_geq)(lhs, rhs);
+                (prim_res_ty.prim_to_snap)(prim_res.upcast_ty())
+            }
+            Gt => {
+                let prim_res = (float.fp_gt)(lhs, rhs);
+                (prim_res_ty.prim_to_snap)(prim_res.upcast_ty())
+            }
+            Cmp => todo!(), // maybe don't implement here but as a stdlib specification
+            Offset => unreachable!(),
+        }
     }
 
     fn handle_checked_bin_op<'vir>(
@@ -389,7 +522,7 @@ impl MirBuiltinEnc {
             int_name(l_ty),
             int_name(r_ty)
         );
-        let res_ty_task = RustTyDecomposition::from_prim_ty(res_ty);
+        let res_ty_task = RustTyDecomposition::from_ty(res_ty, vcx.tcx(), GParams::empty());
         let e_res_ty = deps.require_dep::<TyUsePureEnc>(res_ty_task)?;
         let e_res_ty_snap = e_res_ty.snapshot.downcast_ty();
         let function = FunctionIdn::new(name, (e_l_ty_snap, e_r_ty_snap), e_res_ty_snap);
@@ -420,8 +553,8 @@ impl MirBuiltinEnc {
         let val_exp = vcx
             .mk_bin_op_expr(
                 vir::BinOpKind::from(op),
-                (e_l_ty.expect_primitive().snap_to_prim)(vcx.mk_local_ex(lhs_decl)),
-                (e_r_ty.expect_primitive().snap_to_prim)(vcx.mk_local_ex(rhs_decl)),
+                (e_l_ty.expect_native().snap_to_prim)(vcx.mk_local_ex(lhs_decl)),
+                (e_r_ty.expect_native().snap_to_prim)(vcx.mk_local_ex(rhs_decl)),
             )
             .downcast_ty();
         let val_decl = vcx.mk_local_decl("val", prim_type);

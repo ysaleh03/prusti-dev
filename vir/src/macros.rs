@@ -324,6 +324,10 @@ macro_rules! expr_inner {
         $crate::expr_inner!(@expr_one; $($lhs)*),
         $crate::expr_inner!(@expr_one; $($rhs)*),
     ) };
+    (@expr_one; ( $($lhs:tt)+ ) in ( $($rhs:tt)+ )) => { vcx!().mk_set_in_expr(
+        $crate::expr_inner!(@expr_one; $($lhs)*),
+        $crate::expr_inner!(@expr_one; $($rhs)*),
+    ) };
     (@expr_one; null) => { vcx!().mk_null() };
     (@expr_one; true) => { vcx!().mk_bool::<true>() };
     (@expr_one; false) => { vcx!().mk_bool::<false>() };
@@ -398,9 +402,8 @@ macro_rules! expr_inner {
     ) };
     (@forall_qvars($qvars:ident); :: $($tokens:tt)*) => { compile_error!(concat!("VIR missing triggers or body: `" , stringify!($($tokens)*), "`")) };
 
-    (@forall_qvars($qvars:ident); , ..[$outer:ident] $($tokens:tt)*) => { {
-        $qvars.extend($outer.iter().map(|local| $crate::CastType::as_dyn(vcx!().mk_local_decl_local(local))));
-        let $outer: Vec<$crate::ExprGen<_, _, _>> = $outer.iter().map(|local| vcx!().mk_local_ex_local(local)).collect();
+    (@forall_qvars($qvars:ident); , ..[$outer_decls:ident] $($tokens:tt)*) => { {
+        $qvars.extend($outer_decls.clone());
         $crate::expr_inner!(@forall_qvars($qvars); $($tokens)*)
     } };
     (@forall_qvars($qvars:ident); , $qvar:ident : $qtype:tt $($tokens:tt)* ) => { {
