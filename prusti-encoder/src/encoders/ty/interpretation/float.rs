@@ -1,10 +1,11 @@
 use prusti_rustc_interface::middle::ty;
-use task_encoder::{EncodeFullError, TaskEncoderDependencies};
+use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{BackendInterpretationPair, CallableIdn, FunctionIdn, VirCtxt};
 
 use crate::encoders::ty::{
     interpretation::bitvec::{BitVecEnc, BitVecSize},
-    pure::{DomainBuilder, TyPureEnc},
+    pure::TyPureEnc,
+    purified::TyPurifiedEnc,
 };
 
 pub type FloatDomain<'vir> = &'vir FloatDomainData<'vir>;
@@ -32,10 +33,30 @@ pub struct FloatDomainData<'vir> {
 pub(crate) fn ty_pure_float<'vir>(
     vcx: &'vir VirCtxt<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut DomainBuilder<'vir>,
+    builder: &mut crate::encoders::ty::pure::DomainBuilder<'vir>,
     float: ty::FloatTy,
     prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
 ) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
+    ty_float(vcx, deps, builder, float, prim_to_snap)
+}
+
+pub(crate) fn ty_purified_float<'vir>(
+    vcx: &'vir VirCtxt<'vir>,
+    deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+    builder: &mut crate::encoders::ty::purified::DomainBuilder<'vir>,
+    float: ty::FloatTy,
+    prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
+) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
+    ty_float(vcx, deps, builder, float, prim_to_snap)
+}
+
+pub(crate) fn ty_float<'vir, Enc: TaskEncoder>(
+    vcx: &'vir VirCtxt<'vir>,
+    deps: &mut TaskEncoderDependencies<'vir, Enc>,
+    builder: &mut DomainBuilder<'vir>,
+    float: ty::FloatTy,
+    prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
+) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, Enc>> {
     let i = match float {
         ty::FloatTy::F16 => vcx.alloc_slice(&[
             vcx.alloc(BackendInterpretationPair {

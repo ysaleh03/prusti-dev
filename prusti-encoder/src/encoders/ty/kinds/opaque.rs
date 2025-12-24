@@ -1,14 +1,15 @@
 use crate::encoders::ty::{
     RustOpaque,
     impure::{PredicateBuilder, TyImpureEnc, TyImpureOpaque},
-    pure::{DomainBuilder, TyPureEnc, TyPureOpaque, TyPureOpaqueData},
+    pure::{TyPureEnc, TyPureOpaque, TyPureOpaqueData},
+    purified::{TyPurifiedEnc, TyPurifiedOpaque, TyPurifiedOpaqueData},
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 
 pub(crate) fn ty_pure<'vir>(
     _data: &RustOpaque<'vir>,
     _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut DomainBuilder<'vir>,
+    builder: &mut crate::encoders::ty::pure::DomainBuilder<'vir>,
 ) -> Result<TyPureOpaque<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let arbitrary = builder.function("arbitrary", (), builder.self_type());
     Ok(TyPureOpaqueData { arbitrary })
@@ -21,6 +22,15 @@ pub(crate) fn ty_impure<'vir>(
 ) -> Result<TyImpureOpaque<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
     set_opaque(builder);
     Ok(())
+}
+
+pub(crate) fn ty_purified<'vir>(
+    _data: &RustOpaque<'vir>,
+    _deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+    builder: &mut crate::encoders::ty::purified::DomainBuilder<'vir>,
+) -> Result<TyPurifiedOpaque<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
+    let arbitrary = builder.function("arbitrary", (), builder.self_type());
+    Ok(TyPurifiedOpaqueData { arbitrary })
 }
 
 pub(super) fn set_opaque<'vir>(builder: &mut PredicateBuilder<'vir>) {

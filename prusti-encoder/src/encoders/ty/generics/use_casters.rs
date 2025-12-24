@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::CastType;
 
-use crate::encoders::{Impure, Pure, Purity, ty::RustTyNormalized};
+use crate::encoders::{Impure, Pure, Purified, Purity, ty::RustTyNormalized};
 
 use super::{
     GArgsTy, GArgsTyEnc,
@@ -86,6 +86,40 @@ impl<'vir> GArgCaster<'vir, Impure> {
     }
 }
 
+impl<'vir> GArgCaster<'vir, Purified> {
+    pub fn cast_to_callee_ctx<Curr, Next>(
+        &self,
+        e: vir::ExprGenSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
+        self.get()
+            .map(|c| {
+                c.cast.make_generic.call()(
+                    e.downcast_ty(),
+                    c.ty_args.get_ty(),
+                    c.ty_args.get_const(),
+                )
+                .upcast_ty()
+            })
+            .unwrap_or(e)
+    }
+
+    pub fn cast_to_caller_ctx<Curr, Next>(
+        &self,
+        e: vir::ExprGenSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
+        self.get()
+            .map(|c| {
+                c.cast.make_concrete.call()(
+                    e.downcast_ty(),
+                    c.ty_args.get_ty(),
+                    c.ty_args.get_const(),
+                )
+                .upcast_ty()
+            })
+            .unwrap_or(e)
+    }
+}
+
 fn alloc_stmt<'vir>(stmt: vir::StmtKindData<'vir>) -> vir::Stmt<'vir> {
     vir::with_vcx(|vcx| vcx.alloc(vir::StmtGenData::new(vcx.alloc(stmt))))
 }
@@ -144,5 +178,34 @@ impl TaskEncoder for GArgsCastEnc<Impure> {
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
         CastersEnc::<Impure>::emit_outputs(program);
+    }
+}
+
+impl TaskEncoder for GArgsCastEnc<Purified> {
+    task_encoder::encoder_cache!(GArgsCastEnc<Purified>);
+    type TaskDescription<'tcx> = Option<RustTyNormalized<'tcx>>;
+    type OutputFullDependency<'vir> = GArgCaster<'vir, Purified>;
+    type OutputFullLocal<'vir> = ();
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        *task
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        deps.emit_output_ref(*task_key, ())?;
+        let Some(ty) = task_key else {
+            return Ok(((), GArgCaster::NoCast));
+        };
+
+        let cast = deps.require_ref::<CastersEnc<Purified>>((ty.param, ty.concrete))?;
+        let ty_args = deps.require_dep::<GArgsTyEnc>(ty.args)?;
+        Ok(((), GArgCaster::Casters(Casters { cast, ty_args })))
+    }
+
+    fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
+        CastersEnc::<Purified>::emit_outputs(program);
     }
 }

@@ -104,8 +104,8 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
             ty: TyUsePure<'vir>,
         ) -> PurifiedLocalDef<'vir> {
             let snap_local = vir::vir_format!(vcx, "_{}s", local.index());
-            let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot());
-            let local_ex = vcx.mk_local_ex_local(local);
+            let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot);
+            let local_ex = vcx.mk_local_ex(local_snap);
             PurifiedLocalDef {
                 local_snap,
                 local_ex,
@@ -170,7 +170,7 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
                             sig.inputs()[local.index() - 1]
                         };
                         let rust_ty_task = RustTyDecomposition::from_ty(rust_ty, vcx.tcx(), def_id);
-                        let ty = deps.require_dep::<TyUseImpureEnc>(rust_ty_task)?;
+                        let ty = deps.require_dep::<TyUsePureEnc>(rust_ty_task)?;
                         Ok(mk_local_def(vcx, local, ty))
                     })
                     .collect::<Result<IndexVec<_, _>, _>>()?;

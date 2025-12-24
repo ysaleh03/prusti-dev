@@ -847,13 +847,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 for elem in place.projection {
                     if crossed_ref {
                         use vir::Reify;
-                        let (expr, _) = crate::encoders::mir_pure::encode_place_element(
+                        let (expr, _) = crate::encoders::mir_pure::Enc::encode_place_element(
                             self.deps,
-                            self.vcx.tcx(),
                             place_ty,
                             elem,
                             result.lift().downcast_ty(),
-                            None,
                         );
                         result = expr.reify(self.vcx, (self.def_id, &[])).as_dyn();
                     } else {
@@ -1657,7 +1655,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 );
                 self.current_fpcs = Some(current_fpcs);
 
-                let e_bool = self.ty_use_pure(self.vcx.tcx().types.bool);
+                let e_bool = self.ty_use_purified(self.vcx.tcx().types.bool);
                 let enc = self.encode_operand_snap(cond).downcast_ty();
                 let enc = (e_bool.expect_primitive().snap_to_prim)(enc);
                 let expected = self.vcx.mk_const_expr(vir::ConstData::Bool(*expected));

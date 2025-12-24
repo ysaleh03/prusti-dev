@@ -10,6 +10,7 @@ use crate::encoders::{
         impure::TyImpureEnc,
         lifted::{TypeOfEnc, ty_constructor::TyConstructorEnc},
         pure::TyPureEnc,
+        purified::TyPurifiedEnc,
     },
 };
 
@@ -317,6 +318,156 @@ impl TaskEncoder for CastersEnc<Impure> {
         for output in Self::all_outputs_local_no_errors() {
             for method in output {
                 program.add_method(method);
+            }
+        }
+    }
+}
+
+impl TaskEncoder for CastersEnc<Purified> {
+    task_encoder::encoder_cache!(CastersEnc<Purified>);
+
+    type TaskDescription<'vir> = (RustTy<'vir>, RustTy<'vir>);
+    type OutputRef<'vir> = GArgCasters<'vir, Purified>;
+    type OutputFullLocal<'vir> = Vec<vir::Function<'vir>>;
+    type EncodingError = ();
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        *task
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        let (param, concrete) = task_key;
+        assert!(param.specifics.is_param() && !concrete.specifics.is_param());
+        vir::with_vcx(|vcx| {
+            use vir::CastType;
+            let domain_ref = deps.require_ref::<TyPurifiedEnc>(concrete)?;
+            let generic_snap = vir::TYPE_PSNAP;
+            let generic_typeof = deps.require_ref::<TypeOfEnc>(param)?.typeof_function;
+            let self_ty = (domain_ref.domain)().downcast_ty();
+            let base_name = concrete.name();
+            let ty_constructor = deps.require_ref::<TyConstructorEnc>(concrete)?;
+            let generics = deps.require_dep::<GenericParamsEnc>(concrete.params)?;
+
+            let make_generic_ident = FunctionIdn::new(
+                vir::vir_format_identifier!(vcx, "make_generic_s_{base_name}"),
+                (self_ty, generics.ty_args(), generics.const_args()),
+                generic_snap,
+            );
+
+            let make_concrete_ident = FunctionIdn::new(
+                vir::vir_format_identifier!(vcx, "make_concrete_s_{base_name}"),
+                (generic_snap, generics.ty_args(), generics.const_args()),
+                self_ty,
+            );
+
+            deps.emit_output_ref(
+                *task_key,
+                GArgCasters {
+                    make_generic: make_generic_ident,
+                    make_concrete: make_concrete_ident,
+                },
+            )?;
+            let make_generic_arg = vcx.mk_local_decl("self", self_ty);
+            let make_generic_expr = vcx.mk_local_ex(make_generic_arg);
+
+            let make_generic_result = vcx.mk_result(generic_snap);
+
+            // Type parameters obtained from the snapshot-encoded value of the type,
+            let ty_params_from_snap = generics
+                .ty_decls()
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| ty_constructor.ty_param_from_snap(idx, make_generic_expr))
+                .collect::<Vec<_>>();
+
+            let const_params_from_snap = generics
+                .const_decls()
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| ty_constructor.const_param_from_snap(idx, make_generic_expr))
+                .collect::<Vec<_>>();
+
+            // Asserts that the type of `param` is equal to the ty constructor
+            // applied to type arguments `args`
+            let mk_type_spec = |param: vir::ExprPSnap<'vir>, ty_args, const_args| {
+                let lifted_param_snap_ty = generic_typeof(param.upcast_ty());
+                vcx.mk_eq_expr(
+                    lifted_param_snap_ty,
+                    (ty_constructor.ty_constructor)(ty_args, const_args),
+                )
+            };
+
+            let make_generic = vcx.mk_function(
+                make_generic_ident,
+                (
+                    make_generic_arg,
+                    generics.ty_decls(),
+                    generics.const_decls(),
+                ),
+                &[],
+                vcx.alloc_slice(&[
+                    mk_type_spec(
+                        make_generic_result,
+                        &ty_params_from_snap,
+                        &const_params_from_snap,
+                    ),
+                    vcx.mk_eq_expr(
+                        make_concrete_ident(
+                            make_generic_result,
+                            &ty_params_from_snap,
+                            &const_params_from_snap,
+                        ),
+                        make_generic_expr,
+                    ),
+                ]),
+                None,
+                None,
+            );
+
+            let make_concrete_snap_arg_decl = vcx.mk_local_decl("snap", generic_snap);
+            let make_concrete_snap_arg_expr = vcx.mk_local_ex(make_concrete_snap_arg_decl);
+
+            let _make_concrete_pre = mk_type_spec(
+                make_concrete_snap_arg_expr,
+                generics.ty_exprs(),
+                generics.const_exprs(),
+            );
+
+            let make_concrete_post = vcx.mk_eq_expr(
+                make_generic_ident(
+                    vcx.mk_result(self_ty),
+                    generics.ty_exprs(),
+                    generics.const_exprs(),
+                ),
+                make_concrete_snap_arg_expr,
+            );
+
+            let make_concrete = vcx.mk_function(
+                make_concrete_ident,
+                (
+                    make_concrete_snap_arg_decl,
+                    generics.ty_decls(),
+                    generics.const_decls(),
+                ),
+                // TODO: type preconditions do not currently work
+                // vcx.alloc_slice(&[make_concrete_pre]),
+                &[],
+                vcx.alloc_slice(&[make_concrete_post]),
+                None,
+                None,
+            );
+
+            Ok((vec![make_generic, make_concrete], ()))
+        })
+    }
+
+    fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
+        for output in Self::all_outputs_local_no_errors() {
+            for function in output {
+                program.add_function(function);
             }
         }
     }

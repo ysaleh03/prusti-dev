@@ -98,6 +98,9 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
             ExprKindGenData::BinOp(v) => {
                 vcx.alloc(ExprKindGenData::BinOp(v.purified_reify(vcx, lctx)))
             }
+            ExprKindGenData::SetLiteral(v) => {
+                vcx.alloc(ExprKindGenData::SetLiteral(v.purified_reify(vcx, lctx)))
+            }
             ExprKindGenData::Ternary(v) => {
                 vcx.alloc(ExprKindGenData::Ternary(v.purified_reify(vcx, lctx)))
             }
@@ -126,9 +129,6 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
             }
             ExprKindGenData::Lazy(v) => (v.func)(vcx, post_lctx),
 
-            ExprKindGenData::AdtConstructor(v) => {
-                vcx.alloc(ExprKindGenData::AdtConstructor(v.purified_reify(vcx, lctx)))
-            }
             ExprKindGenData::AdtDestructor(v, field) => vcx.alloc(ExprKindGenData::AdtDestructor(
                 v.purified_reify(vcx, lctx),
                 field,
@@ -136,6 +136,7 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
             ExprKindGenData::AdtDiscriminator(v, cons) => vcx.alloc(
                 ExprKindGenData::AdtDiscriminator(v.purified_reify(vcx, lctx), cons),
             ),
+            ExprKindGenData::Todo(v) => vcx.alloc(ExprKindGenData::Todo(v)),
         }
     }
 }
