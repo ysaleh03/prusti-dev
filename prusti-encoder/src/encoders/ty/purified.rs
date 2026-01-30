@@ -144,7 +144,7 @@ pub struct TyPurifiedRef<'vir> {
 
 impl<'vir> task_encoder::OutputRefAny for TyPurifiedRef<'vir> {}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TyPurifiedEncLocal<'vir> {
     pub unreachable_to_snap: vir::Function<'vir>,
     pub kind: TyPurifiedEncLocalKind<'vir>,

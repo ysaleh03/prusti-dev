@@ -80,7 +80,7 @@ pub fn test_entrypoint<'tcx>(
     crate::encoders::FunctionCallEnc::emit_outputs(&mut program);
 
     program.header("user functions");
-    crate::encoders::MethodCallEnc::emit_outputs(&mut program);
+    crate::encoders::ImpureMethodCallEnc::emit_outputs(&mut program);
 
     program.header("MIR builtins");
     crate::encoders::MirBuiltinEnc::emit_outputs(&mut program);

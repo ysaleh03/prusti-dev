@@ -1,3 +1,4 @@
+use prusti_rustc_interface::abi;
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, FunctionIdn};
 
@@ -38,11 +39,11 @@ pub type TyUsePurified<'vir> = Ty<'vir, UsePurifiedTyDatas>;
 pub type TyUsePurifiedStruct<'vir> = StructData<'vir, UsePurifiedTyDatas>;
 pub type TyUsePurifiedEnum<'vir> = EnumData<'vir, UsePurifiedTyDatas>;
 
-// #[derive(Debug, Clone, Copy)]
-// pub struct TyUsePurifiedData<'vir> {
-//     args: GArgsTy<'vir>,
-//     purified: <PurifiedTyDatas as TyDatas<'vir>>::TyData,
-// }
+#[derive(Debug, Clone, Copy)]
+pub struct TyUsePurifiedData<'vir> {
+    args: GArgsTy<'vir>,
+    purified: <PurifiedTyDatas as TyDatas<'vir>>::TyData,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct TyUsePurifiedImmRef<'vir> {
@@ -73,12 +74,12 @@ pub struct TyUsePurifiedStructData<'vir> {
     purified: <PurifiedTyDatas as TyDatas<'vir>>::StructData,
 }
 
-// #[derive(Debug, Clone, Copy)]
-// pub struct TyUsePurifiedEnumData<'vir> {
-//     #[allow(dead_code)]
-//     args: GArgsTy<'vir>,
-//     purified: <PurifiedTyDatas as TyDatas<'vir>>::EnumData,
-// }
+#[derive(Debug, Clone, Copy)]
+pub struct TyUsePurifiedEnumData<'vir> {
+    #[allow(dead_code)]
+    args: GArgsTy<'vir>,
+    purified: <PurifiedTyDatas as TyDatas<'vir>>::EnumData,
+}
 
 /// Encodes a type into the snapshot representation. Takes an arbitrary Rust
 /// `Ty` and provides a wrapper around the results of the `DomainEnc` encoder.
@@ -160,15 +161,11 @@ impl<'a, 'vir> TyUsePurifiedWalker<'a, 'vir> {
         ty: TyData<'vir, (RustTyDatas, PurifiedTyDatas)>,
     ) -> TySpecifics<'vir, UsePurifiedTyDatas> {
         match &ty.specifics {
-            TySpecifics::Param(data) => {
-                let _: () = *data.1;
-                TySpecifics::mk_param(())
-            }
+            TySpecifics::Param(..) => TySpecifics::mk_param(()),
             TySpecifics::Opaque(data) => TySpecifics::mk_opaque(*data.1),
             TySpecifics::Primitive(data) => TySpecifics::mk_primitive(*data.1),
             TySpecifics::ImmRef((data, ref_domain)) => {
                 let caster = self.encode_normalized(**data, ty.0.params);
-                // let inner_ty = data.decompose(ty.0.params);
                 TySpecifics::mk_immref(TyUsePurifiedImmRef {
                     snap_ty: self.args_t.get_ty()[0],
                     caster,
@@ -178,7 +175,6 @@ impl<'a, 'vir> TyUsePurifiedWalker<'a, 'vir> {
             }
             TySpecifics::MutRef((data, ref_domain)) => {
                 let caster = self.encode_normalized(**data, ty.0.params);
-                // let inner_ty = data.decompose(ty.0.params);
                 TySpecifics::mk_mutref(TyUsePurifiedMutRef {
                     snap_ty: self.args_t.get_ty()[0],
                     caster,
@@ -247,11 +243,11 @@ impl<'a, 'vir> TyUsePurifiedWalker<'a, 'vir> {
     }
 }
 
-// impl<'vir> TyUsePurifiedData<'vir> {
-//     pub fn snapshot(&self) -> vir::TypeSnap<'vir> {
-//         self.purified
-//     }
-// }
+impl<'vir> TyUsePurifiedData<'vir> {
+    pub fn snapshot(&self) -> vir::TypeSnap<'vir> {
+        todo!()
+    }
+}
 
 impl<'vir> TyUsePurifiedRef<'vir> {
     pub fn unreachable_to_snap<Curr, Next>(&self) -> vir::ExprGenSnap<'vir, Curr, Next> {
@@ -295,9 +291,54 @@ impl<'vir> TyUsePurifiedMutRef<'vir> {
     }
 }
 
-// impl<'vir> TyData<'vir, UsePurifiedTyDatas> {}
+impl<'vir> TyData<'vir, UsePurifiedTyDatas> {
+    // pub fn pack(
+    //     &self,
+    //     variant: Option<abi::VariantIdx>,
+    //     self_snap: vir::ExprSnap<'vir>,
+    //     label: Option<vir::OldLabel<'vir>>,
+    // ) -> Vec<vir::Stmt<'vir>> {
+    //     if let Some(variant) = variant {
+    //         return self.expect_variant(variant).inner.pack();
+    //     }
+    // }
+}
 
 impl<'vir> TyUsePurifiedStruct<'vir> {
+    // pub fn pack(
+    //     &self,
+    //     self_snap: vir::ExprCSnap<'vir>,
+    // ) -> impl Iterator<Item = vir::Stmt<'vir>> + '_ {
+    //     let snaps = self
+    //         .fields
+    //         .iter()
+    //         .map(|f| f.field_snap(self_snap))
+    //         .collect();
+    //     let cons = self.field_snaps_to_snap(snaps);
+    //     let pack = vir::with_vcx(|vcx| vcx.mk_pure_assign_stmt(self_snap, cons));
+    //     [pack].into_iter()
+    // }
+
+    // pub fn unpack(
+    //     &self,
+    //     self_snap: vir::ExprCSnap<'vir>,
+    // ) -> impl Iterator<Item = vir::Stmt<'vir>> + '_ {
+    //     let snaps = self
+    //         .fields
+    //         .iter()
+    //         .map(|f| f.field_snap(self_snap))
+    //         .collect();
+    //     let cons = self.field_snaps_to_snap(snaps);
+    //     let pack = vir::with_vcx(|vcx| vcx.mk_pure_assign_stmt(self_snap, cons));
+    //     [pack].into_iter()
+    // }
+
+    // pub fn field_access<Curr, Next>(
+    //     &self,
+    //     snap: vir::ExprGenCSnap<'vir, Curr, Next>,
+    //     idx:
+    // )
+
     pub fn field_snaps_to_snap<Curr, Next>(
         &self,
         mut snaps: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,

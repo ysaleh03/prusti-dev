@@ -264,25 +264,25 @@ impl<'vir, A: Arity> MethodIdn<'vir, A> {
         }
     }
 }
-impl<'a, 'vir, A: Arity> FnOnce<(A::Exprs<'a, 'vir, (), !>, &'vir [LocalDyn<'vir>])>
+impl<'a, 'vir, A: Arity> FnOnce<(A::Exprs<'a, 'vir, (), !>, &'vir [LocalDeclDyn<'vir>])>
     for MethodIdn<'vir, A>
 {
     type Output = StmtKindGenData<'vir, (), !>;
     extern "rust-call" fn call_once(
         self,
-        (args, targets): (A::Exprs<'a, 'vir, (), !>, &'vir [LocalDyn<'vir>]),
+        (args, targets): (A::Exprs<'a, 'vir, (), !>, &'vir [LocalDeclDyn<'vir>]),
     ) -> Self::Output {
         self.call().call_once((args, targets))
     }
 }
 impl<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity>
-    FnOnce<(A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDyn<'vir>])>
+    FnOnce<(A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDeclDyn<'vir>])>
     for MethodIdnGen<'vir, Curr, Next, A>
 {
     type Output = StmtKindGenData<'vir, Curr, Next>;
     extern "rust-call" fn call_once(
         self,
-        (args, targets): (A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDyn<'vir>]),
+        (args, targets): (A::Exprs<'a, 'vir, Curr, Next>, &'vir [LocalDeclDyn<'vir>]),
     ) -> Self::Output {
         with_vcx(|vcx| {
             let args = A::args(vcx, args);

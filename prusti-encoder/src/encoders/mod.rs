@@ -20,12 +20,14 @@ pub use r#const::ConstEnc;
 pub use impure::fn_wand::{WandEnc, WandEncOutput, WandEncTask};
 pub use local_def::*;
 pub use mir_builtin::{MirBuiltinEnc, MirBuiltinEncTask};
-pub use mir_fn::{FunctionCallEnc, MethodCallEnc, encode_all_in_crate};
+pub use mir_fn::{
+    FunctionCallEnc, ImpureMethodCallEnc, PurifiedMethodCallEnc, encode_all_in_crate,
+};
 pub use mir_impure::ImpureEncVisitor;
 pub use mir_pure::{MirPureEnc, MirPureEncTask, PureKind};
 pub use mir_purified::PurifiedEncVisitor;
 pub use pure::spec::MirSpecEnc;
-pub use purified::fn_wand::{PurifiedWandEnc, PurifiedWandEncOutput /*PurifiedWandEncTask*/};
+pub use purified::fn_wand::{PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask};
 pub use purified_local_def::*;
 pub(super) use spec::with_proc_spec;
 pub use spec::{SpecEnc, SpecEncTask, is_function_trusted, is_type_trusted};
@@ -42,6 +44,7 @@ pub use ty::{
 pub(crate) trait Purity:
     'static + std::fmt::Debug + Clone + Copy + PartialEq + Eq + std::hash::Hash
 {
+    type ArgTy: vir::CompType;
 }
 
 /// Some encoders work for pure, impure and purified encodings, though might
@@ -50,7 +53,9 @@ pub(crate) trait Purity:
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pure;
 
-impl Purity for Pure {}
+impl Purity for Pure {
+    type ArgTy = vir::Ref;
+}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -58,7 +63,9 @@ impl Purity for Pure {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Impure;
 
-impl Purity for Impure {}
+impl Purity for Impure {
+    type ArgTy = vir::Ref;
+}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -66,4 +73,6 @@ impl Purity for Impure {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Purified;
 
-impl Purity for Purified {}
+impl Purity for Purified {
+    type ArgTy = vir::Snap;
+}

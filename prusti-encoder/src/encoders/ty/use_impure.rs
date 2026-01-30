@@ -237,10 +237,13 @@ impl<'vir> TyUseImpureData<'vir> {
         self_new_snap: vir::ExprSnap<'vir>,
     ) -> vir::Stmt<'vir> {
         vcx.alloc(vir::StmtData::new(vcx.alloc((self.impure.method_assign)(
-            self_ref,
-            self.args.get_ty(),
-            self.args.get_const(),
-            self_new_snap,
+            (
+                self_ref,
+                self.args.get_ty(),
+                self.args.get_const(),
+                self_new_snap,
+            ),
+            &[],
         ))))
     }
 

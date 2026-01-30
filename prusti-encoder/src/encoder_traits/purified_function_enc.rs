@@ -1,6 +1,6 @@
 use std::alloc::Global;
 
-use pcg::{borrow_checker::r#impl::BorrowCheckerImpl, r#loop::LoopAnalysis, PcgCtxt};
+use pcg::{PcgCtxt, borrow_checker::r#impl::BorrowCheckerImpl, r#loop::LoopAnalysis};
 use prusti_rustc_interface::{
     data_structures::fx::FxHashMap,
     middle::{mir, ty},
@@ -10,9 +10,9 @@ use vir::{CastType, ManySnap, ManyTyVal, MethodIdn, ViperIdent};
 
 use crate::{
     encoders::{
-        lifted::func_def_ty_params::LiftedTyParamsEnc, MirPurifiedEnc, PurifiedEncVisitor,
-        PurifiedLocalDef, PurifiedLocalDefEnc, PurifiedMirSpecEnc, PurifiedWandEnc,
-        PurifiedWandEncTask,
+        MirPurifiedEnc, PurifiedEncVisitor, PurifiedLocalDef, PurifiedLocalDefEnc,
+        PurifiedMirSpecEnc, PurifiedWandEnc, PurifiedWandEncTask,
+        lifted::func_def_ty_params::LiftedTyParamsEnc,
     },
     trait_support::is_function_with_body,
 };

@@ -1130,7 +1130,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
             let current_fpcs = self.current_fpcs.take().unwrap();
             let cfpcs = &current_fpcs.statements[location.statement_index];
             for phase in EvalStmtPhase::phases() {
-                self.pcg_actions(&cfpcs.states[phase], cfpcs.actions(phase), false).unwrap();
+                self.pcg_actions(&cfpcs.states[phase], &cfpcs.actions(phase), false).unwrap();
             }
             self.current_fpcs = Some(current_fpcs);
 
@@ -1230,7 +1230,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
         let cfpcs = &current_fpcs.statements[location.statement_index];
         for phase in EvalStmtPhase::phases() {
             comment!(self, "PCG (T) {phase}");
-            self.pcg_actions(&cfpcs.states[phase], cfpcs.actions(phase), false)
+            self.pcg_actions(&cfpcs.states[phase], &cfpcs.actions(phase), false)
                 .unwrap();
         }
         self.current_fpcs = Some(current_fpcs);
@@ -1417,7 +1417,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                 } else {
                     vir::with_vcx(|vcx| {
                         vcx.with_span(terminator.source_info.span, |vcx| {
-                            let Ok(func_out) = self.deps.require_dep::<encoders::MethodCallEnc>(
+                            let Ok(func_out) = self.deps.require_dep::<encoders::ImpureMethodCallEnc>(
                                 CallTaskDescription::new(self.def_id, caller_substs, func_def_id),
                             ) else {
                                 self.current_terminator = Some(

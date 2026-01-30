@@ -25,24 +25,24 @@ pub enum PurifiedWandEncError {
 }
 
 impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
-    pub fn package_wands(
+    pub fn package_proofs(
         &mut self,
         final_borrow_state: &BorrowsState<'_, 'vir>,
-    ) -> Vec<vir::Stmt<'vir>> {
-        let mut wand_packages = Vec::new();
+    ) -> Result<Vec<vir::Stmt<'vir>>, EncodeFullError<'vir, E>> {
+        let mut proof_packages = Vec::new();
         let vcx = self.vcx;
         let label = self.new_label("package_post");
         let snap_lhs = |l| {
             let ld: crate::encoders::PurifiedLocalDef<'vir> = self.local_defs.locals[l];
             if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(ld.local_snap, label)
+                vcx.mk_local_labelled_old_expr(ld.local_ex, label)
             } else {
-                vcx.mk_old_expr(ld.local_snap)
+                vcx.mk_old_expr(ld.local_ex)
             }
         };
         let snap_rhs = |l| {
             let ld: crate::encoders::PurifiedLocalDef<'vir> = self.local_defs.locals[l];
-            vcx.mk_old_expr(ld.local_snap)
+            vcx.mk_old_expr(ld.local_ex)
         };
 
         for wand_data in self.wands.viper_wands() {
@@ -58,8 +58,8 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                 );
                 let actions = ug.actions(self.pcg_ctxt()).unwrap();
                 let unblock = self.block(|visitor| {
-                    visitor.pcs_unblock_actions(final_borrow_state, &actions, Some(label));
-                });
+                    visitor.pcs_unblock_actions(final_borrow_state, &actions, Some(label))
+                })?;
                 package_script.extend(unblock);
             }
 
@@ -74,12 +74,12 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                     package_script.push(vcx.mk_exhale_stmt(spec));
                 });
             }
-            wand_packages.push(
+            proof_packages.push(
                 self.vcx
                     .mk_package_stmt(wand, self.vcx.alloc_slice(&package_script)),
             );
         }
-        wand_packages
+        Ok(proof_packages)
     }
 }
 
@@ -99,7 +99,7 @@ pub struct PurifiedWandEncOutput<'vir> {
     outputs: Vec<FunctionShapeOutput>,
 
     /// Encoded VIR expressions for the magic wands.
-    wands: Vec<WandData<'vir>>,
+    wands: Vec<PurifiedWandData<'vir>>,
 }
 
 impl<'vir> PurifiedWandEncOutput<'vir> {
@@ -215,7 +215,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         })
     }
 
-    pub fn apply_wands<E: TaskEncoder>(
+    pub fn apply_proofs<E: TaskEncoder>(
         &self,
         arguments: &[vir::ExprSnap<'vir>],
         label_pre: &'vir str,
@@ -240,7 +240,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
 
     fn mk_wand<'a, E: TaskEncoder>(
         &'a self,
-        wand_data: &WandData<'vir>,
+        wand_data: &PurifiedWandData<'vir>,
         mut snap_lhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
         mut snap_rhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
         vcx: &'vir vir::VirCtxt<'vir>,
@@ -269,11 +269,11 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct WandEncTask<'tcx> {
+pub struct PurifiedWandEncTask<'tcx> {
     pub data: FunctionData<'tcx>,
 }
 
-impl<'tcx> WandEncTask<'tcx> {
+impl<'tcx> PurifiedWandEncTask<'tcx> {
     pub fn def_id(&self) -> DefId {
         self.data.def_id()
     }
@@ -286,22 +286,26 @@ impl<'tcx> WandEncTask<'tcx> {
     }
 }
 
-pub type WandRhsKey = FunctionShapeInput;
-pub type WandLhsKey = FunctionShapeNode;
+pub type PurifiedWandRhsKey = FunctionShapeInput;
+pub type PurifiedWandLhsKey = FunctionShapeNode;
 
 #[derive(Clone, Debug)]
-pub struct WandData<'vir> {
+pub struct PurifiedWandData<'vir> {
     /// Lifetime projections on the right-hand side of the wand. Guaranteed to be
     /// non-empty.
-    rhs: Vec<WandRhsKey>,
+    rhs: Vec<PurifiedWandRhsKey>,
     /// Lifetime projections on the left-hand side of the wand. Guaranteed to be
     /// non-empty.
-    lhs: Vec<WandLhsKey>,
+    lhs: Vec<PurifiedWandLhsKey>,
     pledges: EncodedPledges<'vir>,
 }
 
-impl<'vir> WandData<'vir> {
-    pub fn new(lhs: Vec<WandLhsKey>, rhs: Vec<WandRhsKey>, pledges: EncodedPledges<'vir>) -> Self {
+impl<'vir> PurifiedWandData<'vir> {
+    pub fn new(
+        lhs: Vec<PurifiedWandLhsKey>,
+        rhs: Vec<PurifiedWandRhsKey>,
+        pledges: EncodedPledges<'vir>,
+    ) -> Self {
         debug_assert!(!lhs.is_empty());
         debug_assert!(!rhs.is_empty());
         Self { rhs, lhs, pledges }
@@ -311,9 +315,9 @@ impl<'vir> WandData<'vir> {
 impl TaskEncoder for PurifiedWandEnc {
     task_encoder::encoder_cache!(PurifiedWandEnc);
 
-    type TaskDescription<'vir> = WandEncTask<'vir>;
+    type TaskDescription<'vir> = PurifiedWandEncTask<'vir>;
 
-    type TaskKey<'vir> = WandEncTask<'vir>;
+    type TaskKey<'vir> = PurifiedWandEncTask<'vir>;
 
     type OutputFullDependency<'vir> = PurifiedWandEncOutput<'vir>;
 
@@ -370,11 +374,11 @@ impl TaskEncoder for PurifiedWandEnc {
                     None,
                 ));
             }
-            let wands: Vec<WandData<'vir>> = coupled_edges
+            let wands: Vec<PurifiedWandData<'vir>> = coupled_edges
                 .into_iter()
                 .map(|hyper_edge| {
                     let (sources, targets) = hyper_edge.into_tuple();
-                    WandData::new(targets, sources, pledges.clone())
+                    PurifiedWandData::new(targets, sources, pledges.clone())
                 })
                 .collect();
             let output: PurifiedWandEncOutput<'vir> = PurifiedWandEncOutput {
@@ -389,7 +393,7 @@ impl TaskEncoder for PurifiedWandEnc {
 }
 
 impl<'vir> PurifiedWandEncOutput<'vir> {
-    pub fn viper_wands(&self) -> Vec<WandData<'vir>> {
+    pub fn viper_wands(&self) -> Vec<PurifiedWandData<'vir>> {
         self.wands.clone()
     }
 

@@ -1,5 +1,6 @@
 use std::ops::Index;
 
+use prusti_interface::environment::body::MirBody;
 use prusti_rustc_interface::{
     index::IndexVec,
     middle::{mir, ty},
@@ -11,8 +12,8 @@ use vir::HasType;
 
 use crate::{
     encoders::{
-        TyUseImpureEnc, TyUsePureEnc, TyUsePurifiedEnc,
-        ty::{RustTyDecomposition, use_pure::TyUsePure},
+        TyUsePurifiedEnc,
+        ty::{RustTyDecomposition, use_purified::TyUsePurified},
     },
     trait_support::is_function_with_body,
 };
@@ -72,16 +73,71 @@ pub type PurifiedMirLocalDefEncError = ();
 pub struct PurifiedLocalDef<'vir> {
     pub local_snap: vir::LocalDeclSnap<'vir>,
     pub local_ex: vir::ExprSnap<'vir>,
-    // pub ty: &'vir PredicateEncOutputRef<'vir>,
+}
+
+fn should_encode_locals<'vir>(vcx: &vir::VirCtxt<'vir>, def_id: DefId) -> bool {
+    if crate::encoders::spec::is_function_trusted(def_id) {
+        tracing::info!("function {def_id:?} is trusted, skipping local encoding");
+        return false;
+    }
+    if def_id.as_local().is_none() {
+        tracing::info!("function {def_id:?} is not a local function, skipping local encoding");
+        return false;
+    }
+    if !is_function_with_body(vcx.tcx(), def_id) {
+        tracing::info!("function {def_id:?} is not a function with body, skipping local encoding");
+        return false;
+    }
+    true
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PurifiedMirLocalDefEncTask {
+    ExternSpec(DefId),
+    Local { def_id: DefId, all_locals: bool },
+}
+
+impl PurifiedMirLocalDefEncTask {
+    fn all_locals(self) -> bool {
+        match self {
+            PurifiedMirLocalDefEncTask::ExternSpec(_) => true,
+            PurifiedMirLocalDefEncTask::Local { all_locals, .. } => all_locals,
+        }
+    }
+
+    fn body<'tcx>(self, vcx: &vir::VirCtxt<'tcx>) -> Option<MirBody<'tcx>> {
+        match self {
+            PurifiedMirLocalDefEncTask::ExternSpec(def_id) => {
+                let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
+                Some(vcx.body_mut().get_spec_body(def_id, substs, None))
+            }
+            PurifiedMirLocalDefEncTask::Local { def_id, .. } => {
+                if should_encode_locals(vcx, def_id) {
+                    let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
+                    Some(vcx.body_mut().get_impure_fn_body(
+                        def_id.as_local().unwrap(),
+                        substs,
+                        None,
+                    ))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn def_id(self) -> DefId {
+        match self {
+            PurifiedMirLocalDefEncTask::ExternSpec(def_id) => def_id,
+            PurifiedMirLocalDefEncTask::Local { def_id, .. } => def_id,
+        }
+    }
 }
 
 impl TaskEncoder for PurifiedMirLocalDefEnc {
     task_encoder::encoder_cache!(PurifiedMirLocalDefEnc);
 
-    type TaskDescription<'vir> = (
-        DefId, // ID of the function
-        bool,  // `true` = include non-argument locals (if available)
-    );
+    type TaskDescription<'vir> = PurifiedMirLocalDefEncTask;
 
     type OutputRef<'vir> = PurifiedMirLocalDefEncOutputRef;
     type OutputFullDependency<'vir> = PurifiedMirLocalDefEncOutput<'vir>;
@@ -96,12 +152,10 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-        let (def_id, all_locals) = *task_key;
-
         fn mk_local_def<'vir>(
             vcx: &'vir vir::VirCtxt<'vir>,
             local: mir::Local,
-            ty: TyUsePure<'vir>,
+            ty: TyUsePurified<'vir>,
         ) -> PurifiedLocalDef<'vir> {
             let snap_local = vir::vir_format!(vcx, "_{}s", local.index());
             let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot);
@@ -112,16 +166,8 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
             }
         }
 
-        let trusted = crate::encoders::spec::is_function_trusted(def_id);
         vir::with_vcx(|vcx| {
-            let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
-            let data = if !trusted
-                && let Some(local_def_id) = def_id.as_local()
-                && is_function_with_body(vcx.tcx(), def_id)
-            {
-                let body = vcx
-                    .body_mut()
-                    .get_impure_fn_body(local_def_id, substs, None);
+            let data = if let Some(body) = task_key.body(vcx) {
                 deps.emit_output_ref(
                     *task_key,
                     PurifiedMirLocalDefEncOutputRef {
@@ -131,11 +177,12 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
                 let locals = IndexVec::from_fn_n(
                     |local: mir::Local| {
                         let rust_ty = body.local_decls[local].ty;
-                        let rust_ty_task = RustTyDecomposition::from_ty(rust_ty, vcx.tcx(), def_id);
-                        let ty = deps.require_dep::<TyUsePureEnc>(rust_ty_task).unwrap();
+                        let rust_ty_task =
+                            RustTyDecomposition::from_ty(rust_ty, vcx.tcx(), task_key.def_id());
+                        let ty = deps.require_dep::<TyUsePurifiedEnc>(rust_ty_task).unwrap();
                         mk_local_def(vcx, local, ty)
                     },
-                    if all_locals {
+                    if task_key.all_locals() {
                         body.local_decls.len()
                     } else {
                         // return + arguments
@@ -147,11 +194,11 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
                     arg_count: body.arg_count,
                 }
             } else {
-                let typing_env = ty::TypingEnv::post_analysis(vcx.tcx(), def_id);
+                let typing_env = ty::TypingEnv::post_analysis(vcx.tcx(), task_key.def_id());
                 let sig = vcx.tcx().instantiate_and_normalize_erasing_regions(
-                    substs,
+                    ty::GenericArgs::identity_for_item(vcx.tcx(), task_key.def_id()),
                     typing_env,
-                    vcx.tcx().fn_sig(def_id),
+                    vcx.tcx().fn_sig(task_key.def_id()),
                 );
                 let sig = sig.skip_binder();
                 deps.emit_output_ref(
@@ -169,8 +216,9 @@ impl TaskEncoder for PurifiedMirLocalDefEnc {
                         } else {
                             sig.inputs()[local.index() - 1]
                         };
-                        let rust_ty_task = RustTyDecomposition::from_ty(rust_ty, vcx.tcx(), def_id);
-                        let ty = deps.require_dep::<TyUsePureEnc>(rust_ty_task)?;
+                        let rust_ty_task =
+                            RustTyDecomposition::from_ty(rust_ty, vcx.tcx(), task_key.def_id());
+                        let ty = deps.require_dep::<TyUsePurifiedEnc>(rust_ty_task)?;
                         Ok(mk_local_def(vcx, local, ty))
                     })
                     .collect::<Result<IndexVec<_, _>, _>>()?;

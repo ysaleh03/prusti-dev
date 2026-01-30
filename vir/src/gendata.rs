@@ -450,10 +450,10 @@ pub struct PureAssignGenData<'vir, Curr, Next> {
 
 #[derive(VirHash, VirReify, VirSerde)]
 pub struct MethodCallGenData<'vir, Curr, Next> {
-    #[vir(reify_pass)]
-    pub targets: &'vir [LocalDyn<'vir>],
     pub method: &'vir str,
     pub args: &'vir [ExprGenDyn<'vir, Curr, Next>],
+    #[vir(reify_pass)]
+    pub targets: &'vir [LocalDeclDyn<'vir>],
 }
 
 #[derive(VirHash, VirReify, VirSerde)]
