@@ -127,7 +127,7 @@ impl<'vir> WandEncOutput<'vir> {
         let fn_sig = self.fn_sig(vcx);
         let ty = RustTyDecomposition::from_ty(g.ty(fn_sig), vcx.tcx(), self.g_params(vcx));
         let predicates = deps
-            .require_dep::<IndirectPredicatesEnc>(g.with_base(ty))
+            .require_dep::<IndirectPredicatesEnc<crate::encoders::Pure>>(g.with_base(ty))
             .unwrap()
             .predicate_applications;
 

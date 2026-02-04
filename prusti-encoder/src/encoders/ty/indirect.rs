@@ -2,11 +2,13 @@ use pcg::borrow_pcg::region_projection::LifetimeProjection;
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, Reify};
 
-use crate::encoders::ty::RustTyDecomposition;
+use crate::encoders::{Pure, Purity, ty::RustTyDecomposition};
 
 use super::{data::TySpecifics, use_pure::TyUsePureEnc};
 
-pub struct IndirectPredicatesEnc;
+pub struct IndirectPredicatesEnc<P: Purity> {
+    _purity: std::marker::PhantomData<P>,
+}
 
 type ExprInput<'vir> = vir::ExprSnap<'vir>;
 type ExprOutput<'vir> = vir::ExprGenBool<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
@@ -26,8 +28,8 @@ impl<'vir> IndirectPredicatesEncOutputRef<'vir> {
 
 impl<'vir> task_encoder::OutputRefAny for IndirectPredicatesEncOutputRef<'vir> {}
 
-impl TaskEncoder for IndirectPredicatesEnc {
-    task_encoder::encoder_cache!(IndirectPredicatesEnc);
+impl TaskEncoder for IndirectPredicatesEnc<Pure> {
+    task_encoder::encoder_cache!(IndirectPredicatesEnc<Pure>);
 
     type TaskDescription<'vir> = LifetimeProjection<'vir, RustTyDecomposition<'vir>>;
 
@@ -76,12 +78,13 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                 .inner_predicate(vcx, self_expr.downcast_ty())
                                 .kind
                         }),
+                        None,
                     ));
                     if let Some(new_projection) =
                         LifetimeProjection::new(inner_ty, task_key.region(()), None, ())
                     {
                         let inner_indirect =
-                            deps.require_dep::<IndirectPredicatesEnc>(new_projection)?;
+                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
                         predicate_applications.extend(
                             inner_indirect
                                 .predicate_applications
@@ -98,6 +101,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                                 )
                                                 .kind
                                         }),
+                                        None,
                                     )
                                 }),
                         );
@@ -114,6 +118,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                         .reify(vcx, accessor.read(self_expr.downcast_ty()))
                                         .kind
                                 }),
+                                None,
                             )
                         };
 
@@ -124,7 +129,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                             LifetimeProjection::new(field_ty, task_key.region(()), None, ())
                                 .unwrap();
                         let field_indirect =
-                            deps.require_dep::<IndirectPredicatesEnc>(new_projection)?;
+                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
                         predicate_applications.extend(
                             field_indirect
                                 .predicate_applications

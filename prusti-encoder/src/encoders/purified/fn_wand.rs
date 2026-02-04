@@ -1,6 +1,7 @@
 use crate::encoders::{
     MirLocalDefEncOutput, PurifiedEncVisitor,
-    pure::spec::{EncodedPledge, PurifiedMirSpecEnc},
+    pure::spec::EncodedPledge,
+    purified::spec::PurifiedMirSpecEnc,
     ty::{RustTyDecomposition, generics::GParams, indirect::IndirectPredicatesEnc},
 };
 use pcg::borrow_pcg::{
@@ -126,20 +127,20 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         let g = g.into();
         let fn_sig = self.fn_sig(vcx);
         let ty = RustTyDecomposition::from_ty(g.ty(fn_sig), vcx.tcx(), self.g_params(vcx));
-        let predicates = deps
-            .require_dep::<IndirectPredicatesEnc>(g.with_base(ty))
-            .unwrap()
-            .predicate_applications;
+        // let predicates = deps
+        //     .require_dep::<IndirectPredicatesEnc<crate::encoders::Purified>>(g.with_base(ty))
+        //     .unwrap()
+        //     .predicate_applications;
 
         let local = g.mir_local();
         let local_snap = snap(local);
         vcx.mk_conj(
-            vcx.alloc_slice(
-                &predicates
-                    .iter()
-                    .map(|p| p.reify(vcx, local_snap))
-                    .collect::<Vec<_>>(),
-            ),
+            &[], // vcx.alloc_slice(
+                 //     &predicates
+                 //         .iter()
+                 //         .map(|p| p.reify(vcx, local_snap))
+                 //         .collect::<Vec<_>>(),
+                 // ),
         )
     }
 

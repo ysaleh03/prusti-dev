@@ -123,15 +123,16 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             PcgLifetimeProjectionBase::Const(c) => todo!("{c:?}"),
         };
         let ty = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
-        let indirect = self
-            .deps
-            .require_dep::<IndirectPredicatesEnc>(r.with_base(ty))
-            .unwrap();
-        indirect
-            .predicate_applications
-            .into_iter()
-            .map(|expr| expr.reify(self.vcx, place_snap))
-            .collect::<Vec<_>>()
+        // let indirect = self
+        //     .deps
+        //     .require_dep::<IndirectPredicatesEnc<crate::encoders::Purified>>(r.with_base(ty))
+        //     .unwrap();
+        // indirect
+        //     .predicate_applications
+        //     .into_iter()
+        //     .map(|expr| expr.reify(self.vcx, place_snap))
+        //     .collect::<Vec<_>>()
+        vec![]
     }
 
     fn get_place(place: MaybeRemotePlace<'vir>) -> Place<'vir> {

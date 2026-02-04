@@ -125,7 +125,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let ty = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
         let indirect = self
             .deps
-            .require_dep::<IndirectPredicatesEnc>(r.with_base(ty))
+            .require_dep::<IndirectPredicatesEnc<crate::encoders::Pure>>(r.with_base(ty))
             .unwrap();
         indirect
             .predicate_applications
