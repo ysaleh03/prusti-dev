@@ -11,7 +11,7 @@ use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, HasType, Reify};
 
 use crate::encoders::{
-    MirLocalDefEncTask, MirPureEnc,
+    MirLocalDefEncTask, MirPureEnc, TyUsePurifiedEnc,
     mir_pure::PureKind,
     ty::{RustTyDecomposition, use_pure::TyUsePureEnc},
 };
@@ -129,7 +129,7 @@ impl TaskEncoder for MirSpecEnc {
                 .require_dep::<TyUsePureEnc>(RustTyDecomposition::from_prim_ty(
                     vcx.tcx().types.bool,
                 ))?
-                .expect_native()
+                .expect_pure_native()
                 .snap_to_prim;
 
             let substs = find_trait_method_substs(vcx.tcx(), def_id, substs)
@@ -355,10 +355,10 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             };
 
             let to_bool = deps
-                .require_dep::<TyUsePureEnc>(RustTyDecomposition::from_prim_ty(
+                .require_dep::<TyUsePurifiedEnc>(RustTyDecomposition::from_prim_ty(
                     vcx.tcx().types.bool,
                 ))?
-                .expect_native()
+                .expect_purified_native()
                 .snap_to_prim;
 
             let substs = find_trait_method_substs(vcx.tcx(), def_id, substs)

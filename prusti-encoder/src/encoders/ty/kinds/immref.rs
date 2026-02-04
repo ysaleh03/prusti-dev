@@ -1,5 +1,6 @@
 use crate::encoders::ty::{
     RustImmRef,
+    builder::AdtBuilder,
     impure::{PredicateBuilder, TyImpureEnc, TyImpureImmRef, TyImpureImmRefData},
     pure::{TyPureEnc, TyPureImmRef, TyPureImmRefData},
     purified::{TyPurifiedEnc, TyPurifiedImmRef, TyPurifiedImmRefData},
@@ -10,7 +11,7 @@ use vir::{CastType, HasType};
 pub(crate) fn ty_pure<'vir>(
     _data: &RustImmRef<'vir>,
     _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Pure>,
 ) -> Result<TyPureImmRef<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let (field_snaps_to_snap, field_access) =
         builder.constructor("", (vir::TYPE_REF, vir::TYPE_PSNAP), None);
@@ -76,7 +77,7 @@ pub(crate) fn ty_impure<'vir>(
 pub(crate) fn ty_purified<'vir>(
     _data: &RustImmRef<'vir>,
     _deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<TyPurifiedImmRef<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None);
 

@@ -553,8 +553,8 @@ impl MirBuiltinEnc {
         let val_exp = vcx
             .mk_bin_op_expr(
                 vir::BinOpKind::from(op),
-                (e_l_ty.expect_native().snap_to_prim)(vcx.mk_local_ex(lhs_decl)),
-                (e_r_ty.expect_native().snap_to_prim)(vcx.mk_local_ex(rhs_decl)),
+                (e_l_ty.expect_pure_native().snap_to_prim)(vcx.mk_local_ex(lhs_decl)),
+                (e_r_ty.expect_pure_native().snap_to_prim)(vcx.mk_local_ex(rhs_decl)),
             )
             .downcast_ty();
         let val_decl = vcx.mk_local_decl("val", prim_type);

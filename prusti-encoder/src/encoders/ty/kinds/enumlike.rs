@@ -5,6 +5,7 @@ use crate::encoders::{
     TyUseImpureEnc,
     ty::{
         RustTyDatas, RustTyDecomposition,
+        builder::AdtBuilder,
         data::{EnumData, TyData, VariantData},
         impure::{
             ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureEnumData, TyImpureVariantData,
@@ -18,7 +19,7 @@ pub(crate) fn ty_pure<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &EnumData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Pure>,
 ) -> Result<EnumData<'vir, PureTyDatas>, EncodeFullError<'vir, TyPureEnc>> {
     let discr_ty =
         deps.require_dep::<TyPureEnc>(RustTyDecomposition::from_prim_ty(data.discr).ty)?;
@@ -189,7 +190,7 @@ pub(crate) fn ty_purified<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &EnumData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<EnumData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let discr_ty =
         deps.require_dep::<TyPurifiedEnc>(RustTyDecomposition::from_prim_ty(data.discr).ty)?;

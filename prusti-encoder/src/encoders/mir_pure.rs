@@ -1220,22 +1220,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 let is_nan_fun = match fl {
                     ty::FloatTy::F16 => {
                         self.ty_use(self.vcx.tcx().types.f16)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_nan
                     }
                     ty::FloatTy::F32 => {
                         self.ty_use(self.vcx.tcx().types.f32)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_nan
                     }
                     ty::FloatTy::F64 => {
                         self.ty_use(self.vcx.tcx().types.f64)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_nan
                     }
                     ty::FloatTy::F128 => {
                         self.ty_use(self.vcx.tcx().types.f128)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_nan
                     }
                 };
@@ -1246,22 +1246,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 let is_infinite_fun = match fl {
                     ty::FloatTy::F16 => {
                         self.ty_use(self.vcx.tcx().types.f16)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_infinite
                     }
                     ty::FloatTy::F32 => {
                         self.ty_use(self.vcx.tcx().types.f32)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_infinite
                     }
                     ty::FloatTy::F64 => {
                         self.ty_use(self.vcx.tcx().types.f64)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_infinite
                     }
                     ty::FloatTy::F128 => {
                         self.ty_use(self.vcx.tcx().types.f128)
-                            .expect_float()
+                            .expect_pure_float()
                             .fp_is_infinite
                     }
                 };
@@ -1275,7 +1275,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     ty::FloatTy::F64 => self.ty_use(self.vcx.tcx().types.f64),
                     ty::FloatTy::F128 => self.ty_use(self.vcx.tcx().types.f128),
                 }
-                .expect_float();
+                .expect_pure_float();
                 let fl1 = self
                     .encode_operand_snap(&args[0].node, curr_ver)?
                     .downcast_ty();

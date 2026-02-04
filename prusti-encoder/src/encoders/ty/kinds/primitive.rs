@@ -1,11 +1,17 @@
-use crate::encoders::ty::{
-    RustPrimitive,
-    impure::{PredicateBuilder, TyImpureEnc, TyImpurePrimitive},
-    interpretation::float::{ty_pure_float, ty_purified_float},
-    pure::{TyPureEnc, TyPurePrimData, TyPurePrimDataKind, TyPurePrimDataNative, TyPurePrimitive},
-    purified::{
-        TyPurifiedEnc, TyPurifiedPrimData, TyPurifiedPrimDataKind, TyPurifiedPrimDataNative,
-        TyPurifiedPrimitive,
+use crate::encoders::{
+    Pure, Purified,
+    ty::{
+        RustPrimitive,
+        builder::DomainBuilder,
+        impure::{PredicateBuilder, TyImpureEnc, TyImpurePrimitive},
+        interpretation::float::{ty_pure_float, ty_purified_float},
+        pure::{
+            TyPureEnc, TyPurePrimData, TyPurePrimDataKind, TyPurePrimDataNative, TyPurePrimitive,
+        },
+        purified::{
+            TyPurifiedEnc, TyPurifiedPrimData, TyPurifiedPrimDataKind, TyPurifiedPrimDataNative,
+            TyPurifiedPrimitive,
+        },
     },
 };
 use prusti_rustc_interface::middle::ty;
@@ -16,7 +22,7 @@ pub(crate) fn ty_pure<'vir>(
     vcx: &'vir VirCtxt<'vir>,
     data: &RustPrimitive<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::DomainBuilder<'vir>,
+    builder: &mut DomainBuilder<'vir, Pure>,
 ) -> Result<TyPurePrimitive<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let ty = data;
     let ty_kind = ty.kind();
@@ -124,7 +130,7 @@ pub(crate) fn ty_purified<'vir>(
     vcx: &'vir VirCtxt<'vir>,
     data: &RustPrimitive<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::DomainBuilder<'vir>,
+    builder: &mut DomainBuilder<'vir, Purified>,
 ) -> Result<TyPurifiedPrimitive<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let ty = data;
     let ty_kind = ty.kind();

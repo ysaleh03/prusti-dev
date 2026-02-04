@@ -1417,9 +1417,15 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                 } else {
                     vir::with_vcx(|vcx| {
                         vcx.with_span(terminator.source_info.span, |vcx| {
-                            let Ok(func_out) = self.deps.require_dep::<encoders::ImpureMethodCallEnc>(
-                                CallTaskDescription::new(self.def_id, caller_substs, func_def_id),
-                            ) else {
+                            let Ok(func_out) =
+                                self.deps.require_dep::<encoders::ImpureMethodCallEnc>(
+                                    CallTaskDescription::new(
+                                        self.def_id,
+                                        caller_substs,
+                                        func_def_id,
+                                    ),
+                                )
+                            else {
                                 self.current_terminator = Some(
                                     self.vcx
                                         .mk_dummy_stmt(vir::vir_format!(self.vcx, "recursion",)),
@@ -1556,7 +1562,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
 
                 let e_bool = self.ty_use_pure(self.vcx.tcx().types.bool);
                 let enc = self.encode_operand_snap(cond, &()).unwrap().downcast_ty();
-                let enc = (e_bool.expect_native().snap_to_prim)(enc);
+                let enc = (e_bool.expect_pure_native().snap_to_prim)(enc);
                 let expected = self.vcx.mk_const_expr(vir::ConstData::Bool(*expected));
                 let assert = self.vcx.mk_eq_expr(enc, expected);
                 let error_msg = match **msg {

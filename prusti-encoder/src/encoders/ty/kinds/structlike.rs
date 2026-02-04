@@ -1,5 +1,6 @@
 use crate::encoders::ty::{
     RustTyDatas,
+    builder::AdtBuilder,
     data::{StructData, TyData},
     impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
     pure::{PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
@@ -15,7 +16,7 @@ pub(crate) fn ty_pure<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &StructData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Pure>,
 ) -> Result<StructData<'vir, PureTyDatas>, EncodeFullError<'vir, TyPureEnc>> {
     ty_pure_variant("", None, task_key, data, deps, builder)
 }
@@ -26,7 +27,7 @@ pub(super) fn ty_pure_variant<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &StructData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Pure>,
 ) -> Result<StructData<'vir, PureTyDatas>, EncodeFullError<'vir, TyPureEnc>> {
     let field_tys = data
         .fields
@@ -204,7 +205,7 @@ pub(crate) fn ty_purified<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &StructData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
     ty_purified_variant("", None, task_key, data, deps, builder)
 }
@@ -215,7 +216,7 @@ pub(super) fn ty_purified_variant<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
     data: &StructData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::AdtBuilder<'vir>,
+    builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let field_tys = data
         .fields

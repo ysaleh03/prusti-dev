@@ -2,10 +2,14 @@ use prusti_rustc_interface::middle::ty;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{BackendInterpretationPair, CallableIdn, FunctionIdn, VirCtxt};
 
-use crate::encoders::ty::{
-    interpretation::bitvec::{BitVecEnc, BitVecSize},
-    pure::TyPureEnc,
-    purified::TyPurifiedEnc,
+use crate::encoders::{
+    HasTyBuilder, Pure, Purified, Purity,
+    ty::{
+        builder::DomainBuilder,
+        interpretation::bitvec::{BitVecEnc, BitVecSize},
+        pure::TyPureEnc,
+        purified::TyPurifiedEnc,
+    },
 };
 
 pub type FloatDomain<'vir> = &'vir FloatDomainData<'vir>;
@@ -33,7 +37,7 @@ pub struct FloatDomainData<'vir> {
 pub(crate) fn ty_pure_float<'vir>(
     vcx: &'vir VirCtxt<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
-    builder: &mut crate::encoders::ty::pure::DomainBuilder<'vir>,
+    builder: &mut DomainBuilder<'vir, Pure>,
     float: ty::FloatTy,
     prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
 ) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
@@ -43,17 +47,17 @@ pub(crate) fn ty_pure_float<'vir>(
 pub(crate) fn ty_purified_float<'vir>(
     vcx: &'vir VirCtxt<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
-    builder: &mut crate::encoders::ty::purified::DomainBuilder<'vir>,
+    builder: &mut DomainBuilder<'vir, Purified>,
     float: ty::FloatTy,
     prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
 ) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
     ty_float(vcx, deps, builder, float, prim_to_snap)
 }
 
-pub(crate) fn ty_float<'vir, Enc: TaskEncoder>(
+pub(crate) fn ty_float<'vir, Enc: TaskEncoder, P: HasTyBuilder>(
     vcx: &'vir VirCtxt<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, Enc>,
-    builder: &mut DomainBuilder<'vir>,
+    builder: &mut DomainBuilder<'vir, P>,
     float: ty::FloatTy,
     prim_to_snap: FunctionIdn<'vir, vir::Prim, vir::CSnap>,
 ) -> Result<FloatDomainData<'vir>, EncodeFullError<'vir, Enc>> {

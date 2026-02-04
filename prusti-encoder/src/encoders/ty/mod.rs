@@ -7,6 +7,7 @@ pub mod use_impure;
 pub mod use_pure;
 pub mod use_purified;
 pub mod viper_tuple;
+pub mod builder;
 
 pub mod lifted;
 pub mod generics;

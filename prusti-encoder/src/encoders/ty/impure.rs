@@ -12,7 +12,7 @@ use super::{
     pure::*,
 };
 
-pub(super) type ImpureTyDatas = ViperTyDatas<Impure>;
+pub(crate) type ImpureTyDatas = ViperTyDatas<Impure>;
 
 impl<'vir> TyDatas<'vir> for ImpureTyDatas {
     type TyData = TyImpureRef<'vir>;

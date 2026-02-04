@@ -45,7 +45,9 @@ pub(crate) trait Purity:
     'static + std::fmt::Debug + Clone + Copy + PartialEq + Eq + std::hash::Hash
 {
     type ArgTy: vir::CompType;
+    type TyUseEnc = ty::TyUseEnc<Self>;
 }
+pub(crate) trait HasTyBuilder: Purity {}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -56,6 +58,7 @@ pub struct Pure;
 impl Purity for Pure {
     type ArgTy = vir::Ref;
 }
+impl HasTyBuilder for Pure {}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -76,3 +79,4 @@ pub struct Purified;
 impl Purity for Purified {
     type ArgTy = vir::Snap;
 }
+impl HasTyBuilder for Purified {}

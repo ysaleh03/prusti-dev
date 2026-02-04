@@ -1881,7 +1881,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
 
                 let e_bool = self.ty_use_purified(self.vcx.tcx().types.bool);
                 let enc = self.encode_operand_snap(cond, &()).unwrap().downcast_ty();
-                let enc = (e_bool.expect_native().snap_to_prim)(enc);
+                let enc = (e_bool.expect_purified_native().snap_to_prim)(enc);
                 let expected = self.vcx.mk_const_expr(vir::ConstData::Bool(*expected));
                 let assert = self.vcx.mk_eq_expr(enc, expected);
                 let error_msg = match **msg {
