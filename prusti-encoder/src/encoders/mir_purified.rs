@@ -1728,7 +1728,8 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
 
                     let call = func_out.call(
                         method_in,
-                        tmps.iter().map(|tmp| tmp.as_dyn()).collect::<Vec<_>>(),
+                        self.vcx
+                            .alloc_slice(&tmps.iter().map(|tmp| tmp.as_dyn()).collect::<Vec<_>>()),
                     );
 
                     let label_pre = self.new_label("pre");

@@ -7,10 +7,9 @@ use crate::{
     encoders::{
         Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, Purified,
         PurifiedEncVisitor, PurifiedMirLocalDefEnc, PurifiedMirLocalDefEncTask, PurifiedWandEnc,
-        Purity, WandEnc, WandEncTask, local_def,
+        Purity, WandEnc, WandEncTask,
         mir_fn::{CallTaskDescription, RustSignature},
-        pure::spec::PurifiedMirSpecEnc,
-        purified::fn_wand::PurifiedWandEncTask,
+        purified::{fn_wand::PurifiedWandEncTask, spec::PurifiedMirSpecEnc},
         ty::{
             data::TySpecifics,
             generics::{
@@ -112,7 +111,7 @@ impl<'vir> MethodCallEncOutput<'vir, Purified> {
     pub fn call(
         &self,
         args: Vec<vir::ExprSnap<'vir>>,
-        rets: Vec<vir::LocalDeclDyn<'vir>>,
+        rets: &'vir [vir::LocalDeclDyn<'vir>],
     ) -> Vec<vir::Stmt<'vir>> {
         assert_eq!(self.inputs.len(), args.len());
         assert_eq!(self.outputs.len(), rets.len());
