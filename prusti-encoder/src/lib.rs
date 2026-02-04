@@ -79,8 +79,11 @@ pub fn test_entrypoint<'tcx>(
     program.header("user methods");
     crate::encoders::FunctionCallEnc::emit_outputs(&mut program);
 
+    // program.header("user functions");
+    // crate::encoders::ImpureMethodCallEnc::emit_outputs(&mut program);
+
     program.header("user functions");
-    crate::encoders::ImpureMethodCallEnc::emit_outputs(&mut program);
+    crate::encoders::PurifiedMethodCallEnc::emit_outputs(&mut program);
 
     program.header("MIR builtins");
     crate::encoders::MirBuiltinEnc::emit_outputs(&mut program);
@@ -88,15 +91,21 @@ pub fn test_entrypoint<'tcx>(
     program.header("pure generic casts");
     GArgsCastEnc::<Pure>::emit_outputs(&mut program);
 
+    // program.header("impure generic casts");
+    // GArgsCastEnc::<Impure>::emit_outputs(&mut program);
+
     program.header("impure generic casts");
-    GArgsCastEnc::<Impure>::emit_outputs(&mut program);
+    GArgsCastEnc::<Purified>::emit_outputs(&mut program);
 
     program.header("snapshots");
     crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
     BitVecEnc::emit_outputs(&mut program);
 
+    // program.header("predicates");
+    // crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
+
     program.header("predicates");
-    crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
+    crate::encoders::TyUsePurifiedEnc::emit_outputs(&mut program);
 
     program.header("type constructors");
     TyConstructorEnc::emit_outputs(&mut program);
