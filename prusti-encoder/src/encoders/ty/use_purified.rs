@@ -305,40 +305,6 @@ impl<'vir> TyData<'vir, UsePurifiedTyDatas> {
 }
 
 impl<'vir> TyUsePurifiedStruct<'vir> {
-    // pub fn pack(
-    //     &self,
-    //     self_snap: vir::ExprCSnap<'vir>,
-    // ) -> impl Iterator<Item = vir::Stmt<'vir>> + '_ {
-    //     let snaps = self
-    //         .fields
-    //         .iter()
-    //         .map(|f| f.field_snap(self_snap))
-    //         .collect();
-    //     let cons = self.field_snaps_to_snap(snaps);
-    //     let pack = vir::with_vcx(|vcx| vcx.mk_pure_assign_stmt(self_snap, cons));
-    //     [pack].into_iter()
-    // }
-
-    // pub fn unpack(
-    //     &self,
-    //     self_snap: vir::ExprCSnap<'vir>,
-    // ) -> impl Iterator<Item = vir::Stmt<'vir>> + '_ {
-    //     let snaps = self
-    //         .fields
-    //         .iter()
-    //         .map(|f| f.field_snap(self_snap))
-    //         .collect();
-    //     let cons = self.field_snaps_to_snap(snaps);
-    //     let pack = vir::with_vcx(|vcx| vcx.mk_pure_assign_stmt(self_snap, cons));
-    //     [pack].into_iter()
-    // }
-
-    // pub fn field_access<Curr, Next>(
-    //     &self,
-    //     snap: vir::ExprGenCSnap<'vir, Curr, Next>,
-    //     idx:
-    // )
-
     pub fn field_snaps_to_snap<Curr, Next>(
         &self,
         mut snaps: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,

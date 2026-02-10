@@ -1,6 +1,6 @@
 use crate::{
-    debug_info::DebugInfo, gendata::*, genrefs::*, refs::*, viper_ident::ViperIdent, with_vcx,
-    CastType, CompType, HasType, TypeDyn, VirCtxt,
+    debug_info::DebugInfo, gendata::*, genrefs::*, macros::ExprQuote, refs::*,
+    viper_ident::ViperIdent, with_vcx, CastType, CompType, HasType, TypeDyn, VirCtxt,
 };
 use sealed::sealed;
 use serde::{Deserialize, Serialize};
@@ -286,9 +286,13 @@ impl<'a, 'vir, Curr: 'vir, Next: 'vir, A: Arity>
     ) -> Self::Output {
         with_vcx(|vcx| {
             let args = A::args(vcx, args);
+            let targets = targets
+                .iter()
+                .map(|decl| vcx.mk_local_ex(decl))
+                .collect::<Vec<_>>();
             A::types_match(self.inner.args, args, self.inner.debug_info);
             StmtKindGenData::MethodCall(vcx.alloc(MethodCallGenData {
-                targets: targets,
+                targets: vcx.alloc_slice(&targets),
                 method: self.inner.idn.to_str(),
                 args,
             }))

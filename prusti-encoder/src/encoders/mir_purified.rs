@@ -1501,7 +1501,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
         if self.deps.check_cycle().is_err() {
             return;
         }
-
+        self.new_before_label(location);
         comment!(self, "[MIR] {location:?}: {:?}", terminator.kind);
         let span = terminator.source_info.span;
 
@@ -1509,7 +1509,8 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
         let cfpcs = &current_fpcs.statements[location.statement_index];
         for phase in EvalStmtPhase::phases() {
             comment!(self, "PCG (T) {phase}");
-            self.pcg_actions(&cfpcs.states[phase], &cfpcs.actions(phase), false);
+            self.pcg_actions(&cfpcs.states[phase], &cfpcs.actions(phase), false)
+                .unwrap();
         }
         self.current_fpcs = Some(current_fpcs);
 
@@ -1547,7 +1548,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
             }
             mir::TerminatorKind::SwitchInt { discr, targets } => {
                 let discr_ty_rs = discr.ty(self.local_decls, self.vcx.tcx());
-                let discr_ty = self.ty_use_pure(discr_ty_rs).expect_primitive();
+                let discr_ty = self.ty_use_purified(discr_ty_rs).expect_primitive();
 
                 let goto_targets = self.vcx.alloc_slice(
                     &targets
@@ -1683,106 +1684,115 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                     let assign_stmt = self.vcx.mk_pure_assign_stmt(dest, pure_func_app);
                     self.stmt(assign_stmt);
                 } else {
-                    let Ok(func_out) = self.deps.require_dep::<encoders::PurifiedMethodCallEnc>(
-                        CallTaskDescription::new(self.def_id, caller_substs, func_def_id),
-                    ) else {
-                        self.current_terminator = Some(
-                            self.vcx
-                                .mk_dummy_stmt(vir::vir_format!(self.vcx, "recursion",)),
-                        );
-                        return;
-                    };
-
-                    /// Recursively checks for mutable types
-                    fn has_mut(typ: ty::Ty) -> bool {
-                        match typ.kind() {
-                            TyKind::Ref(.., ty::Mutability::Mut)
-                            | TyKind::RawPtr(.., ty::Mutability::Mut) => true,
-                            // TyKind::Adt(_, args) => args
-                            //     .iter()
-                            //     .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
-                            // TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
-                            _ => false,
-                        }
-                    }
-
-                    let method_in = args
-                        .iter()
-                        .map(|arg| self.encode_operand(&arg.node).unwrap())
-                        .collect::<Vec<_>>();
-
-                    let method_out = std::iter::once(dest)
-                        .chain(
-                            args.iter()
-                                .filter(|arg| {
-                                    has_mut(arg.node.ty(self.local_decls, self.vcx.tcx()))
-                                })
-                                .map(|arg| self.encode_operand(&arg.node).unwrap()),
-                        )
-                        .collect::<Vec<_>>();
-
-                    let tmps = method_out
-                        .iter()
-                        .map(|out| self.new_tmp(out.ty()))
-                        .collect::<Vec<_>>();
-
-                    let call = func_out.call(
-                        method_in,
-                        self.vcx
-                            .alloc_slice(&tmps.iter().map(|tmp| tmp.as_dyn()).collect::<Vec<_>>()),
-                    );
-
-                    let label_pre = self.new_label("pre");
-                    self.vcx.with_span(span, |vcx| {
-                        vcx.handle_error(
-                            "call.precondition:assertion.false",
-                            move |reason_span_opt| {
-                                let mut error = PrustiError::verification(
-                                    "precondition might not hold",
-                                    span.into(),
+                    vir::with_vcx(|vcx| {
+                        vcx.with_span(terminator.source_info.span, |vcx| {
+                            let Ok(func_out) =
+                                self.deps.require_dep::<encoders::PurifiedMethodCallEnc>(
+                                    CallTaskDescription::new(
+                                        self.def_id,
+                                        caller_substs,
+                                        func_def_id,
+                                    ),
+                                )
+                            else {
+                                self.current_terminator = Some(
+                                    self.vcx
+                                        .mk_dummy_stmt(vir::vir_format!(self.vcx, "recursion",)),
                                 );
-                                if let Some(reason_span) = reason_span_opt {
-                                    error.add_note_mut(
-                                        "the failing precondition is here",
-                                        Some(reason_span.into()),
-                                    );
+                                return;
+                            };
+
+                            /// Recursively checks for mutable types
+                            fn has_mut(typ: ty::Ty) -> bool {
+                                match typ.kind() {
+                                    TyKind::Ref(.., ty::Mutability::Mut)
+                                    | TyKind::RawPtr(.., ty::Mutability::Mut) => true,
+                                    // TyKind::Adt(_, args) => args
+                                    //     .iter()
+                                    //     .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
+                                    // TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
+                                    _ => false,
                                 }
-                                Some(vec![error])
-                            },
-                        );
-                        self.stmts(call);
-                        self.stmts(
-                            method_out
+                            }
+
+                            let method_in = args
                                 .iter()
-                                .zip(tmps.iter())
-                                .map(|(out, tmp)| vcx.mk_pure_assign_stmt(out, tmp.expr(vcx)))
-                                .collect::<Vec<_>>(),
-                        );
+                                .map(|arg| self.encode_operand(&arg.node).unwrap())
+                                .collect::<Vec<_>>();
+
+                            let method_out = std::iter::once(dest)
+                                .chain(
+                                    args.iter()
+                                        .filter(|arg| {
+                                            has_mut(arg.node.ty(self.local_decls, self.vcx.tcx()))
+                                        })
+                                        .map(|arg| self.encode_operand(&arg.node).unwrap()),
+                                )
+                                .collect::<Vec<_>>();
+
+                            let tmps = method_out
+                                .iter()
+                                .map(|out| self.new_tmp(out.ty()))
+                                .collect::<Vec<_>>();
+
+                            let call = func_out.call(
+                                method_in,
+                                self.vcx.alloc_slice(
+                                    &tmps.iter().map(|tmp| tmp.as_dyn()).collect::<Vec<_>>(),
+                                ),
+                            );
+
+                            let label_pre = self.new_label("pre");
+                            vcx.handle_error(
+                                "call.precondition:assertion.false",
+                                move |reason_span_opt| {
+                                    let mut error = PrustiError::verification(
+                                        "precondition might not hold",
+                                        span.into(),
+                                    );
+                                    if let Some(reason_span) = reason_span_opt {
+                                        error.add_note_mut(
+                                            "the failing precondition is here",
+                                            Some(reason_span.into()),
+                                        );
+                                    }
+                                    Some(vec![error])
+                                },
+                            );
+                            self.stmts(call);
+                            let label_post = self.new_label("post");
+                            self.stmts(
+                                method_out
+                                    .iter()
+                                    .zip(tmps.iter())
+                                    .map(|(out, tmp)| vcx.mk_pure_assign_stmt(out, tmp.expr(vcx)))
+                                    .collect::<Vec<_>>(),
+                            );
+
+                            // for ((_, tmp_expr), (arg_expr, arg, fn_arg_ty)) in
+                            //     tmps.iter().zip(ref_muts.iter())
+                            // {
+                            //     let local_decls = self.local_decls_src();
+                            //     let arg_ty = arg.node.ty(local_decls, self.vcx.tcx());
+                            //     let caster = self
+                            //         .deps()
+                            //         .require_ref::<CastToEnc<CastTypePure>>(CastArgs {
+                            //             expected: arg_ty,
+                            //             actual: **fn_arg_ty,
+                            //         })
+                            //         .unwrap();
+                            //     let tmp_expr = if arg_expr.ty() == tmp_expr.ty() {
+                            //         tmp_expr
+                            //     } else {
+                            //         caster.apply_cast_if_necessary(self.vcx, tmp_expr)
+                            //     };
+                            //     self.stmt(self.vcx.mk_pure_assign_stmt(arg_expr, tmp_expr));
+                            // }
+
+                            self.call_labels
+                                .insert(location.block, (label_pre, label_post));
+                        })
                     });
-
-                    // for ((_, tmp_expr), (arg_expr, arg, fn_arg_ty)) in
-                    //     tmps.iter().zip(ref_muts.iter())
-                    // {
-                    //     let local_decls = self.local_decls_src();
-                    //     let arg_ty = arg.node.ty(local_decls, self.vcx.tcx());
-                    //     let caster = self
-                    //         .deps()
-                    //         .require_ref::<CastToEnc<CastTypePure>>(CastArgs {
-                    //             expected: arg_ty,
-                    //             actual: **fn_arg_ty,
-                    //         })
-                    //         .unwrap();
-                    //     let tmp_expr = if arg_expr.ty() == tmp_expr.ty() {
-                    //         tmp_expr
-                    //     } else {
-                    //         caster.apply_cast_if_necessary(self.vcx, tmp_expr)
-                    //     };
-                    //     self.stmt(self.vcx.mk_pure_assign_stmt(arg_expr, tmp_expr));
-                    // }
-
-                    let label_post = self.new_label("post");
-                    self.call_labels
-                        .insert(location.block, (label_pre, label_post));
                 }
 
                 target
@@ -1994,7 +2004,6 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 self.vcx.mk_assume_false_stmt()
             }),
         };
-        // self.new_after_label(location);
         assert!(self.current_terminator.replace(terminator).is_none());
     }
 }

@@ -485,7 +485,7 @@ impl TaskEncoder for PurifiedMethodEnc {
             )?;
 
             let mut rets = vec![local_defs.ret().local_snap];
-            let mut args = local_defs
+            let args = local_defs
                 .local_decl_args()
                 .map(|decl| {
                     vcx.mk_local_decl(
@@ -495,15 +495,16 @@ impl TaskEncoder for PurifiedMethodEnc {
                 })
                 .collect::<Vec<_>>();
 
-            // let mut return_to_remote = Vec::new();
+            let mut return_to_remote = Vec::new();
 
             for (ty, decl) in signature.inputs.iter().zip(local_defs.local_decl_args()) {
                 match ty.decompose(gparams).ty.specifics {
                     TySpecifics::MutRef(..) => {
                         let name_r =
                             vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str();
-                        rets.push(vcx.mk_local_decl(name_r, decl.ty));
-                        // return_to_remote.push()
+                        let decl = vcx.mk_local_decl(name_r, decl.ty);
+                        rets.push(decl);
+                        return_to_remote.push(decl);
                     }
                     _ => (),
                 };
@@ -540,12 +541,20 @@ impl TaskEncoder for PurifiedMethodEnc {
                 let mut start_stmts = Vec::new();
                 let mut end_stmts = Vec::new();
 
-                for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
+                for local in (1..arg_count).map(mir::Local::from) {
                     let name_s = local_defs[local].local_snap.name;
                     let type_s = local_defs[local].local_snap.ty;
                     start_stmts.push(vcx.mk_local_decl_stmt(
                         vir::vir_local_decl! { vcx; [name_s] : [type_s] },
                         Some(args[local.as_usize() - 1].expr(vcx)),
+                    ))
+                }
+                for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
+                    let name_s = local_defs[local].local_snap.name;
+                    let type_s = local_defs[local].local_snap.ty;
+                    start_stmts.push(vcx.mk_local_decl_stmt(
+                        vir::vir_local_decl! { vcx; [name_s] : [type_s] },
+                        None,
                     ))
                 }
                 // This will be overwritten later.
@@ -613,6 +622,10 @@ impl TaskEncoder for PurifiedMethodEnc {
             } else {
                 None
             };
+
+            // Add functional specification as the last pre- and postconditions.
+            pres.extend(spec.pres);
+            posts.extend(spec.posts);
 
             Ok((
                 MethodEncOutput {
