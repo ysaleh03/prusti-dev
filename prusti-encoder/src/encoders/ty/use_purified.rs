@@ -256,12 +256,12 @@ impl<'vir> TyUsePurifiedRef<'vir> {
 }
 
 impl<'vir> TyUsePurifiedImmRef<'vir> {
-    pub fn prim_to_snap<Curr, Next>(
+    pub fn value_to_snap<Curr, Next>(
         &self,
         inner: vir::ExprGenSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
         let inner = self.caster.cast_to_callee_ctx(inner);
-        self.purified.prim_to_snap.call()(inner.downcast_ty())
+        self.purified.value_to_snap.call()(inner.downcast_ty())
     }
 
     pub fn value_access<Curr, Next>(
@@ -274,12 +274,12 @@ impl<'vir> TyUsePurifiedImmRef<'vir> {
 }
 
 impl<'vir> TyUsePurifiedMutRef<'vir> {
-    pub fn prim_to_snap<Curr, Next>(
+    pub fn value_to_snap<Curr, Next>(
         &self,
         inner: vir::ExprGenSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
         let inner = self.caster.cast_to_callee_ctx(inner);
-        self.purified.prim_to_snap.call()(inner.downcast_ty())
+        self.purified.value_to_snap.call()(inner.downcast_ty())
     }
 
     pub fn value_access<Curr, Next>(

@@ -85,7 +85,7 @@ impl<'vir, D: TyDatas<'vir, PrimitiveData = TyPurifiedPrimData<'vir>>> TyData<'v
 #[derive(Debug, Clone, Copy)]
 pub struct TyPurifiedImmRefData<'vir> {
     /// Construct domain from a parameter value.
-    pub(super) prim_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
+    pub(super) value_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
     /// Function to access the snapshot value.
     pub(super) value_access: AdtDestructor<'vir, vir::CSnap, vir::PSnap>,
 }
@@ -93,7 +93,7 @@ pub struct TyPurifiedImmRefData<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct TyPurifiedMutRefData<'vir> {
     /// Construct domain from a parameter value.
-    pub(super) prim_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
+    pub(super) value_to_snap: FunctionIdn<'vir, vir::PSnap, vir::CSnap>,
     /// Function to access the snapshot value.
     pub(super) value_access: AdtDestructor<'vir, vir::CSnap, vir::PSnap>,
 }
