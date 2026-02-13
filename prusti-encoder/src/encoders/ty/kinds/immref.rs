@@ -82,7 +82,7 @@ pub(crate) fn ty_purified<'vir>(
     let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None);
 
     Ok(TyPurifiedImmRefData {
-        prim_to_snap: field_snaps_to_snap,
-        value_access: field_access[1].downcast_ty(),
+        value_to_snap: field_snaps_to_snap,
+        value_access: field_access[0].downcast_ty(),
     })
 }
