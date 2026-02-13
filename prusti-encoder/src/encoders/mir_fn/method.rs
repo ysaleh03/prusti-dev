@@ -114,7 +114,6 @@ impl<'vir> MethodCallEncOutput<'vir, Purified> {
         rets: &'vir [vir::LocalDeclDyn<'vir>],
     ) -> Vec<vir::Stmt<'vir>> {
         assert_eq!(self.inputs.len(), args.len());
-        assert_eq!(self.outputs.len(), rets.len());
         let inputs: Vec<_> = args
             .iter()
             .zip(self.inputs.iter())
