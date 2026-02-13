@@ -147,7 +147,7 @@ impl<'vir, Curr, Next> Debug for AdtGenData<'vir, Curr, Next> {
             fmt_comma_sep_display(f, self.typarams)?;
             write!(f, "]")?;
         }
-        writeln!(f, "{{")?;
+        writeln!(f, " {{")?;
         for constructor in self.constructors {
             writeln!(f, "{constructor:?}")?;
         }
