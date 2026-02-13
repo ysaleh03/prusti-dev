@@ -308,12 +308,12 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 TyKind::Ref(.., ty::Mutability::Not) => {
                     let (_, snap, _, _) = self.encode_place_with_snap((*place).into());
                     let inner = self.ty_use_purified(rvalue_ty).expect_immref();
-                    inner.prim_to_snap(snap).upcast_ty()
+                    inner.value_to_snap(snap).upcast_ty()
                 }
                 TyKind::Ref(.., ty::Mutability::Mut) => {
                     let (_, snap, _, _) = self.encode_place_with_snap(Place::from(*place));
                     let inner = self.ty_use_purified(rvalue_ty).expect_mutref();
-                    inner.prim_to_snap(snap).upcast_ty()
+                    inner.value_to_snap(snap).upcast_ty()
                 }
                 _ => unreachable!(),
             }),
@@ -593,148 +593,6 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         Ok(())
     }
 
-    // fn pcs_handle_edge_conditionless(
-    //     &mut self,
-    //     borrows_state: &BorrowsState<'_, 'vir>,
-    //     edge: &BorrowPcgEdge<'vir>,
-    //     add: bool,
-    //     label: Option<&'vir str>,
-    //     edge_to_loop: bool,
-    //     to_skip: &mut Vec<mir::BasicBlock>,
-    // ) {
-    //     match edge.kind() {
-    //         BorrowPcgEdgeKind::BorrowPcgExpansion(expansion) => {
-    //             self.pcs_borrow_expansion(expansion.clone(), add, label);
-    //         }
-    //         BorrowPcgEdgeKind::Coupled(PcgCoupledEdgeKind(FunctionCallOrLoop::FunctionCall(
-    //             call_edge,
-    //         ))) => {
-    //             if add {
-    //                 // The wand will be introduced by the method call itself.
-    //                 return;
-    //             }
-    //             let call = call_edge.metadata();
-    //             // We may be encoding multiple edges as a single wand, skip
-    //             // further edge removals. This is a hack to get around the fact
-    //             // that Viper doesn't support hyperwands.
-    //             if to_skip.contains(&call.location().block) {
-    //                 return;
-    //             }
-    //             to_skip.push(call.location().block);
-    //             // TODO: this applies *all* the wands for the referenced
-    //             //   function call; instead we should figure out which
-    //             //   wand it is based on the edge info.
-    //             let wands = self
-    //                 .deps
-    //                 .require_local::<PurifiedWandEnc>(PurifiedWandEncTask {
-    //                     def_id: call.def_id().unwrap(),
-    //                 })
-    //                 .unwrap();
-    //             let bb = &self.body[call.location().block];
-    //             let terminator = bb.terminator.as_ref().unwrap();
-    //             match &terminator.kind {
-    //                 mir::TerminatorKind::Call {
-    //                     args, destination, ..
-    //                 } => {
-    //                     let (_, dest_snap, _) = self.encode_place_snap((*destination).into());
-    //                     let wand_args =
-    //                         std::iter::once(dest_snap)
-    //                             .chain(args.iter().map(|operand| {
-    //                                 self.encode_operand_snap_immediate(&operand.node)
-    //                             }))
-    //                             .collect::<Vec<_>>();
-    //                     let (label_pre, label_post) = self.call_labels[&call.location().block];
-    //                     wands.apply_proofs(&wand_args, label_pre, label_post, self);
-    //                 }
-    //                 _ => unreachable!(),
-    //             }
-    //         }
-    //         BorrowPcgEdgeKind::Abstraction(at @ AbstractionEdge::Loop(_)) => {
-    //             self.pcs_handle_wand(
-    //                 borrows_state,
-    //                 add,
-    //                 &at.clone().into_singleton_coupled_edge(),
-    //                 label,
-    //                 edge_to_loop,
-    //             );
-    //         }
-    //         // BorrowPcgEdgeKind::Borrow(BorrowEdge::Remote(remote_borrow))
-    //         //     if remote_borrow.is_mut(self.pcg_ctxt()) =>
-    //         // {
-    //         //     if add {
-    //         //         return;
-    //         //     }
-
-    //         //     let deref_place = remote_borrow.deref_place(self.pcg_ctxt()).place();
-    //         //     let deref_ty = deref_place.ty(self.pcg_ctxt()).ty;
-    //         //     let deref_enc = self.encode_place(deref_place);
-
-    //         //     let remote_place = remote_borrow.blocked_place();
-    //         //     let remote_local_data =
-    //         //         if let Some(local_data) = self.remote_place_to_local_decl.get(&remote_place) {
-    //         //             self.vcx.mk_local_decl(local_data.name, local_data.ty)
-    //         //         } else {
-    //         //             let remote_name = vir::vir_format_identifier!(
-    //         //                 self.vcx,
-    //         //                 "_{}s_remote",
-    //         //                 remote_place.assigned_local().as_usize()
-    //         //             )
-    //         //             .to_str();
-    //         //             let local = self.vcx.mk_local_decl(remote_name, deref_enc.expr.ty());
-
-    //         //             self.declared_remotes
-    //         //                 .insert((remote_name, deref_enc.expr.ty()));
-    //         //             self.remote_place_to_local_decl.insert(remote_place, local);
-
-    //         //             local
-    //         //         };
-
-    //         //     let lhs = self.vcx.mk_local_ex(remote_local_data);
-    //         //     let (rhs_place, _rhs) = (deref_place, deref_enc.expr);
-    //         //     let rhs = if let Some(&rhs) = self.place_to_local_data.get(&rhs_place) {
-    //         //         self.vcx
-    //         //             .mk_local_ex(self.vcx.mk_local_decl(rhs.name, rhs.ty))
-    //         //     } else {
-    //         //         // caster.cast_to_concrete_if_possible(self.vcx, self.encode_place(rhs_place).expr)
-    //         //         self.encode_place(rhs_place).expr
-    //         //     };
-
-    //         //     self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
-
-    //         //     let assigned_local = remote_place.assigned_local();
-    //         //     // let cons = self.local_defs.locals[assigned_local]
-    //         //     //     .ty
-    //         //     //     .expect_purified_mutref()
-    //         //     //     .snap_data
-    //         //     //     .prim_to_snap;
-    //         //     // self.return_to_remote.insert(
-    //         //     //     assigned_local,
-    //         //     //     (cons(caster.cast_to_generic_if_necessary(self.vcx, lhs))).upcast_ty(),
-    //         //     // );
-    //         // }
-    //         // BorrowPcgEdgeKind::Borrow(BorrowEdge::Local(local_borrow)) => {
-    //         //     if add {
-    //         //         return;
-    //         //     }
-
-    //         //     let blocked_place = local_borrow.blocked_place.place();
-    //         //     let deref_place = local_borrow.deref_place(self.pcg_ctxt()).place();
-    //         //     let deref_ty = deref_place.ty(self.pcg_ctxt()).ty;
-
-    //         //     let lhs = self.encode_place(blocked_place).expr;
-    //         //     let rhs = if let Some(&rhs) = self.place_to_local_data.get(&deref_place) {
-    //         //         self.vcx
-    //         //             .mk_local_ex(self.vcx.mk_local_decl(rhs.name, rhs.ty))
-    //         //     } else {
-    //         //         self.encode_place(deref_place).expr
-    //         //     };
-
-    //         //     self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
-    //         // }
-    //         unsupported_op => comment!(self, "(ignoring {unsupported_op:?})"),
-    //     }
-    // }
-
     pub(crate) fn pcs_unblock_actions(
         &mut self,
         borrows_state: &BorrowsState<'_, 'vir>,
@@ -985,46 +843,54 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 }
                 None if let Some(vid) = place_ty.variant_index => {
                     let data = &data.variants[vid.as_usize()].inner;
-                    for (idx, field) in data.fields.iter().enumerate() {
-                        let lhs = field.field_snap(self_snap.downcast_ty());
-                        let rhs = self
-                            .place_to_local_decl
-                            .get(&target_places[idx])
-                            .unwrap()
-                            .expr(self.vcx);
-                        self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
-                    }
+                    let snaps = data
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, _)| {
+                            self.place_to_local_decl
+                                .get(&target_places[idx])
+                                .unwrap()
+                                .expr(self.vcx)
+                        })
+                        .collect::<Vec<_>>();
+                    let cons = data.field_snaps_to_snap(snaps);
+                    self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
                 }
                 _ => return,
             },
             TySpecifics::StructLike(data) => {
-                for (idx, field) in data.fields.iter().enumerate() {
-                    let lhs = field.field_snap(self_snap.downcast_ty());
-                    let rhs = self
-                        .place_to_local_decl
-                        .get(&target_places[idx])
-                        .unwrap()
-                        .expr(self.vcx);
-                    self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
-                }
+                let snaps = data
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _)| {
+                        self.place_to_local_decl
+                            .get(&target_places[idx])
+                            .unwrap()
+                            .expr(self.vcx)
+                    })
+                    .collect::<Vec<_>>();
+                let cons = data.field_snaps_to_snap(snaps);
+                self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
             TySpecifics::ImmRef(data) => {
-                let lhs = data.value_access(self_snap.downcast_ty());
-                let rhs = self
+                let inner = self
                     .place_to_local_decl
                     .get(&target_places[0])
                     .unwrap()
                     .expr(self.vcx);
-                self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
+                let cons = data.value_to_snap(inner);
+                self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
             TySpecifics::MutRef(data) => {
-                let lhs = data.value_access(self_snap.downcast_ty());
-                let rhs = self
+                let inner = self
                     .place_to_local_decl
                     .get(&target_places[0])
                     .unwrap()
                     .expr(self.vcx);
-                self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
+                let cons = data.value_to_snap(inner);
+                self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
         }
     }
