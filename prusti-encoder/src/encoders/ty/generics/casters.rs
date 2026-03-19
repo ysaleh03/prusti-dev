@@ -430,7 +430,7 @@ impl TaskEncoder for CastersEnc<Purified> {
             let make_concrete_snap_arg_decl = vcx.mk_local_decl("snap", generic_snap);
             let make_concrete_snap_arg_expr = vcx.mk_local_ex(make_concrete_snap_arg_decl);
 
-            let _make_concrete_pre = mk_type_spec(
+            let make_concrete_pre = mk_type_spec(
                 make_concrete_snap_arg_expr,
                 generics.ty_exprs(),
                 generics.const_exprs(),
@@ -453,8 +453,8 @@ impl TaskEncoder for CastersEnc<Purified> {
                     generics.const_decls(),
                 ),
                 // TODO: type preconditions do not currently work
-                // vcx.alloc_slice(&[make_concrete_pre]),
-                &[],
+                vcx.alloc_slice(&[make_concrete_pre]),
+                // &[],
                 vcx.alloc_slice(&[make_concrete_post]),
                 None,
                 None,

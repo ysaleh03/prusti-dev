@@ -243,11 +243,7 @@ impl<'a, 'vir> TyUsePurifiedWalker<'a, 'vir> {
     }
 }
 
-impl<'vir> TyUsePurifiedData<'vir> {
-    pub fn snapshot(&self) -> vir::TypeSnap<'vir> {
-        todo!()
-    }
-}
+impl<'vir> TyUsePurifiedData<'vir> {}
 
 impl<'vir> TyUsePurifiedRef<'vir> {
     pub fn unreachable_to_snap<Curr, Next>(&self) -> vir::ExprGenSnap<'vir, Curr, Next> {

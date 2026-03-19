@@ -149,6 +149,7 @@ pub enum TyPurifiedEncLocalKind<'vir> {
     },
     Adt {
         adt: vir::Adt<'vir>,
+        domain: vir::Domain<'vir>,
         discr_fn: Option<vir::Function<'vir>>,
     },
 }
@@ -200,23 +201,27 @@ impl TaskEncoder for TyPurifiedEnc {
                     )?)
                 }
                 TySpecifics::ImmRef(immref) => {
-                    let builder = builder.set_adt_builder();
-                    TySpecifics::ImmRef(super::kinds::immref::ty_purified(immref, deps, builder)?)
+                    let domain = builder.set_adt_builder();
+                    TySpecifics::ImmRef(super::kinds::immref::ty_purified(
+                        task_key, immref, deps, domain,
+                    )?)
                 }
                 TySpecifics::MutRef(mutref) => {
-                    let builder = builder.set_adt_builder();
-                    TySpecifics::MutRef(super::kinds::mutref::ty_purified(mutref, deps, builder)?)
+                    let domain = builder.set_adt_builder();
+                    TySpecifics::MutRef(super::kinds::mutref::ty_purified(
+                        task_key, mutref, deps, domain,
+                    )?)
                 }
                 TySpecifics::StructLike(structlike) => {
-                    let builder = builder.set_adt_builder();
+                    let domain = builder.set_adt_builder();
                     TySpecifics::StructLike(super::kinds::structlike::ty_purified(
-                        task_key, structlike, deps, builder,
+                        task_key, structlike, deps, domain,
                     )?)
                 }
                 TySpecifics::EnumLike(enumlike) => {
-                    let builder = builder.set_adt_builder();
+                    let domain = builder.set_adt_builder();
                     TySpecifics::EnumLike(super::kinds::enumlike::ty_purified(
-                        task_key, enumlike, deps, builder,
+                        task_key, enumlike, deps, domain,
                     )?)
                 }
             };
@@ -230,8 +235,13 @@ impl TaskEncoder for TyPurifiedEnc {
             program.add_function(output.unreachable_to_snap);
             match output.kind {
                 TyPurifiedEncLocalKind::Domain { domain } => program.add_domain(domain),
-                TyPurifiedEncLocalKind::Adt { adt, discr_fn } => {
+                TyPurifiedEncLocalKind::Adt {
+                    adt,
+                    domain,
+                    discr_fn,
+                } => {
                     program.add_adt(adt);
+                    program.add_domain(domain);
                     if let Some(discr_fn) = discr_fn {
                         program.add_function(discr_fn);
                     }

@@ -1,10 +1,12 @@
 use crate::encoders::{
     Pure, Purified,
     ty::{
-        RustPrimitive,
+        RustPrimitive, RustTyDatas, RustTyDecomposition,
         builder::DomainBuilder,
+        data::TyDatas,
         impure::{PredicateBuilder, TyImpureEnc, TyImpurePrimitive},
         interpretation::float::{ty_pure_float, ty_purified_float},
+        lifted::{TyConstructorEnc, ty_constructor},
         pure::{
             TyPureEnc, TyPurePrimData, TyPurePrimDataKind, TyPurePrimDataNative, TyPurePrimitive,
         },
@@ -134,6 +136,7 @@ pub(crate) fn ty_purified<'vir>(
 ) -> Result<TyPurifiedPrimitive<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let ty = data;
     let ty_kind = ty.kind();
+    let ty_data = RustTyDecomposition::from_prim_ty(*ty);
 
     let prim_type: vir::TypePrim<'vir> = match ty_kind {
         ty::TyKind::Bool => vir::TYPE_BOOL.upcast_ty(),
@@ -151,9 +154,15 @@ pub(crate) fn ty_purified<'vir>(
         }
         _ => {
             let value_ident = builder.function("value", builder.self_type(), prim_type);
+            let type_enc = deps.require_ref::<TyConstructorEnc>(ty_data.ty)?;
+            let type_ident = type_enc.typeof_data.typeof_function;
+            let type_cons = type_enc.ty_constructor;
 
             builder.axiom("cons", vir::expr! {
                 forall s: [builder.self_type()] :: {[value_ident](s)} ([cons_ident]([value_ident](s))) == (s)
+            });
+            builder.axiom("typeof", vir::expr! {
+                forall s: [builder.self_type()] :: {[type_ident]((s) as Snap)} ([type_ident]((s) as Snap)) == ([type_cons]([], []))
             });
 
             match ty_kind {

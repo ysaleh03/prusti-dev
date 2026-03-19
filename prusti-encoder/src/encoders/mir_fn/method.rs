@@ -496,18 +496,28 @@ impl TaskEncoder for PurifiedMethodEnc {
 
             let mut return_to_remote = Vec::new();
 
-            for (ty, decl) in signature.inputs.iter().zip(local_defs.local_decl_args()) {
-                match ty.decompose(gparams).ty.specifics {
+            for (ty, decl) in signature.inputs.iter().zip(args.iter()) {
+                let decomposition = ty.decompose(gparams);
+                pres.push(generics.ty_assertion(deps, decl.expr(vcx), decomposition));
+
+                match decomposition.ty.specifics {
                     TySpecifics::MutRef(..) => {
                         let name_r =
                             vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str();
                         let decl = vcx.mk_local_decl(name_r, decl.ty);
+                        posts.push(generics.ty_assertion(deps, decl.expr(vcx), decomposition));
                         rets.push(decl);
                         return_to_remote.push(decl);
                     }
                     _ => (),
                 };
             }
+
+            posts.push(generics.ty_assertion(
+                deps,
+                local_defs.ret().local_ex,
+                signature.output.decompose(gparams),
+            ));
 
             // Do not encode the method body if it is external, trusted, just
             // a call stub, or a trait function without a default implementation
@@ -595,6 +605,11 @@ impl TaskEncoder for PurifiedMethodEnc {
                     encoded_blocks,
                 };
                 visitor.visit_body(body);
+                start_stmts.extend(
+                    visitor.declared_vars.iter().map(|(name, ty)| {
+                        vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
+                    }),
+                );
                 start_stmts.extend(
                     visitor
                         .from_to_vars

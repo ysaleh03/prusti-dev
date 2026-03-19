@@ -187,7 +187,7 @@ pub(crate) fn ty_impure<'vir>(
 }
 
 pub(crate) fn ty_purified<'vir>(
-    task_key: &TyData<'vir, RustTyDatas>,
+    task_key: &'vir TyData<'vir, RustTyDatas>,
     data: &EnumData<'vir, RustTyDatas>,
     deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
     builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,

@@ -76,6 +76,7 @@ pub enum BuilderData<'vir, P: HasTyBuilder> {
 pub(crate) struct AdtBuilderData<'vir> {
     constructors: Vec<vir::AdtConstructor<'vir>>,
     discr_fn: Option<DiscrFnBuilder<'vir>>,
+    axioms: Vec<vir::DomainAxiom<'vir>>,
 }
 
 // #[derive(Default)]
@@ -267,13 +268,24 @@ impl<'vir> TyBuilder<'vir, Purified> {
                     &[],
                     self.vcx.alloc_slice(data.constructors.as_slice()),
                 );
+                let domain = self.vcx.mk_domain(
+                    vir::vir_format_identifier!(self.vcx, "{}_ax", self.domain_ident.name()),
+                    &[],
+                    self.vcx.alloc_slice(data.axioms.as_slice()),
+                    &[],
+                    None,
+                );
                 let discr_fn = data.discr_fn.map(|df| {
                     let DiscrFnBuilder::Built(df) = df else {
                         panic!("discriminant function not built");
                     };
                     df
                 });
-                TyPurifiedEncLocalKind::Adt { adt, discr_fn }
+                TyPurifiedEncLocalKind::Adt {
+                    adt,
+                    domain,
+                    discr_fn,
+                }
             }
             BuilderData::None => unreachable!("no builder data"),
         }
@@ -377,6 +389,12 @@ impl<'vir, P: HasTyBuilder> AdtBuilder<'vir, P> {
             .mk_function(ident, (param,), &[], posts, None, expr);
         self.data().discr_fn = Some(DiscrFnBuilder::Built(built_fn));
         ident
+    }
+
+    pub(crate) fn axiom(&mut self, name: &str, expr: vir::ExprBool<'vir>) {
+        let name = vir::vir_format!(self.vcx, "{}_ax_{name}", self.name);
+        let axiom = self.vcx.alloc(DomainAxiomData { name, expr });
+        self.data().axioms.push(axiom);
     }
 }
 

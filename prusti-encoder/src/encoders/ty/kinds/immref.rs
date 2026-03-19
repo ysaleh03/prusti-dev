@@ -1,7 +1,9 @@
 use crate::encoders::ty::{
-    RustImmRef,
+    RustImmRef, RustTyDatas,
     builder::AdtBuilder,
+    data::TyData,
     impure::{PredicateBuilder, TyImpureEnc, TyImpureImmRef, TyImpureImmRefData},
+    lifted::{TyConstructorEnc, TypeOfEnc},
     pure::{TyPureEnc, TyPureImmRef, TyPureImmRefData},
     purified::{TyPurifiedEnc, TyPurifiedImmRef, TyPurifiedImmRefData},
 };
@@ -75,11 +77,27 @@ pub(crate) fn ty_impure<'vir>(
 }
 
 pub(crate) fn ty_purified<'vir>(
-    _data: &RustImmRef<'vir>,
-    _deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+    task_key: &'vir TyData<'vir, RustTyDatas>,
+    data: &RustImmRef<'vir>,
+    deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
     builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<TyPurifiedImmRef<'vir>, EncodeFullError<'vir, TyPurifiedEnc>> {
+    let vcx = builder.vcx;
+    let ty_constructor = deps.require_ref::<TyConstructorEnc>(task_key)?;
+    let type_constructor = ty_constructor.ty_constructor;
+    let typeof_function = ty_constructor.typeof_data.typeof_function;
+    let generic_typeof = deps
+        .require_ref::<TypeOfEnc>(data.decompose(task_key.params).ty)?
+        .typeof_function;
+
     let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None);
+
+    builder.axiom(
+        vir::vir_format!(vcx, "typeof"),
+        vir::expr! {
+            forall p: [field_access[0].ty()] :: {[typeof_function((field_snaps_to_snap(p.downcast_ty())).upcast_ty())]} ([typeof_function((field_snaps_to_snap(p.downcast_ty())).upcast_ty())]) == ([type_constructor(vcx.alloc_slice(&[generic_typeof(p.downcast_ty())]), &[])])
+        },
+    );
 
     Ok(TyPurifiedImmRefData {
         value_to_snap: field_snaps_to_snap,
