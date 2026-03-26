@@ -244,12 +244,14 @@ pub(super) fn ty_purified_variant<'vir>(
 
     for (idx, field_typeof) in field_typeofs.iter().enumerate() {
         let field_accessor = des[idx].read;
-        builder.axiom(
-            vir::vir_format!(vcx, "typaram{}", field_accessor.name),
+        if ty_constructor.ty_param_accessors.get(idx).is_some() {
+            builder.axiom(
+            vir::vir_format!(vcx, "typaram_{idx}"),
             vir::expr! {
                 forall s: [builder.self_type()] :: {[ty_constructor.ty_param_from_snap(idx, s)]} ([ty_constructor.ty_param_from_snap(idx, s)]) == ([field_typeof]([field_accessor](s)))
             },
-        );
+        )
+        };
     }
 
     let axiom_expr = if des.is_empty() {
@@ -260,11 +262,9 @@ pub(super) fn ty_purified_variant<'vir>(
     } else {
         let decls = des
             .iter()
-            .map(|field| {
-                vcx.mk_local_decl(
-                    vir::vir_format!(vcx, "p{}", field.read.name),
-                    field.read.ty(),
-                )
+            .enumerate()
+            .map(|(idx, field)| {
+                vcx.mk_local_decl(vir::vir_format!(vcx, "p_{}", idx), field.read.ty())
             })
             .collect::<Vec<_>>();
         let apps = decls
