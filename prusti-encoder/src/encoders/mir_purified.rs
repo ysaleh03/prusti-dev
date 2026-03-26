@@ -14,7 +14,7 @@ use pcg::{
     coupling::PcgCoupledEdgeKind,
     free_pcs::{RepackGuide, RepackOp},
     r#loop::{LoopAnalysis, LoopId, PlaceUsages},
-    pcg::{EvalStmtPhase, Pcg, PcgNode, PcgSuccessor},
+    pcg::{EvalStmtPhase, Pcg, PcgNode, PcgNodeLike, PcgSuccessor},
     results::PcgBasicBlock,
     utils::{
         CompilerCtxt, HasPlace, Place, SnapshotLocation, display::DisplayWithCtxt,
@@ -123,6 +123,17 @@ impl PackOrUnpack {
             EdgeAction::Remove => PackOrUnpack::Pack,
         }
     }
+
+    pub(crate) fn is_pack(&self) -> bool {
+        match self {
+            Self::Pack => true,
+            Self::Unpack => false,
+        }
+    }
+
+    pub(crate) fn is_unpack(&self) -> bool {
+        !self.is_pack()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -158,9 +169,9 @@ where
 
     // TODO: in theory only need return_to_remote here for reconstructing
     // mutrefs at the end of the method..
-    // pub return_to_remote: FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
-    // pub declared_remotes: FxHashSet<(&'vir str, vir::TypeSnap<'vir>)>, // is this even necessary??
-    // pub remote_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
+    pub return_to_remote: FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+    pub declared_remotes: FxHashSet<(&'vir str, vir::TypeSnap<'vir>)>, // is this even necessary??
+    pub remote_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
     pub declared_vars: FxHashSet<(&'vir str, vir::TypeSnap<'vir>)>,
     pub place_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
 
@@ -356,73 +367,20 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         pack_or_unpack: PackOrUnpack,
         label: Option<&'vir str>,
     ) {
-        let place = base.place();
-        let label = if let MaybeLabelledPlace::Labelled(snap) = base {
-            Some(self.get_location_label(snap.at()))
-        } else {
-            label.map(vir::OldLabel::Label)
+        let (place, label) = match base {
+            MaybeLabelledPlace::Current(place) => (place, None),
+            MaybeLabelledPlace::Labelled(snap) => {
+                // We shouldn't be unpacking old places?
+                debug_assert!(pack_or_unpack.is_pack());
+                (snap.place(), Some(self.get_location_label(snap.at())))
+            }
         };
-        let target_places = expansion
-            .iter()
-            .filter_map(|mp| mp.as_current_place())
-            .collect::<Vec<_>>();
-
+        let target_places = expansion.iter().map(|mp| mp.place()).collect::<Vec<_>>();
         match pack_or_unpack {
             PackOrUnpack::Unpack => self.unpack(place, guide, &target_places, label),
             PackOrUnpack::Pack => self.pack(place, guide, &target_places, label),
         }
     }
-
-    // pub(crate) fn pcs_borrow_expansion(
-    //     &mut self,
-    //     expansion: BorrowPcgExpansion<'vir>,
-    //     unpack: bool,
-    //     label: Option<&'vir str>,
-    // ) {
-    //     let base = expansion.base();
-    //     let PcgNode::Place(base) = base else {
-    //         // Ignore expansions of region projections
-    //         return;
-    //     };
-    //     let (place, old) = match base {
-    //         MaybeLabelledPlace::Current(place) => (place, None),
-    //         MaybeLabelledPlace::Labelled(snap) => {
-    //             // We shouldn't be unpacking old places?
-    //             debug_assert!(!unpack);
-    //             (
-    //                 snap.place(),
-    //                 Some(Self::get_location_label(self.vcx, snap.at())),
-    //             )
-    //         }
-    //     };
-    //     let mut place_enc = self.encode_place(place);
-    //     if let Some(label) = old {
-    //         place_enc.expr = self.vcx.mk_old(place_enc.expr, label);
-    //     } else if let Some(label) = label {
-    //         place_enc.expr = self.vcx.mk_local_labelled_old_expr(place_enc.expr, label);
-    //     }
-    //     if unpack {
-    //         self.expand(
-    //             place,
-    //             None,
-    //             &expansion
-    //                 .expansion()
-    //                 .iter()
-    //                 .map(|maybe| maybe.place())
-    //                 .collect::<Vec<_>>(),
-    //         );
-    //     } else {
-    //         self.collapse(
-    //             place,
-    //             None,
-    //             &expansion
-    //                 .expansion()
-    //                 .iter()
-    //                 .map(|maybe| maybe.place())
-    //                 .collect::<Vec<_>>(),
-    //         );
-    //     }
-    // }
 
     fn pcs_handle_edge(
         &mut self,
@@ -438,7 +396,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         // For each block `b` where the edge is only valid if control flow
         // continues from `b` to a specified subset of its successors, `cond`
         // contains the corresponding VIR expression.
-        let cond = conditions
+        let conditions = conditions
             .all_branch_choices()
             .map(|choices| {
                 let successors = choices.successors(self.body);
@@ -453,7 +411,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             .collect::<Vec<_>>();
         // For each block `b` where the edge validity depends on the successor taken from `b`,
         // every successor must be valid.
-        let cond = self.vcx.mk_conj(self.vcx.alloc_slice(&cond));
+        let cond = self.vcx.mk_conj(self.vcx.alloc_slice(&conditions));
         let stmts = self.block(|self_| {
             self_.pcs_handle_edge_conditionless(
                 borrows_state,
@@ -468,6 +426,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             || stmts
                 .iter()
                 .all(|stmt| matches!(stmt.kind, vir::StmtKindData::Comment(_)))
+            || conditions.is_empty()
         {
             self.stmts(stmts);
             return Ok(());
@@ -487,37 +446,6 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         to_skip: &mut Vec<mir::BasicBlock>,
     ) -> EncodeResult<'vir, (), E> {
         match edge.kind() {
-            // BorrowPcgEdgeKind::Borrow(borrow) if borrow.is_mut() && edge_action.is_remove() => {
-            //     self.unpack(borrow.assigned_ref(), label);
-            // }
-            // BorrowPcgEdgeKind::Borrow(borrow_edge) if borrow_edge.is_mut() => {
-            //     if edge_action.is_add() {
-            //         return Ok(());
-            //     }
-            //     let deref_place = borrow_edge.deref_place(self.pcg_ctxt()).place();
-            //     let deref_ty = deref_place.ty(self.pcg_ctxt()).ty;
-            //     let deref_enc = self.encode_place(deref_place);
-
-            //     let remote_place = borrow_edge.blocked_place().place();
-            //     let remote_local_data =
-            //         if let Some(local_data) = self.remote_to_local_decl.get(&remote_place) {
-            //             self.vcx.mk_local_decl(local_data.name, local_data.ty)
-            //         } else {
-            //             let remote_name = vir::vir_format_identifier!(
-            //                 self.vcx,
-            //                 "_{}s_remote",
-            //                 remote_place.local.as_usize()
-            //             )
-            //             .to_str();
-            //             let remote_ty = deref_enc.expr.snap.unwrap().ty();
-            //             let local = self.vcx.mk_local_decl(remote_name, remote_ty);
-
-            //             self.declared_remotes.insert((remote_name, remote_ty));
-            //             self.remote_to_local_decl.insert(remote_place, local);
-
-            //             local
-            //         };
-            // }
             BorrowPcgEdgeKind::BorrowPcgExpansion(expansion)
                 if let PcgNode::Place(base) = expansion.base() =>
             {
@@ -528,6 +456,51 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     PackOrUnpack::for_action(edge_action),
                     label,
                 );
+            }
+            BorrowPcgEdgeKind::Deref(deref) => {
+                let blocked_place = deref.blocked_place();
+                let deref_place = deref.deref_place();
+                // self.unpack(blocked_place, None, &[deref_place], None);
+                self.pack_or_unpack(
+                    blocked_place,
+                    vec![deref_place.try_to_local_node(self.pcg_ctxt()).unwrap()],
+                    None,
+                    PackOrUnpack::for_action(edge_action),
+                    label,
+                );
+            }
+            BorrowPcgEdgeKind::Borrow(borrow) if borrow.is_mut() && edge_action.is_remove() => {
+                let deref_enc = self.encode_place(borrow.deref_place(self.pcg_ctxt()).place());
+
+                let remote_place = borrow.blocked_place().place();
+                let remote_decl = if let Some(decl) = self.remote_to_local_decl.get(&remote_place) {
+                    *decl
+                } else {
+                    let remote_name = vir::vir_format_identifier!(
+                        self.vcx,
+                        "_{}s_remote",
+                        remote_place.local.as_usize()
+                    )
+                    .to_str();
+                    let local = self.vcx.mk_local_decl(remote_name, deref_enc.snap.ty());
+
+                    self.declared_remotes
+                        .insert((remote_name, deref_enc.snap.ty()));
+                    self.remote_to_local_decl.insert(remote_place, local);
+
+                    local
+                };
+
+                let lhs = remote_decl.expr(self.vcx);
+                let rhs = deref_enc.snap;
+                self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
+            }
+            BorrowPcgEdgeKind::Borrow(borrow) if !borrow.is_mut() && edge_action.is_remove() => {
+                let blocked_place = borrow.blocked_place().place();
+                let deref_place = borrow.deref_place(self.pcg_ctxt()).place();
+                let lhs = self.encode_place(blocked_place).snap;
+                let rhs = self.encode_place(deref_place).snap;
+                self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
             }
             BorrowPcgEdgeKind::Coupled(PcgCoupledEdgeKind(FunctionCallOrLoop::FunctionCall(
                 call_edge,
@@ -810,6 +783,10 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 self.place_to_local_decl.insert(target_places[0], lhs);
             }
         }
+        // self.stmt(
+        //     self.vcx
+        //         .mk_pure_assign_stmt(self_snap, data.data.unreachable_to_snap()),
+        // );
     }
 
     fn pack(
@@ -1133,54 +1110,7 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
                 self.stmt(self.vcx.mk_pure_assign_stmt(tmp_exp, snap_val));
                 Ok(tmp_exp)
             }
-            &mir::Operand::Copy(place) => {
-                Ok(self.encode_place_with_snap(place.into()).1)
-                // let place_expr =
-                //     if let Some(local_data) = self.place_to_local_decl.get(&place.into()) {
-                //         return self
-                //             .vcx
-                //             .mk_local_ex(self.vcx.mk_local_decl(local_data.name, local_data.ty));
-                //     } else {
-                //         self.local_defs.locals[place.local].local_ex
-                //     };
-
-                // let mut place_ty = mir::PlaceTy::from_ty(self.local_decls[place.local].ty);
-                // let mut encoded_place = mir::Place::from(place.local);
-
-                // let mut crossed_ref =
-                //     matches!(place_ty.ty.kind(), TyKind::Ref(_, _, ty::Mutability::Not));
-                // let mut result = place_expr.as_dyn();
-                // for elem in place.projection {
-                //     if crossed_ref {
-                //         use vir::Reify;
-                //         let (expr, _) = crate::encoders::mir_pure::Enc::encode_place_element(
-                //             self.deps,
-                //             place_ty,
-                //             elem,
-                //             result.lift().downcast_ty(),
-                //         );
-                //         result = expr.reify(self.vcx, (self.def_id, &[])).as_dyn();
-                //     } else {
-                //         let maybe_local = self.place_to_local_decl.get(&encoded_place.into());
-                //         result = if let Some(local) = maybe_local {
-                //             self.vcx.mk_local_ex_local(local)
-                //         } else {
-                //             self.encode_place_element(place_ty, elem, result.downcast_ty())
-                //         }
-                //         .as_dyn();
-                //     }
-                //     place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
-                //     encoded_place = encoded_place.project_deeper(&[elem], self.vcx.tcx());
-                //     if !crossed_ref
-                //         && matches!(place_ty.ty.kind(), TyKind::Ref(_, _, ty::Mutability::Not))
-                //     {
-                //         let ty_out = self.ty_use_purified(place_ty.ty);
-                //         result = ty_out.expect_immref().value(result.downcast_ty()).as_dyn();
-                //         crossed_ref = true;
-                //     }
-                // }
-                // result.downcast_ty()
-            }
+            &mir::Operand::Copy(place) => Ok(self.encode_place_with_snap(place.into()).1),
             mir::Operand::Constant(box constant) => {
                 Ok(self.encode_constant_snap(constant)?.upcast_ty())
             }
