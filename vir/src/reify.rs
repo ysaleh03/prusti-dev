@@ -136,7 +136,6 @@ impl<'vir, Curr: Copy, NextA, NextB> Reify<'vir, Curr>
             ExprKindGenData::AdtDiscriminator(v, cons) => vcx.alloc(
                 ExprKindGenData::AdtDiscriminator(v.purified_reify(vcx, lctx), cons),
             ),
-            ExprKindGenData::Todo(v) => vcx.alloc(ExprKindGenData::Todo(v)),
         }
     }
 }

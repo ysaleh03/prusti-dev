@@ -93,7 +93,7 @@ pub struct RustTyNormalized<'tcx> {
 /// decomposed as needed when recursing).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LazyRustTy<'tcx>(ty::Ty<'tcx>);
+pub struct LazyRustTy<'tcx>(pub(crate) ty::Ty<'tcx>);
 
 impl<'tcx> LazyRustTy<'tcx> {
     pub fn new(ty: ty::Ty<'tcx>) -> Self {

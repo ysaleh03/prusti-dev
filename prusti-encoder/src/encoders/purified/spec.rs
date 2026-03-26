@@ -4,17 +4,18 @@ use prusti_interface::{
 };
 use prusti_rustc_interface::{
     middle::{mir, ty},
-    span::{Span, def_id::DefId},
+    span::def_id::DefId,
 };
 
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, HasType, Reify, macros::ExprQuote};
+use vir::{CastType, Reify, macros::ExprQuote};
 
 use crate::encoders::{
-    MirLocalDefEncTask, MirPureEnc, PurifiedMirLocalDefEncTask, TyUsePurifiedEnc,
+    MirPureEnc, PurifiedMirLocalDefEncTask, TyUsePurifiedEnc,
+    mir_fn::RustSignature,
     mir_pure::PureKind,
     pure::spec::{EncodedPledge, PledgeExpiryObligation},
-    ty::{RustTyDecomposition, use_pure::TyUsePureEnc},
+    ty::{RustTyDecomposition, generics::GParams},
 };
 
 pub struct PurifiedMirSpecEnc;
@@ -50,6 +51,9 @@ impl TaskEncoder for PurifiedMirSpecEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
         let (def_id, pure) = *task_key;
+        let signature = RustSignature::new(def_id);
+        let params = GParams::from(def_id);
+
         deps.emit_output_ref(*task_key, ())?;
 
         let local_defs = deps
@@ -78,7 +82,17 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             let pre_args = if pure {
                 &all_args[..all_args.len() - 1]
             } else {
-                all_args
+                let pre_args: Vec<vir::ExprSnap<'vir>> = local_defs
+                    .local_decl_args()
+                    .map(|decl| {
+                        vcx.mk_local_decl(
+                            vir::vir_format_identifier!(vcx, "{}_param", decl.name).to_str(),
+                            decl.ty,
+                        )
+                        .expr(vcx)
+                    })
+                    .collect();
+                vcx.alloc_slice(&pre_args)
             };
 
             let to_bool = deps
@@ -122,9 +136,15 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             } else {
                 let post_args: Vec<vir::ExprSnap<'vir>> = local_defs
                     .local_decl_args()
-                    .map(|decl| {
+                    .zip(signature.inputs.iter())
+                    .map(|(decl, ty)| {
+                        let suffix = if Self::contains_mut_ref(ty.0, vcx.tcx()) {
+                            "_param"
+                        } else {
+                            "_return"
+                        };
                         vcx.mk_local_decl(
-                            vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str(),
+                            vir::vir_format_identifier!(vcx, "{}{}", decl.name, suffix).to_str(),
                             decl.ty,
                         )
                         .expr(vcx)
@@ -167,28 +187,10 @@ impl TaskEncoder for PurifiedMirSpecEnc {
                     })
                 })
                 .collect::<Result<Vec<vir::ExprBool<'_>>, _>>()?;
-            // let pledge_args = vcx.alloc_slice(
-            //     &pre_args
-            //         .iter()
-            //         .map(|arg| vcx.mk_old_expr(arg))
-            //         .chain([local_defs[mir::RETURN_PLACE].impure_snap])
-            //         .collect::<Vec<_>>(),
-            // );
-            let pre_pledge_args = vcx.alloc_slice(
-                &[
-                    pre_args,
-                    // TODO: this looks a bit hardcoded...
-                    &[vcx.mk_local_ex(local_defs.locals[mir::RETURN_PLACE].local_snap)],
-                ]
-                .concat(),
-            );
+            let pre_pledge_args = vcx
+                .alloc_slice(&[pre_args, &[vcx.mk_local_ex(local_defs.ret().local_snap)]].concat());
             let post_pledge_args = vcx.alloc_slice(
-                &[
-                    post_args,
-                    // TODO: this looks a bit hardcoded...
-                    &[vcx.mk_local_ex(local_defs.locals[mir::RETURN_PLACE].local_snap)],
-                ]
-                .concat(),
+                &[post_args, &[vcx.mk_local_ex(local_defs.ret().local_snap)]].concat(),
             );
             let pledges = specs
                 .pledges
@@ -279,5 +281,18 @@ impl TaskEncoder for PurifiedMirSpecEnc {
             };
             Ok(((), data))
         })
+    }
+}
+
+impl<'vir> PurifiedMirSpecEnc {
+    fn contains_mut_ref(ty: ty::Ty<'vir>, tcx: ty::TyCtxt<'vir>) -> bool {
+        match ty.kind() {
+            ty::TyKind::Ref(_, _, ty::Mutability::Mut) => true,
+            ty::TyKind::Adt(adt_def, substs) => adt_def
+                .all_fields()
+                .any(|f| Self::contains_mut_ref(f.ty(tcx, substs), tcx)),
+            ty::TyKind::Tuple(tys) => tys.iter().any(|t| Self::contains_mut_ref(t, tcx)),
+            _ => false,
+        }
     }
 }
