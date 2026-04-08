@@ -97,11 +97,11 @@ pub fn test_entrypoint<'tcx>(
 
     program.header("snapshots");
     // crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
+    crate::encoders::TyUsePurifiedEnc::emit_outputs(&mut program);
     BitVecEnc::emit_outputs(&mut program);
 
-    program.header("predicates");
+    // program.header("predicates");
     // crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
-    crate::encoders::TyUsePurifiedEnc::emit_outputs(&mut program);
 
     program.header("type constructors");
     TyConstructorEnc::emit_outputs(&mut program);
