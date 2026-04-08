@@ -2,7 +2,6 @@ use crate::encoders::ty::{
     RustTyDatas,
     builder::AdtBuilder,
     data::{StructData, TyData},
-    generics::GenericParamsEnc,
     impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
     lifted::{TyConstructorEnc, TypeOfEnc},
     pure::{PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
@@ -11,8 +10,9 @@ use crate::encoders::ty::{
     use_pure::TyUsePureEnc,
     use_purified::TyUsePurifiedEnc,
 };
+use prusti_rustc_interface::data_structures::fx::FxHashMap;
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
-use vir::{CastType, HasType, PredicateIdn, Snap, macros::ExprQuote};
+use vir::{CastType, HasType, PredicateIdn, macros::ExprQuote};
 
 pub(crate) fn ty_pure<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
@@ -221,16 +221,41 @@ pub(super) fn ty_purified_variant<'vir>(
     builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let vcx = builder.vcx;
-    let ty_constructor = deps.require_ref::<TyConstructorEnc>(task_key)?;
-    let type_constructor = ty_constructor.ty_constructor;
-    let typeof_function = ty_constructor.typeof_data.typeof_function;
+
+    let ty_params = task_key
+        .params
+        .rust_params()
+        .iter()
+        .filter_map(|a| a.as_type())
+        .collect::<Vec<_>>();
+
+    let ty_constructor_enc = deps.require_ref::<TyConstructorEnc>(task_key)?;
+    let type_constructor = ty_constructor_enc.ty_constructor;
+    let typeof_function = ty_constructor_enc.typeof_data.typeof_function;
+
     let mut field_tys = Vec::new();
     let mut field_typeofs = Vec::new();
+    let mut typaram_to_field_typeof = FxHashMap::default();
+
     for f in data.fields.iter() {
-        let ty = f.decompose(task_key.params);
-        field_tys.push(deps.require_ref::<TyUsePurifiedEnc>(ty)?.snapshot);
-        field_typeofs.push(deps.require_ref::<TypeOfEnc>(ty.ty)?.typeof_function);
+        let decomposition = f.decompose(task_key.params);
+        let field_typeof = deps
+            .require_ref::<TypeOfEnc>(decomposition.ty)?
+            .typeof_function;
+        field_tys.push(
+            deps.require_ref::<TyUsePurifiedEnc>(decomposition)?
+                .snapshot,
+        );
+        field_typeofs.push(field_typeof);
+
+        let ty = f.ty().0;
+        if ty_params.contains(&ty) {
+            typaram_to_field_typeof.insert(ty, (field_typeof, f.fid));
+        }
     }
+
+    // println!("{} map: {typaram_to_field_typeof:?}", task_key.data.name());
+
     let field_tys = vcx.alloc_slice(&field_tys);
     let field_typeofs = vcx.alloc_slice(&field_typeofs);
     let (field_snaps_to_snap, des) = builder.constructor(prefix, field_tys, discr);
@@ -244,11 +269,11 @@ pub(super) fn ty_purified_variant<'vir>(
 
     for (idx, field_typeof) in field_typeofs.iter().enumerate() {
         let field_accessor = des[idx].read;
-        if ty_constructor.ty_param_accessors.get(idx).is_some() {
+        if ty_constructor_enc.ty_param_accessors.get(idx).is_some() {
             builder.axiom(
-            vir::vir_format!(vcx, "typaram_{idx}"),
+            vir::vir_format!(vcx, "{prefix}typaram_{idx}"),
             vir::expr! {
-                forall s: [builder.self_type()] :: {[ty_constructor.ty_param_from_snap(idx, s)]} ([ty_constructor.ty_param_from_snap(idx, s)]) == ([field_typeof]([field_accessor](s)))
+                forall s: [builder.self_type()] :: {[ty_constructor_enc.ty_param_from_snap(idx, s)]} ([ty_constructor_enc.ty_param_from_snap(idx, s)]) == ([field_typeof]([field_accessor](s)))
             },
         )
         };
@@ -267,10 +292,10 @@ pub(super) fn ty_purified_variant<'vir>(
                 vcx.mk_local_decl(vir::vir_format!(vcx, "p_{}", idx), field.read.ty())
             })
             .collect::<Vec<_>>();
-        let apps = decls
+        let apps = ty_params
             .iter()
-            .zip(field_typeofs.iter())
-            .map(|(decl, param_typeof)| param_typeof.call()(decl.expr(vcx)))
+            .filter_map(|ty| typaram_to_field_typeof.get(ty))
+            .map(|(typeof_fn, fidx)| typeof_fn.call()(decls[fidx.as_usize()].expr(vcx)))
             .collect::<Vec<_>>();
         let snaps = decls.iter().map(|decl| decl.expr(vcx)).collect::<Vec<_>>();
         vcx.mk_forall_expr(
@@ -285,7 +310,7 @@ pub(super) fn ty_purified_variant<'vir>(
         )
     };
 
-    builder.axiom(vir::vir_format!(vcx, "typeof"), axiom_expr);
+    builder.axiom(vir::vir_format!(vcx, "{prefix}typeof"), axiom_expr);
 
     Ok(StructData::new(
         TyPurifiedStructData {
