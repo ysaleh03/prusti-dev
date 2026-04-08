@@ -6,7 +6,6 @@ mod mir_shared;
 mod spec;
 mod pure;
 mod local_def;
-mod purified_local_def;
 pub(super) mod ty;
 mod r#const;
 // TODO: move `mir_impure` to this dir:
@@ -28,7 +27,6 @@ pub use mir_pure::{MirPureEnc, MirPureEncTask, PureKind};
 pub use mir_purified::PurifiedEncVisitor;
 pub use pure::spec::MirSpecEnc;
 pub use purified::fn_wand::{PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask};
-pub use purified_local_def::*;
 pub(super) use spec::with_proc_spec;
 pub use spec::{SpecEnc, SpecEncTask, is_function_trusted, is_type_trusted};
 pub use ty::{
@@ -47,7 +45,8 @@ pub(crate) trait Purity:
     type ArgTy: vir::CompType;
     type TyUseEnc = ty::TyUseEnc<Self>;
 }
-pub(crate) trait HasTyBuilder: Purity {}
+pub(crate) trait NotImpure: Purity {}
+pub(crate) trait NotPure: Purity {}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -58,7 +57,7 @@ pub struct Pure;
 impl Purity for Pure {
     type ArgTy = vir::Ref;
 }
-impl HasTyBuilder for Pure {}
+impl NotImpure for Pure {}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -69,6 +68,7 @@ pub struct Impure;
 impl Purity for Impure {
     type ArgTy = vir::Ref;
 }
+impl NotPure for Impure {}
 
 /// Some encoders work for pure, impure and purified encodings, though might
 /// output something slightly different for the two. This allows them to be
@@ -79,4 +79,5 @@ pub struct Purified;
 impl Purity for Purified {
     type ArgTy = vir::Snap;
 }
-impl HasTyBuilder for Purified {}
+impl NotImpure for Purified {}
+impl NotPure for Purified {}

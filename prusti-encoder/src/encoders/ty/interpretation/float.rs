@@ -3,7 +3,7 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{BackendInterpretationPair, CallableIdn, FunctionIdn, VirCtxt};
 
 use crate::encoders::{
-    HasTyBuilder, Pure, Purified, Purity,
+    NotImpure, Pure, Purified, Purity,
     ty::{
         builder::DomainBuilder,
         interpretation::bitvec::{BitVecEnc, BitVecSize},
@@ -54,7 +54,7 @@ pub(crate) fn ty_purified_float<'vir>(
     ty_float(vcx, deps, builder, float, prim_to_snap)
 }
 
-pub(crate) fn ty_float<'vir, Enc: TaskEncoder, P: HasTyBuilder>(
+pub(crate) fn ty_float<'vir, Enc: TaskEncoder, P: NotImpure>(
     vcx: &'vir VirCtxt<'vir>,
     deps: &mut TaskEncoderDependencies<'vir, Enc>,
     builder: &mut DomainBuilder<'vir, P>,

@@ -4,6 +4,7 @@ use vir::{FunctionIdn, HasType, Reify};
 
 use crate::encoders::{
     MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure, PureKind,
+    Purified,
     mir_fn::{CallTaskDescription, RustSignature},
     ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
 };
@@ -124,10 +125,11 @@ impl TaskEncoder for FunctionEnc {
             let def_id = *task_key;
             let signature = RustSignature::new(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
-            let local_defs = deps.require_dep::<MirLocalDefEnc>(MirLocalDefEncTask::Local {
-                def_id,
-                all_locals: true,
-            })?;
+            let local_defs =
+                deps.require_dep::<MirLocalDefEnc<Purified>>(MirLocalDefEncTask::Local {
+                    def_id,
+                    all_locals: true,
+                })?;
 
             tracing::debug!("encoding {def_id:?}");
 
@@ -145,14 +147,14 @@ impl TaskEncoder for FunctionEnc {
             deps.emit_output_ref(def_id, FunctionEncOutputRef { function_ref })?;
 
             let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
-            let spec = deps.require_dep::<MirSpecEnc>((def_id, true))?;
+            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, true))?;
 
             let expr = if trusted {
                 None
             } else {
                 // Encode the body of the function
                 let expr = deps
-                    .require_dep::<MirPureEnc>(MirPureEncTask {
+                    .require_dep::<MirPureEnc<Purified>>(MirPureEncTask {
                         encoding_depth: 0,
                         kind: PureKind::Pure,
                         parent_def_id: def_id,

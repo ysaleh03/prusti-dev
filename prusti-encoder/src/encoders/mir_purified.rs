@@ -23,7 +23,9 @@ use pcg::{
 };
 use prusti_interface::{PrustiError, specs::specifications::SpecQuery};
 use prusti_rustc_interface::{
+    abi,
     data_structures::fx::{FxHashMap, FxHashSet},
+    index::IndexVec,
     middle::{
         mir,
         ty::{self, TyKind},
@@ -32,16 +34,16 @@ use prusti_rustc_interface::{
 };
 use prusti_utils::config;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, macros::ExprQuote};
+use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, Snap, macros::ExprQuote};
 
 use crate::encoders::{
-    self, FunctionCallEnc, PurifiedWandEnc, PurifiedWandEncTask,
+    self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncTask,
     mir_fn::{CallTaskDescription, RustSignature},
-    mir_shared::PureRvalueEnc,
+    mir_shared::{EncodedCast, ExprResult, PureRvalueEnc},
     ty::{
         RustTyDecomposition,
         data::TySpecifics,
-        use_pure::{TyUsePure, TyUsePureEnc},
+        generics::{GArgs, GArgsTyEnc},
         use_purified::{TyUsePurified, TyUsePurifiedEnc},
     },
 };
@@ -162,7 +164,7 @@ where
     pub def_id: DefId,
     pub local_decls: &'enc mir::LocalDecls<'vir>,
     pub fpcs_analysis: PcgOutput<'enc, 'vir>,
-    pub local_defs: crate::encoders::PurifiedMirLocalDefEncOutput<'vir>,
+    pub local_defs: crate::encoders::MirLocalDefEncOutput<'vir>,
     pub body: &'enc mir::Body<'vir>,
 
     pub wands: PurifiedWandEncOutput<'vir>,
@@ -521,7 +523,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 //   function call; instead we should figure out which
                 //   wand it is based on the edge info.
                 // TODO: closures
-                let wands = self
+                let wand_enc_output = self
                     .deps
                     .require_dep::<PurifiedWandEnc>(PurifiedWandEncTask {
                         data: call.function_data().unwrap(),
@@ -542,7 +544,15 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                                 }))
                                 .collect::<Result<Vec<_>, EncodeFullError<'vir, E>>>()?;
                         let (label_pre, label_post) = self.call_labels[&call.location().block];
-                        wands.apply_proofs(&wand_args, label_pre, label_post, self);
+                        wand_enc_output.apply_reconstructors(
+                            &wand_args,
+                            &[],
+                            &[],
+                            &[],
+                            label_pre,
+                            label_post,
+                            self,
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -1075,6 +1085,7 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
     type EncodePlaceCtxt = ();
     type ExprCurr = ();
     type ExprNext = !;
+    type Purity = Purified;
     fn def_id(&self) -> DefId {
         self.def_id
     }
@@ -1091,9 +1102,9 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
         self.body
     }
 
-    fn ty_use_pure(&mut self, ty: ty::Ty<'vir>) -> TyUsePure<'vir> {
+    fn ty_use_pure(&mut self, ty: ty::Ty<'vir>) -> TyUsePurified<'vir> {
         let ty_task = RustTyDecomposition::from_ty(ty, self.vcx.tcx(), self.def_id);
-        self.deps.require_dep::<TyUsePureEnc>(ty_task).unwrap()
+        self.deps.require_dep::<TyUsePurifiedEnc>(ty_task).unwrap()
     }
 
     fn encode_operand_snap(
@@ -1123,6 +1134,87 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
         _ctxt: &Self::EncodePlaceCtxt,
     ) -> vir::ExprGenSnap<'vir, Self::ExprCurr, Self::ExprNext> {
         self.encode_place_with_snap(place).1
+    }
+
+    fn encode_cast_snap<'slf>(
+        &'slf mut self,
+        kind: mir::CastKind,
+        operand: &mir::Operand<'vir>,
+        ty: ty::Ty<'vir>,
+        ctxt: &Self::EncodePlaceCtxt,
+    ) -> Result<EncodedCast<'vir, Self>, EncodeFullError<'vir, Self::Encoder>> {
+        if !matches!(kind, mir::CastKind::IntToInt) {
+            todo!("cast kind {kind:?}");
+        }
+        let encoded_operand = self.encode_operand_snap(operand, ctxt)?;
+        let from_ty = operand.ty(self.body(), self.vcx().tcx());
+        let from_vir_ty = self.ty_use_pure(from_ty).expect_primitive().expect_native();
+        let to_vir_ty = self.ty_use_pure(ty).expect_primitive();
+        let from_prim = from_vir_ty.snap_to_prim.call()(encoded_operand.downcast_ty());
+        let (to_bits, to_signed) = vir::VirCtxt::get_int_data(ty.kind());
+        let (from_bits, from_signed) = vir::VirCtxt::get_int_data(from_ty.kind());
+
+        let needs_min_check = match (from_signed, to_signed) {
+            (true, true) => from_bits > to_bits, // both signed, check required if target has fewer bits
+            (false, false) => false,             // both unsigned, no min check necessary
+            (false, true) => false,              // unsigned to signed, no min check necessary
+            (true, false) => false,              // signed to unsigned, `from` must be >= 0
+        };
+
+        let needs_max_check = match (from_signed, to_signed) {
+            (false, true) => from_bits >= to_bits, // unsigned to signed, must check unless target is bigger
+            _ => from_bits > to_bits,              // otherwise check if target has fewer bits
+        };
+
+        let mut preconditions = Vec::new();
+        if needs_min_check {
+            let to_min = self.vcx().get_min_int(ty.kind());
+            let min_check = self
+                .vcx()
+                .mk_bin_op_expr(
+                    vir::BinOpKind::CmpGe,
+                    from_prim.as_dyn(),
+                    to_min.lazy().as_dyn(),
+                )
+                .downcast_ty::<vir::Bool>();
+            preconditions.push(min_check);
+        }
+
+        if needs_max_check {
+            let to_max = self.vcx().get_max_int(ty.kind());
+            let max_check = self
+                .vcx()
+                .mk_bin_op_expr(
+                    vir::BinOpKind::CmpLe,
+                    from_prim.as_dyn(),
+                    to_max.lazy().as_dyn(),
+                )
+                .downcast_ty::<vir::Bool>();
+            preconditions.push(max_check);
+        }
+        Ok(EncodedCast {
+            preconditions,
+            expr: to_vir_ty.prim_to_snap.call()(from_prim).upcast_ty(),
+        })
+    }
+
+    fn encode_aggregate_snap(
+        &mut self,
+        rvalue_ty: ty::Ty<'vir>,
+        kind: &mir::AggregateKind<'vir>,
+        fields: &IndexVec<abi::FieldIdx, mir::Operand<'vir>>,
+        ctxt: &Self::EncodePlaceCtxt,
+    ) -> ExprResult<'vir, Self> {
+        let encoded_fields = fields
+            .iter()
+            .map(|field| self.encode_operand_snap(field, ctxt))
+            .collect::<Result<Vec<_>, _>>()?;
+        let e_rvalue_ty = self.ty_use_pure(rvalue_ty);
+        let sl = match kind {
+            mir::AggregateKind::Adt(_, vidx, _, _, _) => e_rvalue_ty.get_variant_any(*vidx),
+            _ => e_rvalue_ty.expect_structlike(),
+        };
+        Ok(sl.field_snaps_to_snap(encoded_fields).upcast_ty())
     }
 }
 
@@ -1407,9 +1499,9 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 let borrows = current_fpcs.statements.last().unwrap().states
                     [EvalStmtPhase::PostMain]
                     .borrow_pcg();
-                let proof_packages = self.package_proofs(borrows).unwrap();
+                let wand_proofs = self.prove_wands(borrows).unwrap();
                 self.current_fpcs = Some(current_fpcs);
-                self.stmts(proof_packages);
+                self.stmts(wand_proofs);
 
                 self.vcx
                     .mk_goto_stmt(self.vcx.alloc(vir::CfgBlockLabelData::End))
@@ -1503,10 +1595,10 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                                 match typ.kind() {
                                     TyKind::Ref(.., ty::Mutability::Mut)
                                     | TyKind::RawPtr(.., ty::Mutability::Mut) => true,
-                                    // TyKind::Adt(_, args) => args
-                                    //     .iter()
-                                    //     .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
-                                    // TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
+                                    TyKind::Adt(_, args) => args
+                                        .iter()
+                                        .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
+                                    TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
                                     _ => false,
                                 }
                             }
@@ -1516,7 +1608,17 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                                 .map(|arg| self.encode_operand(&arg.node).unwrap())
                                 .collect::<Vec<_>>();
 
-                            let method_out = std::iter::once(dest)
+                            let callee_signature = RustSignature::new(func_def_id);
+                            let callee_output_ty = self
+                                .deps
+                                .require_dep::<TyUsePurifiedEnc>(
+                                    callee_signature.output.decompose(callee_signature.gparams),
+                                )
+                                .unwrap();
+
+                            let tmp = self.new_tmp(callee_output_ty.snapshot);
+
+                            let method_out = std::iter::once(tmp.expr(vcx))
                                 .chain(
                                     args.iter()
                                         .filter(|arg| {
@@ -1526,17 +1628,8 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                                 )
                                 .collect::<Vec<_>>();
 
-                            let tmps = method_out
-                                .iter()
-                                .map(|out| self.new_tmp(out.ty()))
-                                .collect::<Vec<_>>();
-
-                            let call = func_out.call(
-                                method_in,
-                                self.vcx.alloc_slice(
-                                    &tmps.iter().map(|tmp| tmp.as_dyn()).collect::<Vec<_>>(),
-                                ),
-                            );
+                            let call =
+                                func_out.call(method_in, dest, self.vcx.alloc_slice(&method_out));
 
                             let label_pre = self.new_label("pre");
                             vcx.handle_error(
@@ -1557,34 +1650,6 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                             );
                             self.stmts(call);
                             let label_post = self.new_label("post");
-                            self.stmts(
-                                method_out
-                                    .iter()
-                                    .zip(tmps.iter())
-                                    .map(|(out, tmp)| vcx.mk_pure_assign_stmt(out, tmp.expr(vcx)))
-                                    .collect::<Vec<_>>(),
-                            );
-
-                            // for ((_, tmp_expr), (arg_expr, arg, fn_arg_ty)) in
-                            //     tmps.iter().zip(ref_muts.iter())
-                            // {
-                            //     let local_decls = self.local_decls_src();
-                            //     let arg_ty = arg.node.ty(local_decls, self.vcx.tcx());
-                            //     let caster = self
-                            //         .deps()
-                            //         .require_ref::<CastToEnc<CastTypePure>>(CastArgs {
-                            //             expected: arg_ty,
-                            //             actual: **fn_arg_ty,
-                            //         })
-                            //         .unwrap();
-                            //     let tmp_expr = if arg_expr.ty() == tmp_expr.ty() {
-                            //         tmp_expr
-                            //     } else {
-                            //         caster.apply_cast_if_necessary(self.vcx, tmp_expr)
-                            //     };
-                            //     self.stmt(self.vcx.mk_pure_assign_stmt(arg_expr, tmp_expr));
-                            // }
-
                             self.call_labels
                                 .insert(location.block, (label_pre, label_post));
                         })

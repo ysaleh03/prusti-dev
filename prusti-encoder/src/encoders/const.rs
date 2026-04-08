@@ -13,7 +13,7 @@ use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDe
 use vir::CastType;
 
 use crate::encoders::{
-    MirPureEnc, MirPureEncTask, PureKind,
+    MirPureEnc, MirPureEncTask, PureKind, Purified,
     ty::{
         RustTyDecomposition,
         generics::{GParams, GenericParamsEnc},
@@ -180,7 +180,7 @@ impl TaskEncoder for ConstEnc {
                             kind: PureKind::Constant(promoted),
                             caller_def_id: Some(def_id),
                         };
-                        let expr = deps.require_dep::<MirPureEnc>(task)?.expr;
+                        let expr = deps.require_dep::<MirPureEnc<Purified>>(task)?.expr;
                         use vir::Reify;
                         Ok(expr.reify(vcx, (uneval.def, &[])).downcast_ty())
                     } else {

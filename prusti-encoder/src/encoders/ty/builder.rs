@@ -10,7 +10,7 @@ use vir::{
 };
 
 use crate::encoders::{
-    HasTyBuilder, Pure, Purified,
+    NotImpure, Pure, Purified,
     ty::{
         RustTy,
         generics::GenericParamsEnc,
@@ -19,9 +19,9 @@ use crate::encoders::{
     },
 };
 
-pub(crate) struct DomainBuilder<'vir, P: HasTyBuilder>(TyBuilder<'vir, P>);
+pub(crate) struct DomainBuilder<'vir, P: NotImpure>(TyBuilder<'vir, P>);
 
-impl<'vir, P: HasTyBuilder> DomainBuilder<'vir, P> {
+impl<'vir, P: NotImpure> DomainBuilder<'vir, P> {
     pub(crate) fn data(&mut self) -> &mut DomainBuilderData<'vir, P> {
         match &mut self.0.data {
             BuilderData::Domain(data) => data,
@@ -30,7 +30,7 @@ impl<'vir, P: HasTyBuilder> DomainBuilder<'vir, P> {
     }
 }
 
-impl<'vir, P: HasTyBuilder> Deref for DomainBuilder<'vir, P> {
+impl<'vir, P: NotImpure> Deref for DomainBuilder<'vir, P> {
     type Target = TyBuilder<'vir, P>;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -38,9 +38,9 @@ impl<'vir, P: HasTyBuilder> Deref for DomainBuilder<'vir, P> {
 }
 
 #[repr(transparent)]
-pub(crate) struct AdtBuilder<'vir, P: HasTyBuilder>(TyBuilder<'vir, P>);
+pub(crate) struct AdtBuilder<'vir, P: NotImpure>(TyBuilder<'vir, P>);
 
-impl<'vir, P: HasTyBuilder> AdtBuilder<'vir, P> {
+impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
     pub(crate) fn data(&mut self) -> &mut AdtBuilderData<'vir> {
         match &mut self.0.data {
             BuilderData::Adt(data) => data,
@@ -49,14 +49,14 @@ impl<'vir, P: HasTyBuilder> AdtBuilder<'vir, P> {
     }
 }
 
-impl<'vir, P: HasTyBuilder> Deref for AdtBuilder<'vir, P> {
+impl<'vir, P: NotImpure> Deref for AdtBuilder<'vir, P> {
     type Target = TyBuilder<'vir, P>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-pub(crate) struct TyBuilder<'vir, P: HasTyBuilder> {
+pub(crate) struct TyBuilder<'vir, P: NotImpure> {
     pub(crate) vcx: &'vir vir::VirCtxt<'vir>,
     name: &'vir str,
     domain_ident: vir::DomainIdnSnap<'vir>,
@@ -66,7 +66,7 @@ pub(crate) struct TyBuilder<'vir, P: HasTyBuilder> {
     data: BuilderData<'vir, P>,
 }
 
-pub enum BuilderData<'vir, P: HasTyBuilder> {
+pub enum BuilderData<'vir, P: NotImpure> {
     Adt(AdtBuilderData<'vir>),
     Domain(DomainBuilderData<'vir, P>),
     None,
@@ -80,14 +80,14 @@ pub(crate) struct AdtBuilderData<'vir> {
 }
 
 // #[derive(Default)]
-pub(crate) struct DomainBuilderData<'vir, P: HasTyBuilder> {
+pub(crate) struct DomainBuilderData<'vir, P: NotImpure> {
     axioms: Vec<vir::DomainAxiom<'vir>>,
     functions: Vec<vir::DomainFunction<'vir>>,
     interpretation: Option<&'vir [&'vir vir::BackendInterpretationPair<'vir>]>,
     _purity: std::marker::PhantomData<P>,
 }
 
-impl<'vir, P: HasTyBuilder> Default for DomainBuilderData<'vir, P> {
+impl<'vir, P: NotImpure> Default for DomainBuilderData<'vir, P> {
     fn default() -> Self {
         Self {
             axioms: Default::default(),
@@ -108,7 +108,7 @@ pub(crate) enum DiscrFnBuilder<'vir> {
     Built(vir::Function<'vir>),
 }
 
-impl<'vir, P: HasTyBuilder> TyBuilder<'vir, P> {
+impl<'vir, P: NotImpure> TyBuilder<'vir, P> {
     pub(crate) fn new<E: TaskEncoder>(
         deps: &mut TaskEncoderDependencies<'vir, E>,
         vcx: &'vir vir::VirCtxt<'vir>,
@@ -292,7 +292,7 @@ impl<'vir> TyBuilder<'vir, Purified> {
     }
 }
 
-impl<'vir, P: HasTyBuilder> AdtBuilder<'vir, P> {
+impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
     pub(crate) fn constructor<A: vir::Arity>(
         &mut self,
         prefix: &str,
@@ -398,7 +398,7 @@ impl<'vir, P: HasTyBuilder> AdtBuilder<'vir, P> {
     }
 }
 
-impl<'vir, P: HasTyBuilder> DomainBuilder<'vir, P> {
+impl<'vir, P: NotImpure> DomainBuilder<'vir, P> {
     pub(crate) fn function<A: Arity, T: CompType>(
         &mut self,
         name: &str,

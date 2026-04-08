@@ -6,7 +6,10 @@ pub use function::*;
 pub use method::*;
 pub use signature::*;
 
-use crate::encoders::ty::generics::{GArgs, GParams, trait_impls::TraitImplEnc};
+use crate::encoders::{
+    Purified,
+    ty::generics::{GArgs, GParams, trait_impls::TraitImplEnc},
+};
 
 use prusti_interface::specs::specifications::SpecQuery;
 use prusti_rustc_interface::{hir, middle::ty, span::def_id::DefId};
@@ -53,8 +56,8 @@ pub fn encode_all_in_crate<'tcx>(tcx: ty::TyCtxt<'tcx>) {
                 .unwrap_or_default();
 
                 if !(is_trusted && is_pure) {
-                    // let _ = method::ImpureMethodEnc::encode(def_id, false);
-                    let _ = method::PurifiedMethodEnc::encode(def_id, false);
+                    // let _ = method::MethodEnc::<Impure>::encode(def_id, false);
+                    let _ = method::MethodEnc::<Purified>::encode(def_id, false);
                 }
             }
             unsupported_item_kind => {

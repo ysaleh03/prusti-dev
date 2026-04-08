@@ -2,7 +2,7 @@ use pcg::borrow_pcg::region_projection::LifetimeProjection;
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, Reify};
 
-use crate::encoders::{Pure, Purity, ty::RustTyDecomposition};
+use crate::encoders::{Pure, Purified, Purity, TyUsePurifiedEnc, ty::RustTyDecomposition};
 
 use super::{data::TySpecifics, use_pure::TyUsePureEnc};
 
@@ -144,6 +144,126 @@ impl TaskEncoder for IndirectPredicatesEnc<Pure> {
             Ok((
                 (),
                 IndirectPredicatesEncOutputRef::new(predicate_applications),
+            ))
+        })
+    }
+}
+
+impl TaskEncoder for IndirectPredicatesEnc<Purified> {
+    task_encoder::encoder_cache!(IndirectPredicatesEnc<Purified>);
+
+    type TaskDescription<'vir> = LifetimeProjection<'vir, RustTyDecomposition<'vir>>;
+
+    type TaskKey<'tcx> = Self::TaskDescription<'tcx>;
+
+    type EncodingError = ();
+
+    type OutputFullDependency<'vir> = IndirectPredicatesEncOutputRef<'vir>;
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        *task
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        deps.emit_output_ref(*task_key, ())?;
+        vir::with_vcx(|vcx| {
+            let ty = task_key.base();
+            let self_ty_enc = deps.require_dep::<TyUsePurifiedEnc>(ty)?;
+            let combined = ty.ty.zip(self_ty_enc);
+            let mut type_cond_applications = vec![];
+            match combined.specifics {
+                // Optimisation: if there are no type arguments, there cannot be
+                // anything behind a ref inside (except for 'static, which we
+                // ignore for now). Plus it skips unsupported types if they
+                // don't have lifetimes.
+                _ if ty.args.args().is_empty() => (),
+                TySpecifics::Primitive(_) | TySpecifics::ImmRef(_) => (),
+                // TODO: it's not valid to have nothing for these. We should fix
+                // this by using an opaque predicate to represent potential
+                // indirect stuff. For example:
+                // fn foo<'a, T: Trait<'a>>(x: T) -> &'a mut i32 { x.get() }
+                // Here, `T` could be instantiated as `&'a mut i32` in which
+                // case we would want a wand with `i32(result) --* opaque_behind_a(x)`.
+                // This is why we should return `opaque_behind_a(x)` here.
+                TySpecifics::Param(_) | TySpecifics::Opaque(_) => (),
+                TySpecifics::MutRef((data, ref_domain)) => {
+                    let inner_ty = data.decompose_normalize(ty.args);
+                    type_cond_applications.push(vcx.mk_lazy_expr(
+                        "ref_indirect",
+                        vir::TYPE_BOOL,
+                        Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
+                            ref_domain.value_access(self_expr.downcast_ty()).kind
+                        }),
+                        None,
+                    ));
+                    if let Some(new_projection) =
+                        LifetimeProjection::new(inner_ty, task_key.region(()), None, ())
+                    {
+                        let inner_indirect =
+                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
+                        type_cond_applications.extend(
+                            inner_indirect
+                                .predicate_applications
+                                .into_iter()
+                                .map(|inner_expr| {
+                                    vcx.mk_lazy_expr(
+                                        "ref_inner_indirect",
+                                        vir::TYPE_BOOL,
+                                        Box::new(move |vcx, self_expr: vir::ExprGenSnap<_, _>| {
+                                            inner_expr
+                                                .reify(
+                                                    vcx,
+                                                    ref_domain
+                                                        .value_access(self_expr.downcast_ty()),
+                                                )
+                                                .kind
+                                        }),
+                                        None,
+                                    )
+                                }),
+                        );
+                    }
+                }
+                TySpecifics::StructLike(data) => {
+                    for (field_ty, accessor) in data.fields {
+                        let project = |inner_expr: ExprOutput<'vir>| {
+                            vcx.mk_lazy_expr(
+                                "ref_inner_indirect",
+                                vir::TYPE_BOOL,
+                                Box::new(move |vcx, self_expr: vir::ExprGenSnap<_, _>| {
+                                    inner_expr
+                                        .reify(vcx, accessor.field_snap(self_expr.downcast_ty()))
+                                        .kind
+                                }),
+                                None,
+                            )
+                        };
+
+                        // TODO: invalid recursion here if the defined struct is
+                        // recursive!
+                        let field_ty = field_ty.decompose(ty.ty.params);
+                        let new_projection =
+                            LifetimeProjection::new(field_ty, task_key.region(()), None, ())
+                                .unwrap();
+                        let field_indirect =
+                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
+                        type_cond_applications.extend(
+                            field_indirect
+                                .predicate_applications
+                                .into_iter()
+                                .map(project),
+                        );
+                    }
+                }
+                // TODO: recurse into other types
+                _ => {}
+            };
+            Ok((
+                (),
+                IndirectPredicatesEncOutputRef::new(type_cond_applications),
             ))
         })
     }

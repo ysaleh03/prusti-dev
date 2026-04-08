@@ -1,15 +1,23 @@
+use std::marker::PhantomData;
+
 use pcg::{borrow_checker::r#impl::NllBorrowCheckerImpl, borrow_pcg::FunctionData};
-use prusti_rustc_interface::{data_structures::fx::FxHashMap, middle::mir, span::def_id::DefId};
+use prusti_rustc_interface::{
+    data_structures::fx::FxHashMap,
+    middle::{
+        mir,
+        ty::{self, TyKind},
+    },
+    span::def_id::DefId,
+};
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, MethodIdn, macros::ExprQuote};
 
 use crate::{
     encoders::{
-        Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, Purified,
-        PurifiedEncVisitor, PurifiedMirLocalDefEnc, PurifiedMirLocalDefEncTask, PurifiedWandEnc,
-        Purity, WandEnc, WandEncTask,
+        Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, NotPure,
+        Purified, PurifiedEncVisitor, PurifiedWandEnc, Purity, WandEnc, WandEncTask,
         mir_fn::{CallTaskDescription, RustSignature},
-        purified::{fn_wand::PurifiedWandEncTask, spec::PurifiedMirSpecEnc},
+        purified::fn_wand::PurifiedWandEncTask,
         ty::{
             data::TySpecifics,
             generics::{
@@ -76,7 +84,7 @@ impl TaskEncoder for ImpureMethodCallEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
         deps.emit_output_ref(*task_key, ())?;
-        let method_ref = deps.require_ref::<ImpureMethodEnc>(task_key.callee)?;
+        let method_ref = deps.require_ref::<MethodEnc<Impure>>(task_key.callee)?;
         let signature = RustSignature::new(task_key.callee);
         let ty_args = deps.require_dep::<GArgsTyEnc>(task_key.gargs)?;
         let inputs = signature
@@ -103,7 +111,7 @@ impl TaskEncoder for ImpureMethodCallEnc {
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
-        ImpureMethodEnc::emit_outputs(program);
+        MethodEnc::<Impure>::emit_outputs(program);
     }
 }
 
@@ -111,7 +119,8 @@ impl<'vir> MethodCallEncOutput<'vir, Purified> {
     pub fn call(
         &self,
         args: Vec<vir::ExprSnap<'vir>>,
-        rets: &'vir [vir::LocalDeclDyn<'vir>],
+        dest: vir::ExprSnap<'vir>,
+        refls: &'vir [vir::ExprSnap<'vir>],
     ) -> Vec<vir::Stmt<'vir>> {
         assert_eq!(self.inputs.len(), args.len());
         let inputs: Vec<_> = args
@@ -121,10 +130,13 @@ impl<'vir> MethodCallEncOutput<'vir, Purified> {
             .collect();
         let call = self.method.method_ref.call()(
             (&inputs, self.ty_args.get_ty(), self.ty_args.get_const()),
-            &rets,
+            &refls.as_dyn(),
         );
-        let call = vir::with_vcx(|vcx| vcx.alloc(vir::StmtGenData::new(vcx.alloc(call))));
-        vec![call]
+        vir::with_vcx(|vcx| {
+            let call = vcx.alloc(vir::StmtGenData::new(vcx.alloc(call)));
+            let cast = vcx.mk_pure_assign_stmt(dest, self.outputs[0].cast_to_caller_ctx(refls[0]));
+            vec![call, cast]
+        })
     }
 }
 
@@ -142,7 +154,7 @@ impl TaskEncoder for PurifiedMethodCallEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
         deps.emit_output_ref(*task_key, ())?;
-        let method_ref = deps.require_ref::<PurifiedMethodEnc>(task_key.callee)?;
+        let method_ref = deps.require_ref::<MethodEnc<Purified>>(task_key.callee)?;
         let signature = RustSignature::new(task_key.callee);
         let ty_args = deps.require_dep::<GArgsTyEnc>(task_key.gargs)?;
         let inputs = signature
@@ -169,32 +181,33 @@ impl TaskEncoder for PurifiedMethodCallEnc {
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
-        PurifiedMethodEnc::emit_outputs(program);
+        MethodEnc::<Purified>::emit_outputs(program);
     }
 }
 
 // Method encoder
 
-pub(super) struct ImpureMethodEnc;
-pub(super) struct PurifiedMethodEnc;
+pub(super) struct MethodEnc<P: NotPure> {
+    _phantom_data: PhantomData<P>,
+}
 
 #[derive(Debug, Clone)]
-pub(super) struct MethodEncOutputRef<'vir, P: Purity> {
-    method_ref: MethodIdn<'vir, (vir::Many<P::ArgTy>, vir::ManyTyVal, vir::ManyCSnap)>,
+pub struct MethodEncOutputRef<'vir, P: Purity> {
+    pub(crate) method_ref: MethodIdn<'vir, (vir::Many<P::ArgTy>, vir::ManyTyVal, vir::ManyCSnap)>,
 }
 
 impl<'vir, P: Purity> OutputRefAny for MethodEncOutputRef<'vir, P> {}
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct MethodEncOutput<'vir> {
+pub struct MethodEncOutput<'vir> {
     method: vir::Method<'vir>,
 }
 
 #[derive(Clone, Debug)]
 pub enum MethodEncError {}
 
-impl TaskEncoder for ImpureMethodEnc {
-    task_encoder::encoder_cache!(ImpureMethodEnc);
+impl TaskEncoder for MethodEnc<Impure> {
+    task_encoder::encoder_cache!(MethodEnc<Impure>);
     type TaskDescription<'tcx> = DefId;
 
     type OutputRef<'vir> = MethodEncOutputRef<'vir, Impure>;
@@ -217,7 +230,7 @@ impl TaskEncoder for ImpureMethodEnc {
             let span = vcx.tcx().def_span(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
 
-            let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
+            let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc<Impure>>(
                 MirLocalDefEncTask::Local {
                     def_id,
                     all_locals: false,
@@ -251,7 +264,7 @@ impl TaskEncoder for ImpureMethodEnc {
             );
             deps.emit_output_ref(def_id, MethodEncOutputRef { method_ref })?;
 
-            let arg_defs = deps.require_dep_spanned::<MirLocalDefEnc>(
+            let arg_defs = deps.require_dep_spanned::<MirLocalDefEnc<Impure>>(
                 MirLocalDefEncTask::Local {
                     def_id,
                     all_locals: false,
@@ -264,7 +277,7 @@ impl TaskEncoder for ImpureMethodEnc {
             // wands in case of a reborrowing function.
             let mut pres = Vec::new();
             let mut posts = Vec::new();
-            let spec = deps.require_dep_spanned::<MirSpecEnc>((def_id, false), span)?;
+            let spec = deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, false), span)?;
             let function_data = FunctionData::new(def_id, params.rust_params(), None);
             let wands = deps.require_dep_spanned::<WandEnc>(
                 WandEncTask {
@@ -301,7 +314,7 @@ impl TaskEncoder for ImpureMethodEnc {
             let blocks = if let Some(local_def_id) = local_def_id {
                 let body_with_facts = vcx.body_mut().get_impure_fn_body_with_facts(local_def_id);
                 let body = &body_with_facts.body;
-                let local_defs = deps.require_dep_spanned::<MirLocalDefEnc>(
+                let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Impure>>(
                     MirLocalDefEncTask::Local {
                         def_id: local_def_id.to_def_id(),
                         all_locals: true,
@@ -414,8 +427,8 @@ impl TaskEncoder for ImpureMethodEnc {
     }
 }
 
-impl TaskEncoder for PurifiedMethodEnc {
-    task_encoder::encoder_cache!(PurifiedMethodEnc);
+impl TaskEncoder for MethodEnc<Purified> {
+    task_encoder::encoder_cache!(MethodEnc<Purified>);
     type TaskDescription<'tcx> = DefId;
 
     type OutputRef<'vir> = MethodEncOutputRef<'vir, Purified>;
@@ -439,8 +452,8 @@ impl TaskEncoder for PurifiedMethodEnc {
             let trusted = crate::encoders::is_function_trusted(def_id);
             let signature = RustSignature::new(def_id);
 
-            let local_defs = deps.require_dep_spanned::<PurifiedMirLocalDefEnc>(
-                PurifiedMirLocalDefEncTask::Local {
+            let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Purified>>(
+                MirLocalDefEncTask::Local {
                     def_id,
                     all_locals: false,
                 },
@@ -474,7 +487,14 @@ impl TaskEncoder for PurifiedMethodEnc {
             // parameter types and the functional spec.
             let mut pres = Vec::new();
             let mut posts = Vec::new();
-            let spec = deps.require_dep_spanned::<PurifiedMirSpecEnc>((def_id, false), span)?;
+            let spec = deps.require_dep_spanned::<MirSpecEnc<Purified>>((def_id, false), span)?;
+            // let impure_spec =
+            //     deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, false), span)?;
+            // println!("def_id: {def_id:?}");
+            // println!("pre: {:#?}", spec.pres);
+            // println!("impure_pre: {:#?}", impure_spec.pres);
+            // println!("posts: {:#?}", spec.posts);
+            // println!("impure_post: {:#?}", impure_spec.posts);
             let function_data = FunctionData::new(def_id, gparams.rust_params(), None);
             let wands = deps.require_dep_spanned::<PurifiedWandEnc>(
                 PurifiedWandEncTask {
@@ -491,7 +511,19 @@ impl TaskEncoder for PurifiedMethodEnc {
             ));
 
             let mut args = Vec::with_capacity(local_defs.arg_count);
-            let mut return_to_remote = Vec::new();
+            let mut return_to_remote = FxHashMap::default();
+
+            fn has_mut(typ: ty::Ty) -> bool {
+                match typ.kind() {
+                    TyKind::Ref(.., ty::Mutability::Mut)
+                    | TyKind::RawPtr(.., ty::Mutability::Mut) => true,
+                    TyKind::Adt(_, args) => args
+                        .iter()
+                        .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
+                    TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
+                    _ => false,
+                }
+            }
 
             for ((idx, decl), ty) in local_defs
                 .local_decl_args()
@@ -507,25 +539,14 @@ impl TaskEncoder for PurifiedMethodEnc {
                 let decomposition = ty.decompose(gparams);
                 pres.push(generics.ty_assertion(deps, param.expr(vcx), decomposition));
 
-                match decomposition.ty.specifics {
-                    TySpecifics::MutRef(..) => {
-                        let name_r =
-                            vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str();
-                        let ret = vcx.mk_local_decl(name_r, decl.ty);
-                        posts.push(generics.ty_assertion(deps, ret.expr(vcx), decomposition));
-                        rets.push(ret);
-                        return_to_remote.push((idx.into(), decl.expr(vcx)));
-                    }
-                    _ => (),
+                if has_mut(ty.0) {
+                    let name_r = vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str();
+                    let ret = vcx.mk_local_decl(name_r, decl.ty);
+                    posts.push(generics.ty_assertion(deps, ret.expr(vcx), decomposition));
+                    rets.push(ret);
+                    return_to_remote.insert(idx.into(), decl.expr(vcx));
                 };
             }
-
-            let return_to_remote = return_to_remote
-                .iter()
-                .copied()
-                .collect::<FxHashMap<mir::Local, vir::ExprSnap<'vir>>>();
-
-            // let exhales = wands.
 
             // Do not encode the method body if it is external, trusted, just
             // a call stub, or a trait function without a default implementation
@@ -537,8 +558,8 @@ impl TaskEncoder for PurifiedMethodEnc {
                     let body_with_facts =
                         vcx.body_mut().get_impure_fn_body_with_facts(local_def_id);
                     let body = &body_with_facts.body;
-                    let local_defs = deps.require_dep_spanned::<PurifiedMirLocalDefEnc>(
-                        PurifiedMirLocalDefEncTask::Local {
+                    let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Purified>>(
+                        MirLocalDefEncTask::Local {
                             def_id: local_def_id.to_def_id(),
                             all_locals: true,
                         },
