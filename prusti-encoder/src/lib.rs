@@ -19,7 +19,7 @@ use prusti_utils::config;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    Impure, Pure, Purified,
+    Purified,
     custom::PairUseEnc,
     ty::{
         generics::{GArgsCastEnc, trait_impls::TraitImplEnc, traits::TraitEnc},

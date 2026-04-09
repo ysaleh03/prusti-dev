@@ -1,6 +1,6 @@
 use crate::{
-    debug_info::DebugInfo, gendata::*, genrefs::*, macros::ExprQuote, refs::*,
-    viper_ident::ViperIdent, with_vcx, CastType, CompType, HasType, TypeDyn, VirCtxt,
+    debug_info::DebugInfo, gendata::*, genrefs::*, refs::*, viper_ident::ViperIdent, with_vcx,
+    CastType, CompType, HasType, TypeDyn, VirCtxt,
 };
 use sealed::sealed;
 use serde::{Deserialize, Serialize};

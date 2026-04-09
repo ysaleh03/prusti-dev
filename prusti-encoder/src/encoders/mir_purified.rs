@@ -34,7 +34,7 @@ use prusti_rustc_interface::{
 };
 use prusti_utils::config;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, Snap, macros::ExprQuote};
+use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, macros::ExprQuote};
 
 use crate::encoders::{
     self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncTask,

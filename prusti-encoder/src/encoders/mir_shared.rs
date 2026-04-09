@@ -8,7 +8,6 @@ use crate::encoders::{
     ty::{
         UseTyDatas,
         data::{Ty, TyDatas},
-        use_pure::TyUsePure,
     },
 };
 use prusti_rustc_interface::{

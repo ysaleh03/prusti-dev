@@ -18,12 +18,8 @@ use crate::{
         Purified, PurifiedEncVisitor, PurifiedWandEnc, Purity, WandEnc, WandEncTask,
         mir_fn::{CallTaskDescription, RustSignature},
         purified::fn_wand::PurifiedWandEncTask,
-        ty::{
-            data::TySpecifics,
-            generics::{
-                GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc,
-                PurityCasters,
-            },
+        ty::generics::{
+            GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc, PurityCasters,
         },
     },
     trait_support::is_function_with_body,

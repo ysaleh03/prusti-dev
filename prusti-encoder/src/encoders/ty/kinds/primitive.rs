@@ -1,12 +1,11 @@
 use crate::encoders::{
     Pure, Purified,
     ty::{
-        RustPrimitive, RustTyDatas, RustTyDecomposition,
+        RustPrimitive, RustTyDecomposition,
         builder::DomainBuilder,
-        data::TyDatas,
         impure::{PredicateBuilder, TyImpureEnc, TyImpurePrimitive},
         interpretation::float::{ty_pure_float, ty_purified_float},
-        lifted::{TyConstructorEnc, ty_constructor},
+        lifted::TyConstructorEnc,
         pure::{
             TyPureEnc, TyPurePrimData, TyPurePrimDataKind, TyPurePrimDataNative, TyPurePrimitive,
         },

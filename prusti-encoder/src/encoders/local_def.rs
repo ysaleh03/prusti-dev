@@ -13,9 +13,7 @@ use vir::HasType;
 use crate::{
     encoders::{
         Impure, Purified, Purity, TyUseImpureEnc, TyUsePurifiedEnc,
-        ty::{
-            RustTyDecomposition, UseTyDatas, use_impure::TyUseImpure, use_purified::TyUsePurified,
-        },
+        ty::{RustTyDecomposition, use_impure::TyUseImpure, use_purified::TyUsePurified},
     },
     trait_support::is_function_with_body,
 };

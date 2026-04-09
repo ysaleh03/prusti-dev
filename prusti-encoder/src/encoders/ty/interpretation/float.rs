@@ -3,7 +3,7 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{BackendInterpretationPair, CallableIdn, FunctionIdn, VirCtxt};
 
 use crate::encoders::{
-    NotImpure, Pure, Purified, Purity,
+    NotImpure, Pure, Purified,
     ty::{
         builder::DomainBuilder,
         interpretation::bitvec::{BitVecEnc, BitVecSize},
