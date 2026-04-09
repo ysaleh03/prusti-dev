@@ -509,14 +509,13 @@ impl TaskEncoder for MethodEnc<Purified> {
             let mut args = Vec::with_capacity(local_defs.arg_count);
             let mut return_to_remote = FxHashMap::default();
 
-            fn has_mut(typ: ty::Ty) -> bool {
-                match typ.kind() {
-                    TyKind::Ref(.., ty::Mutability::Mut)
-                    | TyKind::RawPtr(.., ty::Mutability::Mut) => true,
-                    TyKind::Adt(_, args) => args
-                        .iter()
-                        .any(|arg| arg.as_type().map_or(false, |typ| has_mut(typ))),
-                    TyKind::Tuple(typs) => typs.iter().any(|typ| has_mut(typ)),
+            fn contains_mut_ref<'vir>(ty: ty::Ty<'vir>, tcx: ty::TyCtxt<'vir>) -> bool {
+                match ty.kind() {
+                    ty::TyKind::Ref(_, _, ty::Mutability::Mut) => true,
+                    ty::TyKind::Adt(adt_def, substs) => adt_def
+                        .all_fields()
+                        .any(|f| contains_mut_ref(f.ty(tcx, substs), tcx)),
+                    ty::TyKind::Tuple(tys) => tys.iter().any(|t| contains_mut_ref(t, tcx)),
                     _ => false,
                 }
             }
@@ -535,7 +534,7 @@ impl TaskEncoder for MethodEnc<Purified> {
                 let decomposition = ty.decompose(gparams);
                 pres.push(generics.ty_assertion(deps, param.expr(vcx), decomposition));
 
-                if has_mut(ty.0) {
+                if contains_mut_ref(ty.0, vcx.tcx()) {
                     let name_r = vir::vir_format_identifier!(vcx, "{}_return", decl.name).to_str();
                     let ret = vcx.mk_local_decl(name_r, decl.ty);
                     posts.push(generics.ty_assertion(deps, ret.expr(vcx), decomposition));
