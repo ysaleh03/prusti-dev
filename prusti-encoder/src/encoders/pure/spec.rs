@@ -394,6 +394,17 @@ impl TaskEncoder for MirSpecEnc<Purified> {
                 })
                 .collect::<Vec<vir::ExprBool<'_>>>();
 
+            fn contains_mut_ref<'vir>(ty: ty::Ty<'vir>, tcx: ty::TyCtxt<'vir>) -> bool {
+                match ty.kind() {
+                    ty::TyKind::Ref(_, _, ty::Mutability::Mut) => true,
+                    ty::TyKind::Adt(adt_def, substs) => adt_def
+                        .all_fields()
+                        .any(|f| contains_mut_ref(f.ty(tcx, substs), tcx)),
+                    ty::TyKind::Tuple(tys) => tys.iter().any(|t| contains_mut_ref(t, tcx)),
+                    _ => false,
+                }
+            }
+
             let post_args = if pure {
                 all_args
             } else {
@@ -401,10 +412,10 @@ impl TaskEncoder for MirSpecEnc<Purified> {
                     .local_decl_args()
                     .zip(signature.inputs.iter())
                     .map(|(decl, ty)| {
-                        let suffix = if Self::contains_mut_ref(ty.0, vcx.tcx()) {
-                            "_param"
-                        } else {
+                        let suffix = if contains_mut_ref(ty.0, vcx.tcx()) {
                             "_return"
+                        } else {
+                            "_param"
                         };
                         vcx.mk_local_decl(
                             vir::vir_format_identifier!(vcx, "{}{}", decl.name, suffix).to_str(),
@@ -544,18 +555,5 @@ impl TaskEncoder for MirSpecEnc<Purified> {
             };
             Ok(((), data))
         })
-    }
-}
-
-impl<'vir> MirSpecEnc<Purified> {
-    fn contains_mut_ref(ty: ty::Ty<'vir>, tcx: ty::TyCtxt<'vir>) -> bool {
-        match ty.kind() {
-            ty::TyKind::Ref(_, _, ty::Mutability::Mut) => true,
-            ty::TyKind::Adt(adt_def, substs) => adt_def
-                .all_fields()
-                .any(|f| Self::contains_mut_ref(f.ty(tcx, substs), tcx)),
-            ty::TyKind::Tuple(tys) => tys.iter().any(|t| Self::contains_mut_ref(t, tcx)),
-            _ => false,
-        }
     }
 }
