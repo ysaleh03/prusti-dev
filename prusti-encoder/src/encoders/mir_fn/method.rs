@@ -289,7 +289,7 @@ impl TaskEncoder for MethodEnc<Impure> {
             // without going through any dereferences.
             let mut args = Vec::with_capacity(arg_count + gparams.count());
             for arg_idx in (0..arg_count).map(mir::Local::from) {
-                let name_p = arg_defs[arg_idx].local.name;
+                let name_p = arg_defs[arg_idx].local_ref.name;
                 args.push(vir::vir_local_decl! { vcx; [name_p] : Ref });
                 if arg_idx != mir::RETURN_PLACE {
                     pres.push(arg_defs[arg_idx].impure_pred);
@@ -331,7 +331,7 @@ impl TaskEncoder for MethodEnc<Impure> {
                 );
                 let mut start_stmts = Vec::new();
                 for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
-                    let name_p = local_defs[local].local.name;
+                    let name_p = local_defs[local].local_ref.name;
                     start_stmts.push(
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
                     )
@@ -502,7 +502,7 @@ impl TaskEncoder for MethodEnc<Purified> {
             let mut rets = vec![local_defs.ret().local_snap];
             posts.push(generics.ty_assertion(
                 deps,
-                local_defs.ret().local_ex,
+                local_defs.ret().local_snap_ex,
                 signature.output.decompose(gparams),
             ));
 

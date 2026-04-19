@@ -827,7 +827,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     pub(crate) fn encode_place(&mut self, place: Place<'vir>) -> EncodePlaceResult<'vir> {
         let mut place_ty = mir::PlaceTy::from_ty(self.local_decls[place.local].ty);
         let mut result = PlaceExpr {
-            address: self.local_defs[place.local].local_ref,
+            address: self.local_defs[place.local].local_ref_ex,
             snap: None,
         };
         // TODO: factor this out (duplication with pure encoder)?

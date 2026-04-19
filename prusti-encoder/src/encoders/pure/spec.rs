@@ -335,11 +335,13 @@ impl TaskEncoder for MirSpecEnc<Purified> {
             let all_args: Vec<vir::ExprSnap<'vir>> = if pure {
                 let result_ty = local_defs.snap_ty_return();
                 local_iter
-                    .map(|local| local_defs[local].local_ex)
+                    .map(|local| local_defs[local].local_snap_ex)
                     .chain([vcx.mk_result(result_ty)])
                     .collect()
             } else {
-                local_iter.map(|local| local_defs[local].local_ex).collect()
+                local_iter
+                    .map(|local| local_defs[local].local_snap_ex)
+                    .collect()
             };
             let all_args = vcx.alloc_slice(&all_args);
             let pre_args = if pure {
@@ -423,7 +425,7 @@ impl TaskEncoder for MirSpecEnc<Purified> {
                         )
                         .expr(vcx)
                     })
-                    .chain([local_defs.ret().local_ex])
+                    .chain([local_defs.ret().local_snap_ex])
                     .collect();
                 vcx.alloc_slice(&post_args)
             };

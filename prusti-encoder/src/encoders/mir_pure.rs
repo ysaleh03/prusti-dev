@@ -1260,7 +1260,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc, Impure> {
             self.mk_local_ex(place.local, curr_ver[&place.local])
         };
         let place_ref: Option<ExprRetRef<'vir>> =
-            Some(self.local_defs[place.local].local_ref.lazy());
+            Some(self.local_defs[place.local].local_ref_ex.lazy());
         let mut encoded_place = EncodedPlace::new(expr, place_ref);
         // TODO: factor this out (duplication with impure encoder)?
         for elem in place.projection {
@@ -2230,7 +2230,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc, Purified> {
             self.mk_local_ex(place.local, curr_ver[&place.local])
         };
         let place_ref: Option<ExprRetRef<'vir>> =
-            Some(self.local_defs[place.local].local_ref.lazy());
+            Some(self.local_defs[place.local].local_ref_ex.lazy());
         let mut encoded_place = EncodedPlace::new(expr, place_ref);
         // TODO: factor this out (duplication with impure encoder)?
         for elem in place.projection {
