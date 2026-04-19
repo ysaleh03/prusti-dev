@@ -73,10 +73,10 @@ pub type MirLocalDefEncError = ();
 
 #[derive(Clone, Copy)]
 pub struct LocalDef<'vir> {
-    pub local: vir::LocalDeclRef<'vir>,
-    pub local_ref: vir::ExprRef<'vir>,
+    pub local_ref: vir::LocalDeclRef<'vir>,
+    pub local_ref_ex: vir::ExprRef<'vir>,
     pub local_snap: vir::LocalDeclSnap<'vir>,
-    pub local_ex: vir::ExprSnap<'vir>,
+    pub local_snap_ex: vir::ExprSnap<'vir>,
     pub impure_snap: vir::ExprSnap<'vir>,
     pub impure_pred: vir::ExprBool<'vir>,
 }
@@ -148,17 +148,17 @@ impl MirLocalDefEnc<Impure> {
     ) -> LocalDef<'vir> {
         let ref_local = vir::vir_format!(vcx, "_{}p", local.index());
         let snap_local = vir::vir_format!(vcx, "_{}s", local.index());
-        let local = vcx.mk_local_decl(ref_local, vir::TYPE_REF);
-        let local_ref = vcx.mk_local_ex(local);
+        let local_ref = vcx.mk_local_decl(ref_local, vir::TYPE_REF);
+        let local_ref_ex = vcx.mk_local_ex(local_ref);
         let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot());
-        let local_ex = vcx.mk_local_ex(local_snap);
-        let impure_snap = ty.ref_to_snap(local_ref);
-        let impure_pred = ty.ref_to_pred(vcx, local_ref, None);
+        let local_snap_ex = vcx.mk_local_ex(local_snap);
+        let impure_snap = ty.ref_to_snap(local_ref_ex);
+        let impure_pred = ty.ref_to_pred(vcx, local_ref_ex, None);
         LocalDef {
-            local,
             local_ref,
+            local_ref_ex,
             local_snap,
-            local_ex,
+            local_snap_ex,
             impure_snap,
             impure_pred,
         }
@@ -260,19 +260,17 @@ impl MirLocalDefEnc<Purified> {
     ) -> LocalDef<'vir> {
         let ref_local = vir::vir_format!(vcx, "_{}p", local.index());
         let snap_local = vir::vir_format!(vcx, "_{}s", local.index());
-        let local = vcx.mk_local_decl(ref_local, vir::TYPE_REF);
-        let local_ref = vcx.mk_local_ex(local);
+        let local_ref = vcx.mk_local_decl(ref_local, vir::TYPE_REF);
+        let local_ref_ex = vcx.mk_local_ex(local_ref);
         let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot);
-        let local_ex = vcx.mk_local_ex(local_snap);
-        // let impure_snap = ty.ref_to_snap(local_ref);
-        // let impure_pred = ty.ref_to_pred(vcx, local_ref, None);
+        let local_snap_ex = vcx.mk_local_ex(local_snap);
         let impure_snap = ty.unreachable_to_snap();
-        let impure_pred = vcx.mk_bool::<false>();
+        let impure_pred = ty.snap_to_ty_assertion(vcx, local_snap_ex);
         LocalDef {
-            local,
             local_ref,
+            local_ref_ex,
             local_snap,
-            local_ex,
+            local_snap_ex,
             impure_snap,
             impure_pred,
         }
