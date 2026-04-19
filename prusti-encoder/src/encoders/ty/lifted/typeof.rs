@@ -1,7 +1,7 @@
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder};
 use vir::FunctionIdn;
 
-use crate::encoders::ty::{RustTy, pure::TyPureEnc};
+use crate::encoders::ty::{RustTy, purified::TyPurifiedEnc};
 
 #[derive(Clone)]
 pub struct TypeOfEncOutputRef<'vir> {
@@ -37,7 +37,7 @@ impl TaskEncoder for TypeOfEnc {
     ) -> EncodeFullResult<'vir, Self> {
         vir::with_vcx(|vcx| {
             let base_name = task_key.name();
-            let domain = deps.require_ref::<TyPureEnc>(*task_key)?;
+            let domain = deps.require_ref::<TyPurifiedEnc>(*task_key)?;
             let snap = (domain.domain)();
             let typeof_function = FunctionIdn::new(
                 vir::vir_format_identifier!(vcx, "s_{base_name}_typeof"),
