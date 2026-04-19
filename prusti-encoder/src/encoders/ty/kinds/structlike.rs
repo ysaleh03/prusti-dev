@@ -1,18 +1,25 @@
-use crate::encoders::ty::{
-    RustTyDatas,
-    builder::AdtBuilder,
-    data::{StructData, TyData},
-    impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
-    lifted::{TyConstructorEnc, TypeOfEnc},
-    pure::{PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
-    purified::{PurifiedTyDatas, TyPurifiedEnc, TyPurifiedFieldData, TyPurifiedStructData},
-    use_impure::TyUseImpureEnc,
-    use_pure::TyUsePureEnc,
-    use_purified::TyUsePurifiedEnc,
+use crate::encoders::{
+    ConstEnc,
+    r#const::ConstEncTask,
+    ty::{
+        RustTyDatas, RustTyDecomposition,
+        builder::AdtBuilder,
+        data::{StructData, TyData, TySpecifics},
+        generics::{
+            GArgs, GArgsTy, GParamVariant, GenericParams, GenericParamsEnc, traits::TraitEnc,
+        },
+        impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
+        lifted::{TyConstructorEnc, TypeOfEnc},
+        pure::{PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
+        purified::{PurifiedTyDatas, TyPurifiedEnc, TyPurifiedFieldData, TyPurifiedStructData},
+        use_impure::TyUseImpureEnc,
+        use_pure::TyUsePureEnc,
+        use_purified::TyUsePurifiedEnc,
+    },
 };
-use prusti_rustc_interface::data_structures::fx::FxHashMap;
+use prusti_rustc_interface::{data_structures::fx::FxHashMap, middle::ty};
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
-use vir::{CastType, HasType, PredicateIdn, macros::ExprQuote};
+use vir::{CastType, ExprSnap, HasType, PredicateIdn, macros::ExprQuote};
 
 pub(crate) fn ty_pure<'vir>(
     task_key: &TyData<'vir, RustTyDatas>,
@@ -221,102 +228,237 @@ pub(super) fn ty_purified_variant<'vir>(
     builder: &mut AdtBuilder<'vir, crate::encoders::Purified>,
 ) -> Result<StructData<'vir, PurifiedTyDatas>, EncodeFullError<'vir, TyPurifiedEnc>> {
     let vcx = builder.vcx;
-
-    let ty_params = task_key
-        .params
-        .rust_params()
-        .iter()
-        .filter_map(|a| a.as_type())
-        .collect::<Vec<_>>();
-
+    let params = &data.data;
     let ty_constructor_enc = deps.require_ref::<TyConstructorEnc>(task_key)?;
     let type_constructor = ty_constructor_enc.ty_constructor;
     let typeof_function = ty_constructor_enc.typeof_data.typeof_function;
 
-    let mut field_tys = Vec::new();
+    let mut field_ty_refs = Vec::new();
     let mut field_typeofs = Vec::new();
-    let mut typaram_to_field_typeof = FxHashMap::default();
+    let mut typaram_to_field_idx = FxHashMap::default();
 
     for f in data.fields.iter() {
         let decomposition = f.decompose(task_key.params);
         let field_typeof = deps
             .require_ref::<TypeOfEnc>(decomposition.ty)?
             .typeof_function;
-        field_tys.push(
-            deps.require_ref::<TyUsePurifiedEnc>(decomposition)?
-                .snapshot,
-        );
+        field_ty_refs.push(deps.require_ref::<TyUsePurifiedEnc>(decomposition)?);
         field_typeofs.push(field_typeof);
 
-        let ty = f.ty().0;
-        if ty_params.contains(&ty) {
-            typaram_to_field_typeof.insert(ty, (field_typeof, f.fid));
+        for &p in params {
+            if f.ty().0.contains(p.0) {
+                typaram_to_field_idx.insert(p, f.fid);
+            }
         }
     }
 
-    // println!("{} map: {typaram_to_field_typeof:?}", task_key.data.name());
+    let tyvals = vcx.alloc_slice(&params.iter().map(|_| vir::TYPE_TYVAL).collect::<Vec<_>>());
+    let field_tys = vcx.alloc_slice(&field_ty_refs.iter().map(|t| t.snapshot).collect::<Vec<_>>());
+    let (field_snaps_to_snap, des) = builder.constructor(prefix, (tyvals, field_tys), discr);
+    let (ty_des, field_des) = des.split_at(params.len());
 
-    let field_tys = vcx.alloc_slice(&field_tys);
-    let field_typeofs = vcx.alloc_slice(&field_typeofs);
-    let (field_snaps_to_snap, des) = builder.constructor(prefix, field_tys, discr);
-    assert_eq!(des.len(), data.fields.len());
-    let des = des
+    assert_eq!(ty_des.len(), data.data.len());
+    let typarams = ty_des
         .iter()
         .map(|read| TyPurifiedFieldData {
             read: read.downcast_ty(),
         })
         .collect::<Vec<_>>();
 
-    for (idx, field_typeof) in field_typeofs.iter().enumerate() {
-        let field_accessor = des[idx].read;
-        if ty_constructor_enc.ty_param_accessors.get(idx).is_some() {
-            builder.axiom(
+    // typaram_i axioms
+    for idx in 0..params.len() {
+        let typaram_accessor = typarams[idx].read;
+        builder.axiom(
             vir::vir_format!(vcx, "{prefix}typaram_{idx}"),
             vir::expr! {
-                forall s: [builder.self_type()] :: {[ty_constructor_enc.ty_param_from_snap(idx, s)]} ([ty_constructor_enc.ty_param_from_snap(idx, s)]) == ([field_typeof]([field_accessor](s)))
-            },
-        )
-        };
+                forall s: [builder.self_type()] :: {[ty_constructor_enc.ty_param_from_snap(idx, s)]} ([ty_constructor_enc.ty_param_from_snap(idx, s).as_dyn()]) == ([typaram_accessor.call()(s).as_dyn()])
+            });
     }
 
-    let axiom_expr = if des.is_empty() {
-        vcx.mk_eq_expr(
-            typeof_function(field_snaps_to_snap(vcx.alloc_slice(&[])).upcast_ty()),
-            type_constructor(&[], &[]),
-        )
-    } else {
-        let decls = des
-            .iter()
-            .enumerate()
-            .map(|(idx, field)| {
-                vcx.mk_local_decl(vir::vir_format!(vcx, "p_{}", idx), field.read.ty())
-            })
-            .collect::<Vec<_>>();
-        let apps = ty_params
-            .iter()
-            .filter_map(|ty| typaram_to_field_typeof.get(ty))
-            .map(|(typeof_fn, fidx)| typeof_fn.call()(decls[fidx.as_usize()].expr(vcx)))
-            .collect::<Vec<_>>();
-        let snaps = decls.iter().map(|decl| decl.expr(vcx)).collect::<Vec<_>>();
-        vcx.mk_forall_expr(
-            vcx.alloc_slice(&decls),
-            vcx.alloc_slice(&[vcx.mk_trigger(&[typeof_function(
-                field_snaps_to_snap(vcx.alloc_slice(&snaps)).upcast_ty(),
-            )])]),
-            vcx.mk_eq_expr(
-                typeof_function(field_snaps_to_snap(vcx.alloc_slice(&snaps)).upcast_ty()),
-                type_constructor(&apps, vcx.alloc_slice(&builder.params.const_exprs())),
-            ),
-        )
-    };
+    assert_eq!(field_des.len(), data.fields.len());
+    let fields = field_des
+        .iter()
+        .map(|read| TyPurifiedFieldData {
+            read: read.downcast_ty(),
+        })
+        .collect::<Vec<_>>();
 
-    builder.axiom(vir::vir_format!(vcx, "{prefix}typeof"), axiom_expr);
+    let generics = deps.require_dep::<GenericParamsEnc>(task_key.params)?;
+
+    // field_i axioms
+    for (idx, field_typeof) in field_typeofs.iter().enumerate() {
+        let field_accessor = fields[idx].read;
+        let mut mk_field_ty_expr = |snap: ExprSnap<'vir>| {
+            ty_expr_from_source(
+                &generics,
+                task_key,
+                deps,
+                snap,
+                data.fields[idx].decompose(task_key.params),
+            )
+        };
+        builder.axiom(
+            vir::vir_format!(vcx, "{prefix}field_{idx}"),
+            vir::expr! {
+                forall s: [builder.self_type()] :: {[field_typeof]([field_accessor](s))} ([field_typeof]([field_accessor](s))) == ([mk_field_ty_expr(s.upcast_ty())])
+            });
+    }
+
+    // cons axiom
+    let tyvar_decls = params.iter().map(|ty| {
+        let ty::TyKind::Param(p) = ty.0.kind() else {
+            unreachable!()
+        };
+        vcx.mk_local_decl(
+            vir::vir_format!(vcx, "{}${}", p.name, p.index),
+            vir::TYPE_TYVAL,
+        )
+    });
+    let tyvar_exprs = &tyvar_decls
+        .clone()
+        .map(|decl| decl.expr(vcx))
+        .collect::<Vec<_>>();
+    let field_decls = fields
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| vcx.mk_local_decl(vir::vir_format!(vcx, "p_{}", idx), field.read.ty()));
+    let field_exprs = field_decls
+        .clone()
+        .map(|decl| decl.expr(vcx))
+        .collect::<Vec<_>>();
+    let quantified_decls = tyvar_decls
+        .map(|decl| decl.as_dyn())
+        .chain(field_decls.map(|decl| decl.as_dyn()))
+        .collect::<Vec<_>>();
+    builder.axiom(
+        vir::vir_format!(vcx, "{prefix}typeof"),
+        vcx.mk_forall_expr(
+            vcx.alloc_slice(&quantified_decls),
+            vcx.alloc_slice(&[vcx.mk_trigger(
+                vcx.alloc_slice(&[typeof_function(
+                    field_snaps_to_snap(
+                        vcx.alloc_slice(&tyvar_exprs),
+                        vcx.alloc_slice(&field_exprs),
+                    )
+                    .upcast_ty(),
+                )]),
+            )]),
+            vcx.mk_eq_expr(
+                typeof_function(
+                    field_snaps_to_snap(
+                        vcx.alloc_slice(&tyvar_exprs),
+                        vcx.alloc_slice(&field_exprs),
+                    )
+                    .upcast_ty(),
+                ),
+                type_constructor(vcx.alloc_slice(&tyvar_exprs), vcx.alloc_slice(&[])),
+            ),
+        ),
+    );
 
     Ok(StructData::new(
         TyPurifiedStructData {
             field_snaps_to_snap,
         },
         data.inhabited,
-        des,
+        fields,
     ))
+}
+
+fn ty_expr_from_source<'vir>(
+    generics: &GenericParams<'vir>,
+    task_key: &'vir TyData<'vir, RustTyDatas>,
+    deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+    snap: ExprSnap<'vir>,
+    ty: RustTyDecomposition<'vir>,
+) -> vir::ExprTyVal<'vir> {
+    if let TySpecifics::Param(()) = &ty.ty.specifics {
+        let param = ty.args.expect_param();
+        return match param {
+            GParamVariant::Param(p) => deps
+                .require_ref::<TyConstructorEnc>(task_key)
+                .unwrap()
+                .ty_param_from_snap(generics.map_idx(p.index).unwrap(), snap.downcast_ty()),
+            GParamVariant::Alias(a) => vir::with_vcx(|vcx| {
+                let tcx = vcx.tcx();
+                let trait_did = tcx.associated_item(a.def_id).container_id(tcx);
+                let trait_data = deps.require_dep::<TraitEnc>(trait_did).unwrap();
+                let tys = &a
+                    .args
+                    .iter()
+                    .map(|arg| match arg.expect_ty().kind() {
+                        ty::TyKind::Param(p) => deps
+                            .require_ref::<TyConstructorEnc>(task_key)
+                            .unwrap()
+                            .ty_param_from_snap(
+                                generics.map_idx(p.index).unwrap(),
+                                snap.downcast_ty(),
+                            ),
+                        _ => ty_expr_from_source(
+                            generics,
+                            task_key,
+                            deps,
+                            snap,
+                            RustTyDecomposition::from_ty(arg.expect_ty(), tcx, ty.args.context()),
+                        ),
+                    })
+                    .collect::<Vec<_>>();
+                (trait_data.type_did_fun_mapping.get(&a.def_id).unwrap())(tys)
+            }),
+        };
+    }
+    let ty_constructor = deps
+        .require_ref::<TyConstructorEnc>(ty.ty)
+        .unwrap()
+        .ty_constructor;
+    let args = arg_ty_exprs_from_source(generics, ty.args, deps, task_key, snap);
+    ty_constructor(args.get_ty(), args.get_const())
+}
+
+fn arg_ty_exprs_from_source<'vir>(
+    generics: &GenericParams<'vir>,
+    task_key: GArgs<'vir>,
+    deps: &mut TaskEncoderDependencies<'vir, TyPurifiedEnc>,
+    source: &'vir TyData<'vir, RustTyDatas>,
+    snap: ExprSnap<'vir>,
+) -> GArgsTy<'vir> {
+    let ty_args = task_key
+        .args()
+        .iter()
+        .copied()
+        .filter_map(ty::GenericArg::as_type)
+        .map(|arg| {
+            let decomp = vir::with_vcx(|vcx| {
+                RustTyDecomposition::from_ty(arg, vcx.tcx(), task_key.context())
+            });
+            ty_expr_from_source(generics, source, deps, snap, decomp)
+            // generics.ty_expr(deps, decomp)
+        })
+        .collect::<Vec<_>>();
+    let const_args = task_key
+        .args()
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(i, a)| ty::GenericArg::as_const(a).map(|a| (i, a)))
+        .map(|(i, const_)| {
+            // If the constant is a value, we already know its type.
+            // Otherwise, we will look it up in the param environment.
+            // TODO: what about the other ConstKind variants?
+            let ty = match const_.kind() {
+                ty::ConstKind::Value(v) => v.ty,
+                _ => task_key.context().expect_const(i).1,
+            };
+            let task = ConstEncTask::Ty {
+                const_,
+                ty,
+                context: task_key.context(),
+            };
+            deps.require_dep::<ConstEnc>(task).unwrap()
+        })
+        .collect::<Vec<_>>();
+    vir::with_vcx(|vcx| GArgsTy {
+        ty_args: vcx.alloc_slice(&ty_args),
+        const_args: vcx.alloc_slice(&const_args),
+    })
 }
