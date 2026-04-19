@@ -70,7 +70,7 @@ impl<'tcx> GParams<'tcx> {
         self.is_trait_extern_spec
     }
 
-    pub(super) fn expect_const(self, idx: usize) -> (ty::ParamConst, ty::Ty<'tcx>) {
+    pub(crate) fn expect_const(self, idx: usize) -> (ty::ParamConst, ty::Ty<'tcx>) {
         self.const_ty(self.params[idx].expect_const())
     }
 
@@ -224,7 +224,7 @@ impl<'vir> GenericParams<'vir> {
         self.const_exprs()[self.map_idx(param.index).unwrap_err()]
     }
 
-    fn map_idx(&self, index: u32) -> Result<usize, usize> {
+    pub fn map_idx(&self, index: u32) -> Result<usize, usize> {
         let result = self.indicies[index as usize];
         assert!(
             result.ok().is_none_or(|i| i != usize::MAX),
@@ -248,7 +248,7 @@ impl<'vir> GenericParams<'vir> {
         vcx.mk_eq_expr(typeof_call, ty_expr)
     }
 
-    pub(super) fn ty_expr<E: TaskEncoder + 'vir + ?Sized>(
+    pub(crate) fn ty_expr<E: TaskEncoder + 'vir + ?Sized>(
         &self,
         deps: &mut TaskEncoderDependencies<'vir, E>,
         ty: RustTyDecomposition<'vir>,

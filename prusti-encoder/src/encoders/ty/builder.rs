@@ -310,13 +310,18 @@ impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
         );
         let self_name = self.name;
         let name = vir::vir_format!(self.vcx, "{self_name}_{name}",);
+        let n_typarams = self.params.ty_args().len();
         let locals = self.vcx.alloc_slice(
             &A::params(fields)
                 .into_iter()
                 .enumerate()
                 .map(|(i, ty)| {
-                    self.vcx
-                        .mk_local_decl(vir::vir_format!(self.vcx, "{self_name}_{prefix}{i}",), ty)
+                    let name = if i < n_typarams {
+                        vir::vir_format!(self.vcx, "{self_name}_{prefix}typaram_{i}",)
+                    } else {
+                        vir::vir_format!(self.vcx, "{self_name}_{prefix}{}", i - n_typarams)
+                    };
+                    self.vcx.mk_local_decl(name, ty)
                 })
                 .collect::<Vec<_>>(),
         );
@@ -349,6 +354,7 @@ impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
             ident,
             locals
                 .iter()
+                // .skip(n_typarams)
                 .map(|arg| self.vcx.mk_adt_destructor(arg.name, self_ty, arg.ty))
                 .collect(),
         )

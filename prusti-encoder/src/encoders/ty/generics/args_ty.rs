@@ -10,8 +10,8 @@ pub struct GArgsTyEnc;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GArgsTy<'vir> {
-    ty_args: &'vir [vir::ExprTyVal<'vir>],
-    const_args: &'vir [vir::ExprCSnap<'vir>],
+    pub(crate) ty_args: &'vir [vir::ExprTyVal<'vir>],
+    pub(crate) const_args: &'vir [vir::ExprCSnap<'vir>],
 }
 
 impl<'vir> GArgsTy<'vir> {

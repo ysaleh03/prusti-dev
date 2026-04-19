@@ -102,7 +102,9 @@ impl<'vir> ViperTupleEncOutput<'vir, Purified> {
         _vcx: &'vir vir::VirCtxt<'tcx>,
         elems: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
-        self.structlike().field_snaps_to_snap(elems).upcast_ty()
+        self.structlike()
+            .field_snaps_to_snap(vec![], elems)
+            .upcast_ty()
     }
 
     pub fn mk_elem<'tcx, Curr, Next>(

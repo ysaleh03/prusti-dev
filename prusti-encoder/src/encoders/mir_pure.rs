@@ -600,7 +600,10 @@ impl<'vir: 'enc, 'enc> PureRvalueEnc<'vir> for Enc<'vir, 'enc, Purified> {
             mir::AggregateKind::Adt(_, vidx, _, _, _) => e_rvalue_ty.get_variant_any(*vidx),
             _ => e_rvalue_ty.expect_structlike(),
         };
-        Ok(sl.field_snaps_to_snap(encoded_fields).upcast_ty())
+        let encoded_tyvals = sl.args.get_ty().to_vec();
+        Ok(sl
+            .field_snaps_to_snap(encoded_tyvals, encoded_fields)
+            .upcast_ty())
     }
 }
 

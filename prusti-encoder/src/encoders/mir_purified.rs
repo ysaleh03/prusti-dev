@@ -369,13 +369,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         pack_or_unpack: PackOrUnpack,
         label: Option<&'vir str>,
     ) {
-        let (place, label) = match base {
-            MaybeLabelledPlace::Current(place) => (place, None),
-            MaybeLabelledPlace::Labelled(snap) => {
-                // We shouldn't be unpacking old places?
-                debug_assert!(pack_or_unpack.is_pack());
-                (snap.place(), Some(self.get_location_label(snap.at())))
-            }
+        let place = base.place();
+        let label = if let MaybeLabelledPlace::Labelled(snap) = base {
+            Some(self.get_location_label(snap.at()))
+        } else {
+            label.map(vir::OldLabel::Label)
         };
         let target_places = expansion.iter().map(|mp| mp.place()).collect::<Vec<_>>();
         match pack_or_unpack {
@@ -793,10 +791,6 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 self.place_to_local_decl.insert(target_places[0], lhs);
             }
         }
-        // self.stmt(
-        //     self.vcx
-        //         .mk_pure_assign_stmt(self_snap, data.data.unreachable_to_snap()),
-        // );
     }
 
     fn pack(
@@ -830,6 +824,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 }
                 None if let Some(vid) = place_ty.variant_index => {
                     let data = &data.variants[vid.as_usize()].inner;
+                    let tyvals = data.data.args.get_ty().to_vec();
                     let snaps = data
                         .fields
                         .iter()
@@ -841,12 +836,13 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                                 .expr(self.vcx)
                         })
                         .collect::<Vec<_>>();
-                    let cons = data.field_snaps_to_snap(snaps);
+                    let cons = data.field_snaps_to_snap(tyvals, snaps);
                     self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
                 }
                 _ => return,
             },
             TySpecifics::StructLike(data) => {
+                let tyvals = data.data.args.get_ty().to_vec();
                 let snaps = data
                     .fields
                     .iter()
@@ -858,7 +854,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                             .expr(self.vcx)
                     })
                     .collect::<Vec<_>>();
-                let cons = data.field_snaps_to_snap(snaps);
+                let cons = data.field_snaps_to_snap(tyvals, snaps);
                 self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
             TySpecifics::ImmRef(data) => {
@@ -950,7 +946,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             };
         }
         let mut place_ty = mir::PlaceTy::from_ty(self.local_decls[place.local].ty);
-        let mut result = self.local_defs[place.local].local_ex;
+        let mut result = self.local_defs[place.local].local_snap_ex;
         for (place, elem) in place.iter_projections() {
             result = self.encode_place_element(place.into(), elem, result);
             place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
@@ -1214,7 +1210,10 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
             mir::AggregateKind::Adt(_, vidx, _, _, _) => e_rvalue_ty.get_variant_any(*vidx),
             _ => e_rvalue_ty.expect_structlike(),
         };
-        Ok(sl.field_snaps_to_snap(encoded_fields).upcast_ty())
+        let encoded_tyvals = sl.args.get_ty().to_vec();
+        Ok(sl
+            .field_snaps_to_snap(encoded_tyvals, encoded_fields)
+            .upcast_ty())
     }
 }
 

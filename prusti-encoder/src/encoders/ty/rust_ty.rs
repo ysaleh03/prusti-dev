@@ -186,7 +186,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type ParamData = ();
     type ImmRefData = LazyRustTy<'tcx>;
     type MutRefData = LazyRustTy<'tcx>;
-    type StructData = ();
+    type StructData = Vec<LazyRustTy<'tcx>>;
     type FieldData = RustFieldData<'tcx>;
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
@@ -201,6 +201,7 @@ pub type RustParam<'tcx> = <RustTyDatas as TyDatas<'tcx>>::ParamData;
 pub type RustPrimitive<'tcx> = <RustTyDatas as TyDatas<'tcx>>::PrimitiveData;
 pub type RustImmRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::ImmRefData;
 pub type RustMutRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::MutRefData;
+pub type RustStruct<'tcx> = <RustTyDatas as TyDatas<'tcx>>::StructData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RustTyData<'tcx> {
@@ -433,16 +434,21 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
         match ty.kind() {
             ty::TyKind::Adt(adt, _) => Self::from_adt(*adt),
             ty::TyKind::Tuple(args) => {
+                let mut typarams = Vec::new();
                 let fields = args
                     .iter()
                     .enumerate()
-                    .map(|(i, _)| RustFieldData {
-                        name: symbol::Symbol::intern(&format!("_{i}")),
-                        fid: abi::FieldIdx::from_usize(i),
-                        ty: LazyRustTy(Self::new_param_ty(i as u32)),
+                    .map(|(i, _)| {
+                        let ty = LazyRustTy(Self::new_param_ty(i as u32));
+                        typarams.push(ty);
+                        RustFieldData {
+                            name: symbol::Symbol::intern(&format!("_{i}")),
+                            fid: abi::FieldIdx::from_usize(i),
+                            ty,
+                        }
                     })
                     .collect::<Vec<_>>();
-                TySpecifics::mk_structlike((), true, fields)
+                TySpecifics::mk_structlike(typarams, true, fields)
             }
             ty::TyKind::Array(..) | ty::TyKind::Slice(..) => {
                 // TODO: add array/slice support
@@ -470,7 +476,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                         ty: LazyRustTy(ty),
                     })
                     .collect::<Vec<_>>();
-                TySpecifics::mk_structlike((), true, fields)
+                TySpecifics::mk_structlike(vec![], true, fields)
             }
             ty::TyKind::Never => {
                 let data = vir::with_vcx(|vcx| RustEnumData {
@@ -496,12 +502,16 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 fid: abi::FieldIdx::from_usize(0),
                 ty: LazyRustTy(Self::new_param_ty(0)),
             }];
-            return TySpecifics::mk_structlike((), true, fields);
+            return TySpecifics::mk_structlike(
+                vec![LazyRustTy(Self::new_param_ty(0))],
+                true,
+                fields,
+            );
         }
 
         match adt.adt_kind() {
             ty::AdtKind::Struct => {
-                let data = Self::from_struct(adt.non_enum_variant());
+                let data = Self::from_struct(adt);
                 Self::StructLike(data)
             }
             ty::AdtKind::Enum => {
@@ -515,9 +525,10 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
         }
     }
 
-    fn from_struct(variant: &ty::VariantDef) -> StructData<'tcx, RustTyDatas> {
-        let fields = Self::from_fields(&variant.fields);
-        StructData::new((), true, fields)
+    fn from_struct(adt: ty::AdtDef<'tcx>) -> StructData<'tcx, RustTyDatas> {
+        let params = Self::from_gparams(GParams::from(adt.did()));
+        let fields = Self::from_fields(&adt.non_enum_variant().fields);
+        StructData::new(params, true, fields)
     }
 
     fn from_enum(adt: ty::AdtDef<'tcx>) -> EnumData<'tcx, RustTyDatas> {
@@ -529,6 +540,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 .discriminants(vcx.tcx())
                 .map(|(vid, discr)| {
                     let variant = adt.variant(vid);
+                    let params = Self::from_gparams(GParams::from(adt.did()));
                     let fields = Self::from_fields(&variant.fields);
                     VariantData::new(
                         RustVariantData {
@@ -537,12 +549,21 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                             discr_val: discr.val,
                         },
                         true,
-                        StructData::new((), true, fields),
+                        StructData::new(params, true, fields),
                     )
                 })
                 .collect::<Vec<_>>();
             EnumData::new(data, true, variants)
         })
+    }
+
+    fn from_gparams(gparams: GParams<'tcx>) -> Vec<LazyRustTy<'tcx>> {
+        gparams
+            .rust_params()
+            .iter()
+            .filter_map(|arg| arg.as_type())
+            .map(|ty| LazyRustTy::new(ty))
+            .collect::<Vec<_>>()
     }
 
     fn from_fields(

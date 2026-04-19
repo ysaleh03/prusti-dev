@@ -102,7 +102,7 @@ pub struct TyPurifiedMutRefData<'vir> {
 pub struct TyPurifiedStructData<'vir> {
     /// Construct domain from snapshots of fields or for primitive types
     /// from the single Viper primitive value.
-    pub(super) field_snaps_to_snap: FunctionIdn<'vir, vir::ManySnap, vir::CSnap>,
+    pub(super) field_snaps_to_snap: FunctionIdn<'vir, (vir::ManyTyVal, vir::ManySnap), vir::CSnap>,
 }
 
 #[derive(Debug, Clone, Copy)]

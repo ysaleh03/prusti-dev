@@ -3,12 +3,16 @@ use prusti_utils::config;
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CallableIdn, CastType, FunctionIdn};
 
-use crate::encoders::ty::{
-    RustTyDecomposition,
-    generics::GParams,
-    interpretation::float::FloatDomain,
-    pure::{TyPurePrimData, TyPurePrimDataKind},
-    use_pure::TyUsePureEnc,
+use crate::encoders::{
+    TyUsePurifiedEnc,
+    ty::{
+        RustTyDecomposition,
+        generics::GParams,
+        interpretation::float::FloatDomain,
+        lifted::TyConstructorEnc,
+        pure::{TyPurePrimData, TyPurePrimDataKind},
+        use_pure::TyUsePureEnc,
+    },
 };
 
 pub struct MirBuiltinEnc;
@@ -523,7 +527,7 @@ impl MirBuiltinEnc {
             int_name(r_ty)
         );
         let res_ty_task = RustTyDecomposition::from_ty(res_ty, vcx.tcx(), GParams::empty());
-        let e_res_ty = deps.require_dep::<TyUsePureEnc>(res_ty_task)?;
+        let e_res_ty = deps.require_dep::<TyUsePurifiedEnc>(res_ty_task)?;
         let e_res_ty_snap = e_res_ty.snapshot.downcast_ty();
         let function = FunctionIdn::new(name, (e_l_ty_snap, e_r_ty_snap), e_res_ty_snap);
         deps.emit_output_ref(key, MirBuiltinEncOutputRef::BinOp(function))?;
@@ -542,12 +546,20 @@ impl MirBuiltinEnc {
         let e_rvalue_pure_ty = e_rvalue_pure_ty.expect_primitive();
         assert_eq!(vir::TYPE_INT.upcast_ty(), e_rvalue_pure_ty.prim_type);
         let prim_type = e_rvalue_pure_ty.prim_type.downcast_ty::<vir::Int>();
+        let prim_tyval = deps
+            .require_ref::<TyConstructorEnc>(rvalue_pure_ty_task.ty)?
+            .ty_constructor
+            .call()(&[], &[]);
         let bool_ty_task = RustTyDecomposition::from_prim_ty(bool_ty);
         let e_bool = deps.require_dep::<TyUsePureEnc>(bool_ty_task)?;
         let bool_cons = e_bool
             .expect_primitive()
             .prim_to_snap
             .cast_args::<vir::Bool>(vir::TYPE_BOOL);
+        let bool_tyval = deps
+            .require_ref::<TyConstructorEnc>(bool_ty_task.ty)?
+            .ty_constructor
+            .call()(&[], &[]);
 
         // Unbounded value
         let val_exp = vcx
@@ -573,10 +585,10 @@ impl MirBuiltinEnc {
         };
         let overflowed_snap = bool_cons(overflowed);
         // `tuple(prim_to_snap(wrapped_val), wrapped_val != val)`
-        let tuple = e_res_ty.expect_structlike().field_snaps_to_snap(vec![
-            wrapped_val_snap.upcast_ty(),
-            overflowed_snap.upcast_ty(),
-        ]);
+        let tuple = e_res_ty.expect_structlike().field_snaps_to_snap(
+            vec![prim_tyval, bool_tyval],
+            vec![wrapped_val_snap.upcast_ty(), overflowed_snap.upcast_ty()],
+        );
         // `let wrapped_val == (val ..) in $tuple`
         let inner_let = vcx.mk_let_expr(wrapped_val_decl, wrapped_val_exp, tuple);
 

@@ -1,11 +1,12 @@
-use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
+use task_encoder::{EncodeFullResult, TaskEncoder};
 use vir::{CastType, FunctionIdn};
 
 use crate::encoders::{
-    Pure, Purified,
+    Purified,
     ty::{
         LazyRustTy, RustTyDatas,
-        generics::{GArgs, GArgsCastEnc, GArgsTyEnc, GParams},
+        generics::{GArgs, GArgsCastEnc, GArgsTyEnc, GParams, GenericParamsEnc},
+        lifted::TypeOfEnc,
         purified::TyPurifiedRef,
     },
 };
@@ -39,12 +40,6 @@ pub type TyUsePurifiedStruct<'vir> = StructData<'vir, UsePurifiedTyDatas>;
 pub type TyUsePurifiedEnum<'vir> = EnumData<'vir, UsePurifiedTyDatas>;
 
 #[derive(Debug, Clone, Copy)]
-pub struct TyUsePurifiedData<'vir> {
-    args: GArgsTy<'vir>,
-    purified: <PurifiedTyDatas as TyDatas<'vir>>::TyData,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct TyUsePurifiedImmRef<'vir> {
     snap_ty: vir::ExprTyVal<'vir>,
     caster: FieldCaster<'vir>,
@@ -69,7 +64,7 @@ pub struct TyUsePurifiedField<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct TyUsePurifiedStructData<'vir> {
     #[allow(dead_code)]
-    args: GArgsTy<'vir>,
+    pub(crate) args: GArgsTy<'vir>,
     purified: <PurifiedTyDatas as TyDatas<'vir>>::StructData,
 }
 
@@ -88,8 +83,10 @@ pub type TyUsePurifiedEnc = TyUseEnc<Purified>;
 #[derive(Debug, Clone, Copy)]
 pub struct TyUsePurifiedRef<'vir> {
     pub snapshot: vir::TypeSnap<'vir>,
+    pub ty_expr: vir::ExprTyVal<'vir>,
     args: GArgsTy<'vir>,
     ty_purified_ref: TyPurifiedRef<'vir>,
+    typeof_function: FunctionIdn<'vir, vir::Snap, vir::TyVal>,
 }
 
 impl<'vir> task_encoder::OutputRefAny for TyUsePurifiedRef<'vir> {}
@@ -119,10 +116,17 @@ impl TaskEncoder for TyUsePurifiedEnc {
         let ty_purified_ref = deps.require_ref::<TyPurifiedEnc>(task_key.ty)?;
         let args = deps.require_dep::<GArgsTyEnc>(task_key.args)?;
         let snapshot = (ty_purified_ref.domain)();
+        let generics = deps.require_dep::<GenericParamsEnc>(task_key.args.context())?;
+        let ty_expr = generics.ty_expr(deps, *task_key);
+
+        let typeof_ref = deps.require_ref::<TypeOfEnc>(task_key.ty)?;
+        let typeof_function = typeof_ref.typeof_function;
         let inner = TyUsePurifiedRef {
             args,
             snapshot,
+            ty_expr,
             ty_purified_ref,
+            typeof_function,
         };
         deps.emit_output_ref(*task_key, inner)?;
 
@@ -242,9 +246,15 @@ impl<'a, 'vir> TyUsePurifiedWalker<'a, 'vir> {
     }
 }
 
-impl<'vir> TyUsePurifiedData<'vir> {}
-
 impl<'vir> TyUsePurifiedRef<'vir> {
+    pub fn snap_to_ty_assertion<'tcx>(
+        &self,
+        vcx: &'vir vir::VirCtxt<'tcx>,
+        snap: vir::ExprSnap<'vir>,
+    ) -> vir::ExprBool<'vir> {
+        vcx.mk_eq_expr(self.typeof_function.call()(snap), self.ty_expr)
+    }
+
     pub fn unreachable_to_snap<Curr, Next>(&self) -> vir::ExprGenSnap<'vir, Curr, Next> {
         self.ty_purified_ref.unreachable_to_snap.call()(self.args.get_ty())
     }
@@ -302,13 +312,14 @@ impl<'vir> TyData<'vir, UsePurifiedTyDatas> {
 impl<'vir> TyUsePurifiedStruct<'vir> {
     pub fn field_snaps_to_snap<Curr, Next>(
         &self,
+        tyvals: Vec<vir::ExprGenTyVal<'vir, Curr, Next>>,
         mut snaps: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
         assert_eq!(snaps.len(), self.fields.len());
         for (snap, field) in snaps.iter_mut().zip(&self.fields) {
             *snap = field.caster.cast_to_callee_ctx(*snap);
         }
-        self.purified.field_snaps_to_snap.call()(&snaps)
+        self.purified.field_snaps_to_snap.call()(&tyvals, &snaps)
     }
 }
 
