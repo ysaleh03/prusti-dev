@@ -2095,8 +2095,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc, Purified> {
                     // will return `None` if this isn't a re-borrow, and if it's
                     // a re-borrow of created-in-pure reference then it will be
                     // field projections of `null` which is also `null`.
-                    let place_ref = encoded_place.snap;
-                    Ok(e_rvalue_ty.value_to_snap(place_ref).upcast_ty())
+                    Ok(e_rvalue_ty.value_to_snap(encoded_place.snap).upcast_ty())
                 } else {
                     let e_rvalue_ty = rvalue_snapshot_encoding.expect_immref();
                     // For shared borrows we want to use just the snapshot
