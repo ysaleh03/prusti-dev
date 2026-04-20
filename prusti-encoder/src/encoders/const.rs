@@ -13,11 +13,10 @@ use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDe
 use vir::CastType;
 
 use crate::encoders::{
-    MirPureEnc, MirPureEncTask, PureKind, Purified,
+    MirPureEnc, MirPureEncTask, PureKind, Purified, TyUsePurifiedEnc,
     ty::{
         RustTyDecomposition,
         generics::{GParams, GenericParamsEnc},
-        use_pure::TyUsePureEnc,
     },
 };
 
@@ -74,7 +73,7 @@ impl ConstEnc {
     ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self>> {
         vir::with_vcx(|vcx| {
             let ty_task = RustTyDecomposition::from_ty(ty, vcx.tcx(), context);
-            let kind = deps.require_dep::<TyUsePureEnc>(ty_task)?;
+            let kind = deps.require_dep::<TyUsePurifiedEnc>(ty_task)?;
             Ok(match val {
                 ConstValue::Scalar(Scalar::Int(int)) => {
                     let prim = kind.expect_primitive();
@@ -109,7 +108,7 @@ impl ConstEnc {
                 }
                 ConstValue::ZeroSized => {
                     let s = kind.expect_structlike();
-                    s.field_snaps_to_snap(Vec::new())
+                    s.field_snaps_to_snap(vec![], vec![])
                 }
                 // Encode `&str` constants to an opaque domain. If we ever want to perform string reasoning
                 // we will need to revisit this encoding, but for the moment this allows assertions to avoid
@@ -118,12 +117,12 @@ impl ConstEnc {
                     let ref_ty = kind.expect_immref();
                     let str_ty = ty.peel_refs();
                     let str_ty_task = RustTyDecomposition::from_ty(str_ty, vcx.tcx(), context);
-                    let str_snap = deps.require_dep::<TyUsePureEnc>(str_ty_task)?;
+                    let str_snap = deps.require_dep::<TyUsePurifiedEnc>(str_ty_task)?;
                     let str_snap = str_snap.expect_opaque();
                     // first, we create a string snapshot
                     let snap = (str_snap.arbitrary)().upcast_ty();
                     // wrap it in a ref
-                    vir::with_vcx(|vcx| ref_ty.prim_to_snap(vcx.mk_null(), snap))
+                    vir::with_vcx(|vcx| ref_ty.value_to_snap(snap))
                 }
                 ConstValue::Slice { .. } => todo!("ConstValue::Slice: {ty:?}"),
                 ConstValue::Indirect { .. } => todo!("ConstValue::Indirect"),
