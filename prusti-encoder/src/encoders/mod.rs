@@ -26,7 +26,9 @@ pub use mir_impure::ImpureEncVisitor;
 pub use mir_pure::{MirPureEnc, MirPureEncTask, PureKind};
 pub use mir_purified::PurifiedEncVisitor;
 pub use pure::spec::MirSpecEnc;
-pub use purified::fn_wand::{PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask};
+pub use purified::fn_wand::{
+    PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask, ReconstructorEnc,
+};
 pub(super) use spec::with_proc_spec;
 pub use spec::{SpecEnc, SpecEncTask, is_function_trusted, is_type_trusted};
 pub use ty::{

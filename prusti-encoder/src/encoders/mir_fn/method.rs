@@ -3,10 +3,7 @@ use std::marker::PhantomData;
 use pcg::{borrow_checker::r#impl::NllBorrowCheckerImpl, borrow_pcg::FunctionData};
 use prusti_rustc_interface::{
     data_structures::fx::FxHashMap,
-    middle::{
-        mir,
-        ty::{self, TyKind},
-    },
+    middle::{mir, ty},
     span::def_id::DefId,
 };
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
@@ -15,9 +12,9 @@ use vir::{CastType, MethodIdn, macros::ExprQuote};
 use crate::{
     encoders::{
         Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, NotPure,
-        Purified, PurifiedEncVisitor, PurifiedWandEnc, Purity, WandEnc, WandEncTask,
+        Purified, PurifiedEncVisitor, PurifiedWandEnc, PurifiedWandEncTask, Purity, WandEnc,
+        WandEncTask,
         mir_fn::{CallTaskDescription, RustSignature},
-        purified::fn_wand::PurifiedWandEncTask,
         ty::generics::{
             GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc, PurityCasters,
         },
@@ -487,10 +484,7 @@ impl TaskEncoder for MethodEnc<Purified> {
             // let impure_spec =
             //     deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, false), span)?;
             // println!("def_id: {def_id:?}");
-            // println!("pre: {:#?}", spec.pres);
-            // println!("impure_pre: {:#?}", impure_spec.pres);
-            // println!("posts: {:#?}", spec.posts);
-            // println!("impure_post: {:#?}", impure_spec.posts);
+            // println!("impure_pledge: {:#?}", impure_spec.pledges);
             let function_data = FunctionData::new(def_id, gparams.rust_params(), None);
             let wands = deps.require_dep_spanned::<PurifiedWandEnc>(
                 PurifiedWandEncTask {

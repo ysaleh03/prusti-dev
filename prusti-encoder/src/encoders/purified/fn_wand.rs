@@ -1,8 +1,14 @@
 use crate::encoders::{
-    MirLocalDefEncOutput, PurifiedEncVisitor,
-    pure::spec::EncodedPledge,
-    purified::spec::PurifiedMirSpecEnc,
-    ty::{RustTyDecomposition, generics::GParams, indirect::IndirectPredicatesEnc},
+    MirLocalDefEnc, MirLocalDefEncOutput, MirLocalDefEncTask, Purified, PurifiedEncVisitor,
+    TyUsePurifiedEnc,
+    mir_fn::RustSignature,
+    pure::spec::{EncodedPledge, MirSpecEnc},
+    ty::{
+        RustTyDecomposition,
+        generics::{
+            GArgCaster, GArgs, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc,
+        },
+    },
 };
 use pcg::borrow_pcg::{
     FunctionData, FunctionShape, FunctionShapeInput, FunctionShapeNode, FunctionShapeOutput,
@@ -10,12 +16,14 @@ use pcg::borrow_pcg::{
 };
 use prusti_interface::PrustiError;
 use prusti_rustc_interface::{
-    data_structures::fx::{FxHashMap, FxHashSet},
+    data_structures::fx::FxHashSet,
     middle::{mir, ty},
     span::def_id::DefId,
 };
-use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
-use vir::HasType;
+use task_encoder::{
+    EncodeFullError, EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies,
+};
+use vir::{CastType, MethodIdn};
 
 /// Encodes the magic wands given a function signature.
 pub struct PurifiedWandEnc;
@@ -26,31 +34,18 @@ pub enum PurifiedWandEncError {
 }
 
 impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
-    pub fn package_proofs(
+    pub fn prove_wands(
         &mut self,
         final_borrow_state: &BorrowsState<'_, 'vir>,
     ) -> Result<Vec<vir::Stmt<'vir>>, EncodeFullError<'vir, E>> {
-        let mut proof_packages = Vec::new();
-        let vcx = self.vcx;
-        let label = self.new_label("package_post");
-        let snap_lhs = |l| {
-            let ld: crate::encoders::PurifiedLocalDef<'vir> = self.local_defs.locals[l];
-            if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(ld.local_ex, label)
-            } else {
-                vcx.mk_old_expr(ld.local_ex)
-            }
-        };
-        let snap_rhs = |l| {
-            let ld: crate::encoders::PurifiedLocalDef<'vir> = self.local_defs.locals[l];
-            vcx.mk_old_expr(ld.local_ex)
-        };
+        let mut wand_proofs = Vec::new();
+        let label = self.new_label("proof_post");
 
         for wand_data in self.wands.viper_wands() {
-            let wand = self
-                .wands
-                .mk_wand(&wand_data, snap_lhs, snap_rhs, vcx, self.deps);
-            let mut package_script = Vec::new();
+            if wand_data.lhs.is_empty() {
+                continue;
+            }
+            let mut proof_script = Vec::new();
             for rhs in wand_data.rhs.iter() {
                 let ug = UnblockGraph::for_node(
                     mir::Place::from(rhs.mir_local()),
@@ -61,10 +56,19 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                 let unblock = self.block(|visitor| {
                     visitor.pcs_unblock_actions(final_borrow_state, &actions, Some(label))
                 })?;
-                package_script.extend(unblock);
+                proof_script.extend(unblock);
             }
 
-            for EncodedPledge { spec, span, .. } in wand_data.pledges.iter().copied() {
+            let spec = self
+                .deps
+                .require_dep::<MirSpecEnc<Purified>>((wand_data.def_id, false))?;
+
+            for EncodedPledge {
+                expiry_obligation,
+                spec,
+                span,
+            } in spec.pledges.iter().copied()
+            {
                 self.vcx.with_span(span, |vcx| {
                     vcx.handle_error("exhale.failed:assertion.false", move |_| {
                         Some(vec![PrustiError::verification(
@@ -72,15 +76,12 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                             span.into(),
                         )])
                     });
-                    package_script.push(vcx.mk_exhale_stmt(spec));
+                    proof_script.push(vcx.mk_exhale_stmt(spec));
                 });
             }
-            proof_packages.push(
-                self.vcx
-                    .mk_package_stmt(wand, self.vcx.alloc_slice(&package_script)),
-            );
+            wand_proofs.extend(proof_script);
         }
-        Ok(proof_packages)
+        Ok(wand_proofs)
     }
 }
 
@@ -100,7 +101,7 @@ pub struct PurifiedWandEncOutput<'vir> {
     outputs: Vec<FunctionShapeOutput>,
 
     /// Encoded VIR expressions for the magic wands.
-    wands: Vec<PurifiedWandData<'vir>>,
+    wands: Vec<PurifiedWandData>,
 }
 
 impl<'vir> PurifiedWandEncOutput<'vir> {
@@ -116,7 +117,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         )
     }
 
-    fn encode_predicates_for_function_shape_node(
+    fn encode_type_for_function_shape_node(
         &self,
         vcx: &'vir vir::VirCtxt<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, impl TaskEncoder>,
@@ -127,21 +128,24 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         let g = g.into();
         let fn_sig = self.fn_sig(vcx);
         let ty = RustTyDecomposition::from_ty(g.ty(fn_sig), vcx.tcx(), self.g_params(vcx));
-        // let predicates = deps
-        //     .require_dep::<IndirectPredicatesEnc<crate::encoders::Purified>>(g.with_base(ty))
-        //     .unwrap()
-        //     .predicate_applications;
+        let self_ty_enc = deps
+            .require_dep::<TyUsePurifiedEnc>(g.with_base(ty).base())
+            .unwrap();
+        let type_condition = vcx.mk_lazy_expr(
+            "type_condition",
+            vir::TYPE_BOOL,
+            Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
+                self_ty_enc
+                    .data
+                    .snap_to_ty_assertion(
+                        vcx,
+                        self_expr)}
+                        .kind),
+            None);
 
         let local = g.mir_local();
         let local_snap = snap(local);
-        vcx.mk_conj(
-            &[], // vcx.alloc_slice(
-                 //     &predicates
-                 //         .iter()
-                 //         .map(|p| p.reify(vcx, local_snap))
-                 //         .collect::<Vec<_>>(),
-                 // ),
-        )
+        type_condition.reify(vcx, local_snap)
     }
 
     pub fn indirect_pres<'a, E: TaskEncoder>(
@@ -151,9 +155,7 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         deps: &'a mut TaskEncoderDependencies<'vir, E>,
     ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
         self.inputs().map(|g| {
-            self.encode_predicates_for_function_shape_node(vcx, deps, g, |i| {
-                local_defs[i].impure_snap
-            })
+            self.encode_type_for_function_shape_node(vcx, deps, g, |i| local_defs[i].local_snap_ex)
         })
     }
 
@@ -172,53 +174,23 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
             .inputs()
             .filter(|i| !self.blocked_inputs().contains(i))
             .map(|lp| {
-                self.encode_predicates_for_function_shape_node(vcx, deps, lp, |i| {
-                    vcx.mk_old_expr(local_defs[i].impure_snap)
+                self.encode_type_for_function_shape_node(vcx, deps, lp, |i| {
+                    vcx.mk_old_expr(local_defs[i].local_snap_ex)
                 })
             })
             .collect::<Vec<_>>()
             .into_iter();
 
         let output_posts = self.outputs().map(|g| {
-            self.encode_predicates_for_function_shape_node(vcx, deps, g, |i| {
-                local_defs[i].impure_snap
-            })
+            self.encode_type_for_function_shape_node(vcx, deps, g, |i| local_defs[i].local_snap_ex)
         });
         unblocked_input_posts.chain(output_posts)
     }
 
-    pub fn wand_posts<'a, E: TaskEncoder>(
-        &'a self,
-        vcx: &'vir vir::VirCtxt<'vir>,
-        local_defs: &'a MirLocalDefEncOutput<'vir>,
-        deps: &'a mut TaskEncoderDependencies<'vir, E>,
-    ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
-        // TODO: wands for late-bound regions
-        self.viper_wands().into_iter().map(|wand_data| {
-            let mut snaps = FxHashMap::default();
-            let snap_lhs = |i| {
-                snaps
-                    .entry(i)
-                    .or_insert_with(|| {
-                        let name = vir::vir_format!(vcx, "wand{:?}", i);
-                        let decl = vcx.mk_local_decl(name, local_defs[i].local_snap.ty());
-                        (decl, vcx.mk_local_ex(decl))
-                    })
-                    .1
-            };
-            let snap_rhs = |i| vcx.mk_old_expr(local_defs[i].impure_snap);
-            let wand = self.mk_wand(&wand_data, snap_lhs, snap_rhs, vcx, deps);
-            snaps
-                .into_iter()
-                .fold(vcx.mk_wand_expr(wand), |acc, (local, (name, _))| {
-                    vcx.mk_let_expr(name, local_defs[local].impure_snap, acc)
-                })
-        })
-    }
-
-    pub fn apply_proofs<E: TaskEncoder>(
+    pub fn apply_reconstructors<E: TaskEncoder>(
         &self,
-        arguments: &[vir::ExprSnap<'vir>],
+        snaps: &[vir::ExprSnap<'vir>],
+        rets: &'vir [vir::ExprDyn<'vir>],
         label_pre: &'vir str,
         label_post: &'vir str,
         visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
@@ -226,46 +198,25 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         let vcx = visitor.vcx;
         let snap_lhs = |l: mir::Local| {
             if l == mir::RETURN_PLACE {
-                vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_post)
+                vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_post)
             } else {
-                vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre)
+                vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_pre)
             }
         };
         let snap_rhs =
-            |l: mir::Local| vcx.mk_local_labelled_old_expr(arguments[l.as_usize()], label_pre);
+            |l: mir::Local| vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_pre);
         for wand_data in self.viper_wands() {
-            let wand = self.mk_wand(&wand_data, snap_lhs, snap_rhs, vcx, visitor.deps);
-            visitor.stmt(visitor.vcx.mk_apply_stmt(wand));
+            let reconstructor_idn = visitor
+                .deps
+                .require_dep::<ReconstructorCallEnc>(ReconstructorCallEncTask::new(
+                    self.function_data,
+                    wand_data,
+                ))
+                .unwrap();
+            let call = reconstructor_idn.call(snaps, rets);
+            // let call = vir::with_vcx(|vcx| vcx.alloc(vir::StmtGenData::new(vcx.alloc(call))));
+            visitor.stmts(call);
         }
-    }
-
-    fn mk_wand<'a, E: TaskEncoder>(
-        &'a self,
-        wand_data: &PurifiedWandData<'vir>,
-        mut snap_lhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
-        mut snap_rhs: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
-        vcx: &'vir vir::VirCtxt<'vir>,
-        deps: &mut TaskEncoderDependencies<'vir, E>,
-    ) -> vir::Wand<'vir> {
-        debug_assert!(!wand_data.lhs.is_empty());
-        let rhs = wand_data
-            .rhs
-            .iter()
-            .map(|g| self.encode_predicates_for_function_shape_node(vcx, deps, *g, &mut snap_rhs));
-        let rhs = rhs.chain(wand_data.pledges.iter().map(|pledge| pledge.spec));
-        let rhs = vcx.mk_conj(vcx.alloc_slice(&rhs.collect::<Vec<_>>()));
-        let lhs = wand_data
-            .lhs
-            .iter()
-            .map(|g| self.encode_predicates_for_function_shape_node(vcx, deps, *g, &mut snap_lhs));
-        let lhs = lhs.chain(
-            wand_data
-                .pledges
-                .iter()
-                .filter_map(|pledge| pledge.expiry_obligation_expr()),
-        );
-        let lhs = vcx.mk_conj(vcx.alloc_slice(&lhs.collect::<Vec<_>>()));
-        vcx.mk_wand(lhs, rhs)
     }
 }
 
@@ -290,26 +241,22 @@ impl<'tcx> PurifiedWandEncTask<'tcx> {
 pub type PurifiedWandRhsKey = FunctionShapeInput;
 pub type PurifiedWandLhsKey = FunctionShapeNode;
 
-#[derive(Clone, Debug)]
-pub struct PurifiedWandData<'vir> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PurifiedWandData {
+    def_id: DefId,
     /// Lifetime projections on the right-hand side of the wand. Guaranteed to be
     /// non-empty.
     rhs: Vec<PurifiedWandRhsKey>,
     /// Lifetime projections on the left-hand side of the wand. Guaranteed to be
     /// non-empty.
     lhs: Vec<PurifiedWandLhsKey>,
-    pledges: EncodedPledges<'vir>,
 }
 
-impl<'vir> PurifiedWandData<'vir> {
-    pub fn new(
-        lhs: Vec<PurifiedWandLhsKey>,
-        rhs: Vec<PurifiedWandRhsKey>,
-        pledges: EncodedPledges<'vir>,
-    ) -> Self {
+impl PurifiedWandData {
+    pub fn new(def_id: DefId, lhs: Vec<PurifiedWandLhsKey>, rhs: Vec<PurifiedWandRhsKey>) -> Self {
         debug_assert!(!lhs.is_empty());
         debug_assert!(!rhs.is_empty());
-        Self { rhs, lhs, pledges }
+        Self { def_id, rhs, lhs }
     }
 }
 
@@ -318,13 +265,11 @@ impl TaskEncoder for PurifiedWandEnc {
 
     type TaskDescription<'vir> = PurifiedWandEncTask<'vir>;
 
-    type TaskKey<'vir> = PurifiedWandEncTask<'vir>;
-
     type OutputFullDependency<'vir> = PurifiedWandEncOutput<'vir>;
 
     type EncodingError = PurifiedWandEncError;
 
-    const ENCODER_NAME: &'static str = "wand encoder";
+    const ENCODER_NAME: &'static str = "purified wand encoder";
 
     fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
         task.clone()
@@ -353,7 +298,7 @@ impl TaskEncoder for PurifiedWandEnc {
             })?;
 
             let (inputs, outputs) = shape.take_inputs_and_outputs();
-            let spec = deps.require_dep::<PurifiedMirSpecEnc>((def_id, false))?;
+            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, false))?;
             if coupled_edges.is_empty() {
                 assert!(spec.pledges.is_empty());
                 return Ok((
@@ -375,26 +320,29 @@ impl TaskEncoder for PurifiedWandEnc {
                     None,
                 ));
             }
-            let wands: Vec<PurifiedWandData<'vir>> = coupled_edges
+            let wands: Vec<PurifiedWandData> = coupled_edges
                 .into_iter()
                 .map(|hyper_edge| {
                     let (sources, targets) = hyper_edge.into_tuple();
-                    PurifiedWandData::new(targets, sources, pledges.clone())
+                    PurifiedWandData::new(def_id, targets, sources)
                 })
                 .collect();
-            let output: PurifiedWandEncOutput<'vir> = PurifiedWandEncOutput {
-                function_data: task_key.data,
-                inputs,
-                outputs,
-                wands,
-            };
-            Ok(((), output))
+
+            Ok((
+                (),
+                PurifiedWandEncOutput {
+                    function_data: task_key.data,
+                    inputs,
+                    outputs,
+                    wands,
+                },
+            ))
         })
     }
 }
 
 impl<'vir> PurifiedWandEncOutput<'vir> {
-    pub fn viper_wands(&self) -> Vec<PurifiedWandData<'vir>> {
+    pub fn viper_wands(&self) -> Vec<PurifiedWandData> {
         self.wands.clone()
     }
 
@@ -415,3 +363,273 @@ impl<'vir> PurifiedWandEncOutput<'vir> {
         self.outputs.iter().copied()
     }
 }
+
+pub struct ReconstructorCallEnc;
+
+#[derive(Debug, Clone)]
+pub struct ReconstructorCallEncOutput<'vir> {
+    method: ReconstructorEncOutputRef<'vir>,
+    ty_args: GArgsTy<'vir>,
+    inputs: Vec<GArgCaster<'vir, Purified>>,
+    outputs: Vec<GArgCaster<'vir, Purified>>,
+}
+
+impl<'vir> ReconstructorCallEncOutput<'vir> {
+    pub fn call(
+        &self,
+        args: &[vir::ExprSnap<'vir>],
+        dests: &'vir [vir::ExprDyn<'vir>],
+    ) -> Vec<vir::Stmt<'vir>> {
+        println!("self.inputs = {:?}", self.inputs);
+        println!("args = {:?}", args);
+        assert_eq!(self.inputs.len(), args.len());
+        assert_eq!(self.outputs.len(), dests.len());
+        let inputs: Vec<_> = args
+            .iter()
+            .zip(self.inputs.iter())
+            .map(|(arg, caster)| caster.cast_to_callee_ctx(arg))
+            .collect();
+        let call = self.method.method_ref.call()(
+            (&inputs, self.ty_args.get_ty(), self.ty_args.get_const()),
+            &dests,
+        );
+        vir::with_vcx(|vcx| {
+            let call = vcx.alloc(vir::StmtGenData::new(vcx.alloc(call)));
+            // let cast = vcx.mk_pure_assign_stmt(dest, self.outputs[0].cast_to_caller_ctx(dest));
+            vec![call]
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReconstructorCallEncTask<'tcx> {
+    pub fn_data: FunctionData<'tcx>,
+    pub wand_data: PurifiedWandData,
+}
+
+impl<'tcx> ReconstructorCallEncTask<'tcx> {
+    pub fn new(fn_data: FunctionData<'tcx>, wand_data: PurifiedWandData) -> Self {
+        ReconstructorCallEncTask { fn_data, wand_data }
+    }
+
+    pub fn def_id(&self) -> DefId {
+        self.fn_data.def_id()
+    }
+}
+
+impl TaskEncoder for ReconstructorCallEnc {
+    task_encoder::encoder_cache!(ReconstructorCallEnc);
+    type TaskDescription<'tcx> = ReconstructorCallEncTask<'tcx>;
+    type OutputFullDependency<'vir> = ReconstructorCallEncOutput<'vir>;
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        task.clone()
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        deps.emit_output_ref(task_key.clone(), ())?;
+        let method_ref = deps.require_ref::<ReconstructorEnc>(task_key.wand_data.clone())?;
+        let signature = RustSignature::new(task_key.def_id());
+
+        let gargs = GArgs::new(task_key.def_id(), task_key.fn_data.substs());
+        let ty_args = deps.require_dep::<GArgsTyEnc>(gargs)?;
+        let inputs = signature
+            .inputs
+            .iter()
+            .map(|ty| {
+                let normalized = ty.decompose_compare_normalize(signature.gparams, gargs);
+                deps.require_dep::<GArgsCastEnc<Purified>>(normalized)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let normalized = signature
+            .output
+            .decompose_compare_normalize(signature.gparams, gargs);
+        let output = deps.require_dep::<GArgsCastEnc<Purified>>(normalized)?;
+        Ok((
+            (),
+            ReconstructorCallEncOutput {
+                method: method_ref,
+                ty_args,
+                inputs,
+                outputs: vec![output],
+            },
+        ))
+    }
+
+    fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
+        ReconstructorEnc::emit_outputs(program);
+    }
+}
+
+/// Encodes the magic wands given a function signature.
+pub struct ReconstructorEnc;
+
+// pub struct ReconstructorEncTask<'vir> {}
+
+#[derive(Debug, Clone)]
+pub struct ReconstructorEncOutputRef<'vir> {
+    pub(crate) method_ref: MethodIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap)>,
+}
+
+impl<'vir> OutputRefAny for ReconstructorEncOutputRef<'vir> {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReconstructorEncOutput<'vir> {
+    method: vir::Method<'vir>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ReconstructorEncError {
+    Unsupported(#[allow(dead_code)] String),
+}
+
+impl TaskEncoder for ReconstructorEnc {
+    task_encoder::encoder_cache!(ReconstructorEnc);
+
+    type TaskDescription<'tcx> = PurifiedWandData;
+
+    type OutputRef<'vir> = ReconstructorEncOutputRef<'vir>;
+    type OutputFullLocal<'vir> = ReconstructorEncOutput<'vir>;
+
+    type EncodingError = ReconstructorEncError;
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        task.clone()
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        let def_id = task_key.def_id;
+        vir::with_vcx(|vcx| {
+            let span = vcx.tcx().def_span(def_id);
+            let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Purified>>(
+                MirLocalDefEncTask::Local {
+                    def_id,
+                    all_locals: false,
+                },
+                span,
+            )?;
+
+            let gparams = GParams::from(def_id);
+            let generics = deps
+                .require_dep_spanned::<GenericParamsEnc>(gparams, span)
+                .unwrap();
+
+            let name = vir::vir_format_identifier!(vcx, "r_{}", vcx.tcx().def_path_str(def_id));
+
+            let mut args = Vec::new();
+            let mut arg_tys = Vec::new();
+            let mut pres = Vec::new();
+            for &g in &task_key.lhs {
+                let local_def = local_defs[g.mir_local()];
+                args.push(local_def.local_snap);
+                arg_tys.push(local_def.local_snap.ty);
+                pres.push(local_def.impure_pred);
+            }
+
+            let mut rets = Vec::new();
+            let mut posts = Vec::new();
+            for &g in &task_key.rhs {
+                let local_def = local_defs[g.mir_local()];
+                rets.push(local_def.local_snap);
+                posts.push(local_def.impure_pred);
+            }
+
+            let method_ref = MethodIdn::new(
+                name,
+                (
+                    vcx.alloc_slice(&arg_tys),
+                    generics.ty_args(),
+                    generics.const_args(),
+                ),
+            );
+
+            deps.emit_output_ref(task_key.clone(), ReconstructorEncOutputRef { method_ref })?;
+
+            let pledges = deps
+                .require_dep_spanned::<MirSpecEnc<Purified>>((def_id, false), span)?
+                .pledges;
+
+            for p in pledges {
+                p.expiry_obligation_expr().map(|b| pres.push(b));
+                posts.push(p.spec);
+            }
+
+            let method = vcx.mk_method(
+                method_ref,
+                (&args, generics.ty_decls(), generics.const_decls()),
+                vcx.alloc_slice(&rets.as_dyn()),
+                vcx.alloc_slice(&pres),
+                vcx.alloc_slice(&posts),
+                None,
+            );
+
+            Ok((ReconstructorEncOutput { method }, ()))
+        })
+    }
+
+    fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
+        for output in Self::all_outputs_local_no_errors() {
+            program.add_method(output.method);
+        }
+    }
+}
+
+//     pub fn apply_reconstructors<E: TaskEncoder>(
+//         &self,
+//         snaps: &[vir::ExprSnap<'vir>],
+//         tyvals: &[vir::ExprTyVal<'vir>],
+//         consts: &[vir::ExprCSnap<'vir>],
+//         rets: &'vir [vir::ExprDyn<'vir>],
+//         label_pre: &'vir str,
+//         label_post: &'vir str,
+//         visitor: &mut PurifiedEncVisitor<'vir, '_, E>,
+//     ) {
+//         let vcx = visitor.vcx;
+//         let snap_lhs = |l: mir::Local| {
+//             if l == mir::RETURN_PLACE {
+//                 vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_post)
+//             } else {
+//                 vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_pre)
+//             }
+//         };
+//         let snap_rhs =
+//             |l: mir::Local| vcx.mk_local_labelled_old_expr(snaps[l.as_usize()], label_pre);
+//         for wand_data in self.viper_wands() {
+//             let reconstructor_idn = self.mk_reconstructor_idn(&wand_data, snaps, vcx, visitor.deps);
+//             let call = reconstructor_idn.call()((snaps, tyvals, consts), rets);
+//             let call = vir::with_vcx(|vcx| vcx.alloc(vir::StmtGenData::new(vcx.alloc(call))));
+//             visitor.stmt(call);
+//         }
+//     }
+
+//     fn mk_reconstructor_idn<'a, E: TaskEncoder>(
+//         &'a self,
+//         wand_data: &PurifiedWandData,
+//         snaps: &[vir::ExprSnap<'vir>],
+//         vcx: &'vir vir::VirCtxt<'vir>,
+//         deps: &mut TaskEncoderDependencies<'vir, E>,
+//     ) -> vir::MethodIdn<'vir, (ManySnap, ManyTyVal, ManyCSnap)> {
+//         debug_assert!(!wand_data.lhs.is_empty());
+//         let def_id = self.function_data.def_id();
+//         let span = vcx.tcx().def_span(def_id);
+//         let params = GParams::from(def_id);
+//         let generics = deps
+//             .require_dep_spanned::<GenericParamsEnc>(params, span)
+//             .unwrap();
+
+//         let arg_tys = wand_data.lhs.iter().map(|g| {
+//             snaps[g.mir_local().as_usize()].ty()
+//         }).collect::<Vec<_>>();
+
+//         MethodIdn::new(
+//             vir::vir_format_identifier!(vcx,"reconstruct_{}",vcx.tcx().def_path_str(self.function_data.def_id())),
+//             (vcx.alloc_slice(&arg_tys), generics.ty_args(), generics.const_args())
+//         )
+//     }
+// }

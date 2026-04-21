@@ -19,7 +19,7 @@ use prusti_utils::config;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    Purified,
+    Purified, ReconstructorEnc,
     custom::PairUseEnc,
     ty::{
         generics::{GArgsCastEnc, trait_impls::TraitImplEnc, traits::TraitEnc},
@@ -91,6 +91,9 @@ pub fn test_entrypoint<'tcx>(
 
     // program.header("impure generic casts");
     // GArgsCastEnc::<Impure>::emit_outputs(&mut program);
+
+    program.header("purified magic wands");
+    ReconstructorEnc::emit_outputs(&mut program);
 
     program.header("purified generic casts");
     GArgsCastEnc::<Purified>::emit_outputs(&mut program);

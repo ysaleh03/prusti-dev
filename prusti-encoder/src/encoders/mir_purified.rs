@@ -37,18 +37,15 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, macros::ExprQuote};
 
 use crate::encoders::{
-    self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncTask,
+    self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask,
     mir_fn::{CallTaskDescription, RustSignature},
     mir_shared::{EncodedCast, ExprResult, PureRvalueEnc},
     ty::{
         RustTyDecomposition,
         data::TySpecifics,
-        generics::{GArgs, GArgsTyEnc},
         use_purified::{TyUsePurified, TyUsePurifiedEnc},
     },
 };
-
-use super::PurifiedWandEncOutput;
 
 #[derive(Clone, Copy)]
 struct FromToVar<'vir> {
@@ -244,7 +241,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         self.current_stmts.as_mut().unwrap().push(stmt);
     }
 
-    fn stmts(&mut self, stmts: impl IntoIterator<Item = vir::Stmt<'vir>>) {
+    pub(crate) fn stmts(&mut self, stmts: impl IntoIterator<Item = vir::Stmt<'vir>>) {
         for stmt in stmts {
             self.stmt(stmt);
         }
@@ -521,12 +518,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 //   function call; instead we should figure out which
                 //   wand it is based on the edge info.
                 // TODO: closures
-                let wand_enc_output = self
-                    .deps
-                    .require_dep::<PurifiedWandEnc>(PurifiedWandEncTask {
-                        data: call.function_data().unwrap(),
-                    })
-                    .unwrap();
+                let wand_enc_output =
+                    self.deps
+                        .require_dep::<PurifiedWandEnc>(PurifiedWandEncTask {
+                            data: call.function_data().unwrap(),
+                        })?;
                 let bb = &self.body[call.location().block];
                 let terminator = bb.terminator.as_ref().unwrap();
                 match &terminator.kind {
@@ -535,18 +531,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     } => {
                         let (_, dest_snap, _, _) =
                             self.encode_place_with_snap((*destination).into());
-                        let wand_args =
-                            std::iter::once(Ok(dest_snap))
-                                .chain(args.iter().map(|operand| {
-                                    self.encode_operand_snap_immediate(&operand.node)
-                                }))
-                                .collect::<Result<Vec<_>, EncodeFullError<'vir, E>>>()?;
+                        let wand_args = args
+                            .iter()
+                            .map(|operand| self.encode_operand_snap_immediate(&operand.node))
+                            .collect::<Result<Vec<_>, EncodeFullError<'vir, E>>>()?;
                         let (label_pre, label_post) = self.call_labels[&call.location().block];
                         wand_enc_output.apply_reconstructors(
                             &wand_args,
-                            &[],
-                            &[],
-                            &[],
+                            self.vcx.alloc_slice(&vec![dest_snap.as_dyn()]),
                             label_pre,
                             label_post,
                             self,

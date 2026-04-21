@@ -191,11 +191,18 @@ impl TaskEncoder for IndirectPredicatesEnc<Purified> {
                 TySpecifics::Param(_) | TySpecifics::Opaque(_) => (),
                 TySpecifics::MutRef((data, ref_domain)) => {
                     let inner_ty = data.decompose_normalize(ty.args);
+                    let inner_ty_enc = deps.require_dep::<TyUsePurifiedEnc>(inner_ty)?;
                     type_cond_applications.push(vcx.mk_lazy_expr(
                         "ref_indirect",
                         vir::TYPE_BOOL,
                         Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
-                            ref_domain.value_access(self_expr.downcast_ty()).kind
+                            inner_ty_enc
+                                .data
+                                .snap_to_ty_assertion(
+                                    vcx,
+                                    ref_domain.value_access(self_expr.downcast_ty()),
+                                )
+                                .kind
                         }),
                         None,
                     ));
@@ -203,7 +210,7 @@ impl TaskEncoder for IndirectPredicatesEnc<Purified> {
                         LifetimeProjection::new(inner_ty, task_key.region(()), None, ())
                     {
                         let inner_indirect =
-                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
+                            deps.require_dep::<IndirectPredicatesEnc<Purified>>(new_projection)?;
                         type_cond_applications.extend(
                             inner_indirect
                                 .predicate_applications
@@ -219,6 +226,16 @@ impl TaskEncoder for IndirectPredicatesEnc<Purified> {
                                                     ref_domain
                                                         .value_access(self_expr.downcast_ty()),
                                                 )
+                                                // self_ty_enc
+                                                //     .data
+                                                //     .snap_to_ty_assertion(
+                                                //         vcx,
+                                                //         inner_expr.reify(
+                                                //             vcx,
+                                                //             ref_domain
+                                                //                 .value_access(self_expr.downcast_ty()),
+                                                //         ),
+                                                //     )
                                                 .kind
                                         }),
                                         None,
@@ -249,7 +266,7 @@ impl TaskEncoder for IndirectPredicatesEnc<Purified> {
                             LifetimeProjection::new(field_ty, task_key.region(()), None, ())
                                 .unwrap();
                         let field_indirect =
-                            deps.require_dep::<IndirectPredicatesEnc<Pure>>(new_projection)?;
+                            deps.require_dep::<IndirectPredicatesEnc<Purified>>(new_projection)?;
                         type_cond_applications.extend(
                             field_indirect
                                 .predicate_applications
