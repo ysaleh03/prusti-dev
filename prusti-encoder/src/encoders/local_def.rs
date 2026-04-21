@@ -264,7 +264,7 @@ impl MirLocalDefEnc<Purified> {
         let local_ref_ex = vcx.mk_local_ex(local_ref);
         let local_snap = vcx.mk_local_decl(snap_local, ty.snapshot);
         let local_snap_ex = vcx.mk_local_ex(local_snap);
-        let impure_snap = ty.unreachable_to_snap();
+        let impure_snap = local_snap_ex;
         let impure_pred = ty.snap_to_ty_assertion(vcx, local_snap_ex);
         LocalDef {
             local_ref,
