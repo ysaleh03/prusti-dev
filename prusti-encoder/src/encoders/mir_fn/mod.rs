@@ -4,10 +4,11 @@ mod signature;
 
 pub use function::*;
 pub use method::*;
+use prusti_utils::config;
 pub use signature::*;
 
 use crate::encoders::{
-    Purified,
+    Impure, Purified,
     ty::generics::{GArgs, GParams, trait_impls::TraitImplEnc},
 };
 
@@ -56,8 +57,11 @@ pub fn encode_all_in_crate<'tcx>(tcx: ty::TyCtxt<'tcx>) {
                 .unwrap_or_default();
 
                 if !(is_trusted && is_pure) {
-                    // let _ = method::MethodEnc::<Impure>::encode(def_id, false);
-                    let _ = method::MethodEnc::<Purified>::encode(def_id, false);
+                    if config::enable_purification_optimization() {
+                        let _ = method::MethodEnc::<Purified>::encode(def_id, false);
+                    } else {
+                        let _ = method::MethodEnc::<Impure>::encode(def_id, false);
+                    }
                 }
             }
             unsupported_item_kind => {

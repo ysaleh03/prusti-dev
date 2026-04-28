@@ -19,7 +19,7 @@ use prusti_utils::config;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    Purified, ReconstructorEnc,
+    Impure, Pure, Purified, ReconstructorEnc,
     custom::PairUseEnc,
     ty::{
         generics::{GArgsCastEnc, trait_impls::TraitImplEnc, traits::TraitEnc},
@@ -70,41 +70,53 @@ pub fn test_entrypoint<'tcx>(
     if config::show_ide_info() {
         vir::with_vcx(|vcx| vcx.emit_contract_spans(env_diagnostic));
     }
+    let purified = config::enable_purification_optimization();
+
     let mut program = task_encoder::Program::default();
 
     // We output results from both monomorphic and polymorphic encoding of
     // functions, because even when Prusti is configured to use the monomorphic
     // it will still use `MirPolyImpureEnc` directly sometimes (see usages
     // earlier in this file).
-    program.header("user methods");
-    // crate::encoders::ImpureMethodCallEnc::emit_outputs(&mut program);
-    crate::encoders::PurifiedMethodCallEnc::emit_outputs(&mut program);
 
-    program.header("user functions");
-    crate::encoders::FunctionCallEnc::emit_outputs(&mut program);
+    if purified {
+        program.header("user methods");
+        crate::encoders::MethodCallEnc::<Purified>::emit_outputs(&mut program);
+        program.header("user functions");
+        crate::encoders::FunctionCallEnc::<Purified>::emit_outputs(&mut program);
+    } else {
+        program.header("user methods");
+        crate::encoders::MethodCallEnc::<Impure>::emit_outputs(&mut program);
+        program.header("user functions");
+        crate::encoders::FunctionCallEnc::<Impure>::emit_outputs(&mut program);
+    }
 
     program.header("MIR builtins");
     crate::encoders::MirBuiltinEnc::emit_outputs(&mut program);
 
-    // program.header("pure generic casts");
-    // GArgsCastEnc::<Pure>::emit_outputs(&mut program);
+    if purified {
+        program.header("purified magic wands");
+        ReconstructorEnc::emit_outputs(&mut program);
 
-    // program.header("impure generic casts");
-    // GArgsCastEnc::<Impure>::emit_outputs(&mut program);
+        program.header("purified generic casts");
+        GArgsCastEnc::<Purified>::emit_outputs(&mut program);
 
-    program.header("purified magic wands");
-    ReconstructorEnc::emit_outputs(&mut program);
+        program.header("snapshots");
+        crate::encoders::TyUsePurifiedEnc::emit_outputs(&mut program);
+    } else {
+        program.header("pure generic casts");
+        GArgsCastEnc::<Pure>::emit_outputs(&mut program);
 
-    program.header("purified generic casts");
-    GArgsCastEnc::<Purified>::emit_outputs(&mut program);
+        program.header("impure generic casts");
+        GArgsCastEnc::<Impure>::emit_outputs(&mut program);
 
-    program.header("snapshots");
-    // crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
-    crate::encoders::TyUsePurifiedEnc::emit_outputs(&mut program);
+        program.header("predicates");
+        crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
+
+        program.header("snapshots");
+        crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
+    }
     BitVecEnc::emit_outputs(&mut program);
-
-    // program.header("predicates");
-    // crate::encoders::TyUseImpureEnc::emit_outputs(&mut program);
 
     program.header("type constructors");
     TyConstructorEnc::emit_outputs(&mut program);
