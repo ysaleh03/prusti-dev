@@ -808,6 +808,13 @@ impl<'tcx> VirCtxt<'tcx> {
         })
     }
 
+    pub fn mk_inhale_stmt<'vir, Curr, Next>(
+        &'vir self,
+        expr: ExprGenBool<'vir, Curr, Next>,
+    ) -> StmtGen<'vir, Curr, Next> {
+        self.alloc(StmtGenData::new(self.alloc(StmtKindGenData::Inhale(expr))))
+    }
+
     pub fn mk_exhale_stmt<'vir, Curr, Next>(
         &'vir self,
         expr: ExprGenBool<'vir, Curr, Next>,
