@@ -1640,7 +1640,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 if is_pure {
                     let pure_func = self
                         .deps
-                        .require_dep::<FunctionCallEnc>(CallTaskDescription::new(
+                        .require_dep::<FunctionCallEnc<Purified>>(CallTaskDescription::new(
                             self.def_id,
                             caller_substs,
                             func_def_id,
@@ -1661,7 +1661,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                     vir::with_vcx(|vcx| {
                         vcx.with_span(terminator.source_info.span, |vcx| {
                             let Ok(func_out) =
-                                self.deps.require_dep::<encoders::PurifiedMethodCallEnc>(
+                                self.deps.require_dep::<encoders::MethodCallEnc<Purified>>(
                                     CallTaskDescription::new(
                                         self.def_id,
                                         caller_substs,

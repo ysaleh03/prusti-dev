@@ -23,12 +23,12 @@ use crate::{
 };
 
 // Method wrapper
-
-pub struct ImpureMethodCallEnc;
-pub struct PurifiedMethodCallEnc;
+pub struct MethodCallEnc<P: NotPure> {
+    _phantom_data: PhantomData<P>,
+}
 
 #[derive(Debug, Clone)]
-pub struct MethodCallEncOutput<'vir, P: PurityCasters> {
+pub struct MethodCallEncOutput<'vir, P: NotPure + PurityCasters> {
     method: MethodEncOutputRef<'vir, P>,
     ty_args: GArgsTy<'vir>,
     inputs: Vec<GArgCaster<'vir, P>>,
@@ -63,8 +63,8 @@ impl<'vir> MethodCallEncOutput<'vir, Impure> {
     }
 }
 
-impl TaskEncoder for ImpureMethodCallEnc {
-    task_encoder::encoder_cache!(ImpureMethodCallEnc);
+impl TaskEncoder for MethodCallEnc<Impure> {
+    task_encoder::encoder_cache!(MethodCallEnc<Impure>);
     type TaskDescription<'tcx> = CallTaskDescription<'tcx>;
     type OutputFullDependency<'vir> = MethodCallEncOutput<'vir, Impure>;
 
@@ -133,8 +133,8 @@ impl<'vir> MethodCallEncOutput<'vir, Purified> {
     }
 }
 
-impl TaskEncoder for PurifiedMethodCallEnc {
-    task_encoder::encoder_cache!(PurifiedMethodCallEnc);
+impl TaskEncoder for MethodCallEnc<Purified> {
+    task_encoder::encoder_cache!(MethodCallEnc<Purified>);
     type TaskDescription<'tcx> = CallTaskDescription<'tcx>;
     type OutputFullDependency<'vir> = MethodCallEncOutput<'vir, Purified>;
 

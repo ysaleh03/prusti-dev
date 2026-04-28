@@ -37,7 +37,7 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, CompType, LocalDeclData};
 
 use crate::encoders::{
-    self, FunctionCallEnc, Pure, TyUseImpureEnc, WandEnc, WandEncTask,
+    self, FunctionCallEnc, Impure, Pure, TyUseImpureEnc, WandEnc, WandEncTask,
     mir_fn::{CallTaskDescription, RustSignature},
     mir_shared::{EncodedCast, ExprResult, PureRvalueEnc},
     ty::{
@@ -1473,7 +1473,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                 if is_pure {
                     let pure_func = self
                         .deps
-                        .require_dep::<FunctionCallEnc>(CallTaskDescription::new(
+                        .require_dep::<FunctionCallEnc<Impure>>(CallTaskDescription::new(
                             self.def_id,
                             caller_substs,
                             func_def_id,
@@ -1501,7 +1501,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                     vir::with_vcx(|vcx| {
                         vcx.with_span(terminator.source_info.span, |vcx| {
                             let Ok(func_out) =
-                                self.deps.require_dep::<encoders::ImpureMethodCallEnc>(
+                                self.deps.require_dep::<encoders::MethodCallEnc<Impure>>(
                                     CallTaskDescription::new(
                                         self.def_id,
                                         caller_substs,

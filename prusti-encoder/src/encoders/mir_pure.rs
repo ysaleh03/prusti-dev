@@ -1013,38 +1013,37 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc, Impure> {
             } => {
                 let func_ty = func.ty(self.body, self.vcx.tcx());
                 let (def_id, arg_tys) = RustSignature::get_def_id_and_caller_substs(func_ty);
-                let expr = {
-                    // A fn call in pure can only be one of two kinds: a
-                    // call to another pure function, or a call to a prusti
-                    // builtin function.
-                    let is_pure = crate::encoders::with_proc_spec(
-                        SpecQuery::GetProcKind(
-                            def_id,
-                            ty::List::identity_for_item(self.vcx.tcx(), def_id),
-                        ),
-                        |def_spec| def_spec.kind.is_pure().unwrap_or_default(),
-                    )
-                    .unwrap_or_default();
-                    if is_pure {
-                        let pure_func = self
-                            .deps
-                            .require_dep::<FunctionCallEnc>(CallTaskDescription::new(
-                                self.context,
-                                arg_tys,
+                let expr =
+                    {
+                        // A fn call in pure can only be one of two kinds: a
+                        // call to another pure function, or a call to a prusti
+                        // builtin function.
+                        let is_pure = crate::encoders::with_proc_spec(
+                            SpecQuery::GetProcKind(
                                 def_id,
-                            ))
-                            .unwrap();
-                        let snap_args = args
-                            .iter()
-                            .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        pure_func.call(snap_args)
-                    } else {
-                        let sig = self.vcx.tcx().fn_sig(def_id);
-                        let sig = sig.instantiate_identity();
-                        self.encode_prusti_builtin(def_id, sig, arg_tys, args, &new_curr_ver)?
-                    }
-                };
+                                ty::List::identity_for_item(self.vcx.tcx(), def_id),
+                            ),
+                            |def_spec| def_spec.kind.is_pure().unwrap_or_default(),
+                        )
+                        .unwrap_or_default();
+                        if is_pure {
+                            let pure_func =
+                                self.deps
+                                    .require_dep::<FunctionCallEnc<Impure>>(
+                                        CallTaskDescription::new(self.context, arg_tys, def_id),
+                                    )
+                                    .unwrap();
+                            let snap_args = args
+                                .iter()
+                                .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            pure_func.call(snap_args)
+                        } else {
+                            let sig = self.vcx.tcx().fn_sig(def_id);
+                            let sig = sig.instantiate_identity();
+                            self.encode_prusti_builtin(def_id, sig, arg_tys, args, &new_curr_ver)?
+                        }
+                    };
 
                 let mut term_update = Update::new();
                 assert!(destination.projection.is_empty());
@@ -1997,38 +1996,37 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc, Purified> {
             } => {
                 let func_ty = func.ty(self.body, self.vcx.tcx());
                 let (def_id, arg_tys) = RustSignature::get_def_id_and_caller_substs(func_ty);
-                let expr = {
-                    // A fn call in pure can only be one of two kinds: a
-                    // call to another pure function, or a call to a prusti
-                    // builtin function.
-                    let is_pure = crate::encoders::with_proc_spec(
-                        SpecQuery::GetProcKind(
-                            def_id,
-                            ty::List::identity_for_item(self.vcx.tcx(), def_id),
-                        ),
-                        |def_spec| def_spec.kind.is_pure().unwrap_or_default(),
-                    )
-                    .unwrap_or_default();
-                    if is_pure {
-                        let pure_func = self
-                            .deps
-                            .require_dep::<FunctionCallEnc>(CallTaskDescription::new(
-                                self.context,
-                                arg_tys,
+                let expr =
+                    {
+                        // A fn call in pure can only be one of two kinds: a
+                        // call to another pure function, or a call to a prusti
+                        // builtin function.
+                        let is_pure = crate::encoders::with_proc_spec(
+                            SpecQuery::GetProcKind(
                                 def_id,
-                            ))
-                            .unwrap();
-                        let snap_args = args
-                            .iter()
-                            .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        pure_func.call(snap_args)
-                    } else {
-                        let sig = self.vcx.tcx().fn_sig(def_id);
-                        let sig = sig.instantiate_identity();
-                        self.encode_prusti_builtin(def_id, sig, arg_tys, args, &new_curr_ver)?
-                    }
-                };
+                                ty::List::identity_for_item(self.vcx.tcx(), def_id),
+                            ),
+                            |def_spec| def_spec.kind.is_pure().unwrap_or_default(),
+                        )
+                        .unwrap_or_default();
+                        if is_pure {
+                            let pure_func =
+                                self.deps
+                                    .require_dep::<FunctionCallEnc<Purified>>(
+                                        CallTaskDescription::new(self.context, arg_tys, def_id),
+                                    )
+                                    .unwrap();
+                            let snap_args = args
+                                .iter()
+                                .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            pure_func.call(snap_args)
+                        } else {
+                            let sig = self.vcx.tcx().fn_sig(def_id);
+                            let sig = sig.instantiate_identity();
+                            self.encode_prusti_builtin(def_id, sig, arg_tys, args, &new_curr_ver)?
+                        }
+                    };
 
                 let mut term_update = Update::new();
                 assert!(destination.projection.is_empty());
