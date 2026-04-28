@@ -481,10 +481,6 @@ impl TaskEncoder for MethodEnc<Purified> {
             let mut pres = Vec::new();
             let mut posts = Vec::new();
             let spec = deps.require_dep_spanned::<MirSpecEnc<Purified>>((def_id, false), span)?;
-            // let impure_spec =
-            //     deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, false), span)?;
-            // println!("def_id: {def_id:?}");
-            // println!("impure_pledge: {:#?}", impure_spec.pledges);
             let function_data = FunctionData::new(def_id, gparams.rust_params(), None);
             let wands = deps.require_dep_spanned::<PurifiedWandEnc>(
                 PurifiedWandEncTask {
@@ -501,6 +497,7 @@ impl TaskEncoder for MethodEnc<Purified> {
             ));
 
             let mut args = Vec::with_capacity(local_defs.arg_count);
+            let mut local_to_return = FxHashMap::default();
             let mut return_to_remote = FxHashMap::default();
 
             fn contains_mut_ref<'vir>(ty: ty::Ty<'vir>, tcx: ty::TyCtxt<'vir>) -> bool {
@@ -533,7 +530,9 @@ impl TaskEncoder for MethodEnc<Purified> {
                     let ret = vcx.mk_local_decl(name_r, decl.ty);
                     posts.push(generics.ty_assertion(deps, ret.expr(vcx), decomposition));
                     rets.push(ret);
-                    return_to_remote.insert(idx.into(), decl.expr(vcx));
+                    let local = mir::Local::from(idx + 1);
+                    local_to_return.insert(local, ret);
+                    return_to_remote.insert(local, decl.expr(vcx));
                 };
             }
 
@@ -542,128 +541,169 @@ impl TaskEncoder for MethodEnc<Purified> {
             let local_def_id = def_id
                 .as_local()
                 .filter(|_| !trusted && is_function_with_body(vcx.tcx(), def_id));
-            let blocks =
-                if let Some(local_def_id) = local_def_id {
-                    let body_with_facts =
-                        vcx.body_mut().get_impure_fn_body_with_facts(local_def_id);
-                    let body = &body_with_facts.body;
-                    let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Purified>>(
-                        MirLocalDefEncTask::Local {
-                            def_id: local_def_id.to_def_id(),
-                            all_locals: true,
-                        },
-                        span,
-                    )?;
+            let blocks = if let Some(local_def_id) = local_def_id {
+                let body_with_facts = vcx.body_mut().get_impure_fn_body_with_facts(local_def_id);
+                let body = &body_with_facts.body;
+                let local_defs = deps.require_dep_spanned::<MirLocalDefEnc<Purified>>(
+                    MirLocalDefEncTask::Local {
+                        def_id: local_def_id.to_def_id(),
+                        all_locals: true,
+                    },
+                    span,
+                )?;
 
-                    let bc = NllBorrowCheckerImpl::new(vcx.tcx(), &body_with_facts);
-                    let pcg_ctxt = pcg::PcgCtxt::new(&body_with_facts.body, vcx.tcx(), &bc);
-                    let fpcs_analysis = pcg::run_pcg(&pcg_ctxt);
-                    pcg_ctxt.update_debug_visualization_metadata();
+                let bc = NllBorrowCheckerImpl::new(vcx.tcx(), &body_with_facts);
+                let pcg_ctxt = pcg::PcgCtxt::new(&body_with_facts.body, vcx.tcx(), &bc);
+                let fpcs_analysis = pcg::run_pcg(&pcg_ctxt);
+                pcg_ctxt.update_debug_visualization_metadata();
 
-                    let block_count = body.basic_blocks.len();
+                let block_count = body.basic_blocks.len();
 
-                    let mut encoded_blocks = Vec::with_capacity(
-                        // extra blocks: Start, End
-                        2 + block_count,
-                    );
+                let mut encoded_blocks = Vec::with_capacity(
+                    // extra blocks: Start, End
+                    2 + block_count,
+                );
 
-                    let mut start_stmts = Vec::new();
-                    let mut end_stmts = Vec::new();
+                let mut start_stmts = Vec::new();
+                let mut end_stmts = Vec::new();
 
-                    for local in (1..arg_count).map(mir::Local::from) {
-                        let name_s = local_defs[local].local_snap.name;
-                        let type_s = local_defs[local].local_snap.ty;
-                        start_stmts.push(vcx.mk_local_decl_stmt(
-                            vir::vir_local_decl! { vcx; [name_s] : [type_s] },
-                            Some(args[local.as_usize() - 1].expr(vcx)),
-                        ))
-                    }
-                    for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
-                        let name_s = local_defs[local].local_snap.name;
-                        let type_s = local_defs[local].local_snap.ty;
-                        start_stmts.push(vcx.mk_local_decl_stmt(
-                            vir::vir_local_decl! { vcx; [name_s] : [type_s] },
-                            None,
-                        ))
-                    }
-                    // This will be overwritten later.
-                    encoded_blocks.push(vcx.mk_cfg_block(
-                        &vir::CfgBlockLabelData::Start,
-                        &[],
-                        &[],
-                        vcx.mk_goto_stmt(&vir::CfgBlockLabelData::BasicBlock(0)),
-                    ));
+                for local in (1..arg_count).map(mir::Local::from) {
+                    let name_s = local_defs[local].local_snap.name;
+                    let type_s = local_defs[local].local_snap.ty;
+                    start_stmts.push(vcx.mk_local_decl_stmt(
+                        vir::vir_local_decl! { vcx; [name_s] : [type_s] },
+                        Some(args[local.as_usize() - 1].expr(vcx)),
+                    ))
+                }
+                for local in (arg_count..body.local_decls.len()).map(mir::Local::from) {
+                    let name_s = local_defs[local].local_snap.name;
+                    let type_s = local_defs[local].local_snap.ty;
+                    start_stmts.push(vcx.mk_local_decl_stmt(
+                        vir::vir_local_decl! { vcx; [name_s] : [type_s] },
+                        None,
+                    ))
+                }
+                // This will be overwritten later.
+                encoded_blocks.push(vcx.mk_cfg_block(
+                    &vir::CfgBlockLabelData::Start,
+                    &[],
+                    &[],
+                    vcx.mk_goto_stmt(&vir::CfgBlockLabelData::BasicBlock(0)),
+                ));
 
-                    deps.check_cycle()?;
-                    let mut visitor = PurifiedEncVisitor {
-                        vcx,
-                        deps,
-                        def_id,
-                        local_decls: &body.local_decls,
-                        fpcs_analysis,
-                        local_defs,
-                        body,
+                deps.check_cycle()?;
+                let mut visitor = PurifiedEncVisitor {
+                    vcx,
+                    deps,
+                    def_id,
+                    local_decls: &body.local_decls,
+                    fpcs_analysis,
+                    local_defs,
+                    body,
 
-                        wands,
+                    wands,
 
-                        declared_remotes: Default::default(),
-                        remote_to_local_decl: Default::default(),
-                        return_to_remote,
+                    declared_vars: Default::default(),
+                    place_to_local_decl: Default::default(),
 
-                        declared_vars: Default::default(),
-                        place_to_local_decl: Default::default(),
+                    return_to_remote,
+                    local_to_return,
+                    declared_remotes: Default::default(),
+                    remote_to_local_decl: Default::default(),
 
-                        tmp_ctr: 0,
-                        label_ctr: 0,
-                        call_labels: Default::default(),
-                        from_to_vars: Default::default(),
+                    pf_declared_vars: Default::default(),
+                    pf_place_to_local_decl: Default::default(),
+                    pf_declared_remotes: Default::default(),
+                    pf_remote_to_local_decl: Default::default(),
 
-                        current_block_label: None,
-                        current_fpcs: None,
+                    proof_mode: false,
+                    proof_blocks: Vec::new(),
+                    proof_bools: Vec::new(),
 
-                        current_stmts: None,
-                        current_terminator: None,
-                        encoded_blocks,
-                    };
-                    visitor.visit_body(body);
-                    start_stmts.extend(visitor.declared_vars.iter().map(|(name, ty)| {
-                        vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
-                    }));
-                    start_stmts.extend(visitor.declared_remotes.iter().map(|(name, ty)| {
-                        vcx.mk_local_decl_stmt(vcx.mk_local_decl(name, ty), None)
-                    }));
-                    start_stmts.extend(
-                        visitor
-                            .from_to_vars
-                            .decls()
-                            .map(|v| vcx.mk_local_decl_stmt(v, Some(vcx.mk_bool::<false>()))),
-                    );
-                    end_stmts.extend(visitor.return_to_remote.iter().map(|(local, rhs)| {
-                        let lhs = rets[local.as_usize()];
-                        vcx.mk_pure_assign_stmt(vcx.mk_local_decl(lhs.name, lhs.ty).expr(vcx), rhs)
-                    }));
-                    // end_stmts.extend(exhales.iter());
+                    proof_ctr: 0,
+                    tmp_ctr: 0,
+                    label_ctr: 0,
+                    call_labels: Default::default(),
+                    from_to_vars: Default::default(),
 
-                    visitor.encoded_blocks[0] = vcx.mk_cfg_block(
-                        &vir::CfgBlockLabelData::Start,
-                        &[],
-                        vcx.alloc_slice(&start_stmts),
-                        vcx.mk_goto_stmt(&vir::CfgBlockLabelData::BasicBlock(0)),
-                    );
+                    current_block_label: None,
+                    current_fpcs: None,
 
-                    visitor.encoded_blocks.push(vcx.mk_cfg_block(
-                        vcx.alloc(vir::CfgBlockLabelData::End),
-                        &[],
-                        vcx.alloc_slice(&end_stmts),
-                        vcx.alloc(vir::TerminatorStmtData::Exit),
-                    ));
-
-                    visitor.deps.check_cycle()?;
-
-                    Some(visitor.encoded_blocks)
-                } else {
-                    None
+                    current_stmts: None,
+                    current_terminator: None,
+                    encoded_blocks,
                 };
+                visitor.visit_body(body);
+                start_stmts.extend(
+                    visitor
+                        .declared_vars
+                        .iter()
+                        .map(|local| vcx.mk_local_decl_stmt(local, None)),
+                );
+                start_stmts.extend(
+                    visitor
+                        .declared_remotes
+                        .iter()
+                        .map(|local| vcx.mk_local_decl_stmt(local, None)),
+                );
+
+                start_stmts.extend(
+                    visitor
+                        .pf_declared_vars
+                        .iter()
+                        .map(|local| vcx.mk_local_decl_stmt(local, None)),
+                );
+                start_stmts.extend(
+                    visitor
+                        .pf_declared_remotes
+                        .iter()
+                        .map(|local| vcx.mk_local_decl_stmt(local, None)),
+                );
+
+                start_stmts.extend(
+                    visitor
+                        .from_to_vars
+                        .decls()
+                        .map(|v| vcx.mk_local_decl_stmt(v, Some(vcx.mk_bool::<false>()))),
+                );
+                start_stmts.extend(
+                    visitor
+                        .proof_bools
+                        .iter()
+                        .map(|local| vcx.mk_local_decl_stmt(local, None)),
+                );
+
+                end_stmts.extend(visitor.return_to_remote.iter().map(|(local, rhs)| {
+                    let lhs = visitor.local_to_return.get(local).unwrap();
+                    vcx.mk_pure_assign_stmt(lhs.expr(vcx), rhs)
+                }));
+                end_stmts.extend(
+                    visitor
+                        .proof_blocks
+                        .iter()
+                        .map(|proof_script| proof_script.mk_proof_block()),
+                );
+
+                visitor.encoded_blocks[0] = vcx.mk_cfg_block(
+                    &vir::CfgBlockLabelData::Start,
+                    &[],
+                    vcx.alloc_slice(&start_stmts),
+                    vcx.mk_goto_stmt(&vir::CfgBlockLabelData::BasicBlock(0)),
+                );
+
+                visitor.encoded_blocks.push(vcx.mk_cfg_block(
+                    vcx.alloc(vir::CfgBlockLabelData::End),
+                    &[],
+                    vcx.alloc_slice(&end_stmts),
+                    vcx.alloc(vir::TerminatorStmtData::Exit),
+                ));
+
+                visitor.deps.check_cycle()?;
+
+                Some(visitor.encoded_blocks)
+            } else {
+                None
+            };
 
             // Add functional specification as the last pre- and postconditions.
             pres.extend(spec.pres);

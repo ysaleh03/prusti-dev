@@ -333,7 +333,7 @@ impl TaskEncoder for MirSpecEnc<Purified> {
             let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
             let all_args: Vec<vir::ExprSnap<'vir>> = if pure {
-                let result_ty = local_defs.snap_ty_return();
+                let result_ty = local_defs[mir::RETURN_PLACE].local_snap.ty();
                 local_iter
                     .map(|local| local_defs[local].local_snap_ex)
                     .chain([vcx.mk_result(result_ty)])
@@ -463,11 +463,19 @@ impl TaskEncoder for MirSpecEnc<Purified> {
                     })
                 })
                 .collect::<Result<Vec<vir::ExprBool<'_>>, _>>()?;
-            let pre_pledge_args = vcx
-                .alloc_slice(&[pre_args, &[vcx.mk_local_ex(local_defs.ret().local_snap)]].concat());
-            let post_pledge_args = vcx.alloc_slice(
-                &[post_args, &[vcx.mk_local_ex(local_defs.ret().local_snap)]].concat(),
+
+            let mk_pf_expr = |decl: vir::LocalDeclSnap<'vir>| {
+                let pf_name = vir::vir_format!(vcx, "_pf{}", decl.name);
+                vcx.mk_local_decl(pf_name, decl.ty()).expr(vcx)
+            };
+
+            let pledge_args = vcx.alloc_slice(
+                &(1..=local_defs.arg_count)
+                    .map(|i| local_defs[mir::Local::from(i)].local_snap_ex)
+                    .chain([mk_pf_expr(local_defs[mir::RETURN_PLACE].local_snap)])
+                    .collect::<Vec<_>>(),
             );
+
             let pledges = specs
                 .pledges
                 .iter()
@@ -513,17 +521,14 @@ impl TaskEncoder for MirSpecEnc<Purified> {
                             lhs_expr.purified_reify(
                                 vcx,
                                 (
-                                    (lhs_def_id.unwrap(), pre_pledge_args),
-                                    (lhs_def_id.unwrap(), post_pledge_args),
+                                    (lhs_def_id.unwrap(), pledge_args),
+                                    (lhs_def_id.unwrap(), pledge_args),
                                 ),
                             )
                         });
                         let rhs_expr = rhs_expr.purified_reify(
                             vcx,
-                            (
-                                (*rhs_def_id, pre_pledge_args),
-                                (*rhs_def_id, post_pledge_args),
-                            ),
+                            ((*rhs_def_id, pledge_args), (*rhs_def_id, pledge_args)),
                         );
                         let rhs_span = vcx.tcx().def_span(rhs_def_id);
                         EncodedPledge::new(

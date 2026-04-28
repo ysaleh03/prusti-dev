@@ -34,7 +34,10 @@ use prusti_rustc_interface::{
 };
 use prusti_utils::config;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::{CastType, CompType, ExprSnap, LocalDeclData, OldLabel, macros::ExprQuote};
+use vir::{
+    CastType, CompType, ExprSnap, LocalDeclData, LocalDeclSnap, OldLabel, macros::ExprQuote,
+    with_vcx,
+};
 
 use crate::encoders::{
     self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask,
@@ -92,6 +95,24 @@ impl<'vir> FromToVars<'vir> {
             .0
             .entry((from, to))
             .or_insert_with(|| FromToVar::new(vcx, from, to))
+    }
+}
+
+pub struct ProofScript<'vir> {
+    proof_bool: vir::ExprBool<'vir>,
+    proof_stmts: Vec<vir::Stmt<'vir>>,
+}
+
+impl<'vir> ProofScript<'vir> {
+    pub(crate) fn new(proof_bool: vir::ExprBool<'vir>, proof_stmts: Vec<vir::Stmt<'vir>>) -> Self {
+        ProofScript {
+            proof_bool,
+            proof_stmts,
+        }
+    }
+
+    pub(crate) fn mk_proof_block(&self) -> vir::Stmt<'vir> {
+        with_vcx(|vcx| vcx.mk_if_stmt(self.proof_bool, vcx.alloc_slice(&self.proof_stmts), &[]))
     }
 }
 
@@ -166,14 +187,24 @@ where
 
     pub wands: PurifiedWandEncOutput<'vir>,
 
-    // TODO: in theory only need return_to_remote here for reconstructing
-    // mutrefs at the end of the method..
-    pub return_to_remote: FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
-    pub declared_remotes: FxHashSet<(&'vir str, vir::TypeSnap<'vir>)>, // is this even necessary??
-    pub remote_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
-    pub declared_vars: FxHashSet<(&'vir str, vir::TypeSnap<'vir>)>,
+    pub declared_vars: FxHashSet<vir::LocalDeclSnap<'vir>>,
     pub place_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
 
+    pub return_to_remote: FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+    pub local_to_return: FxHashMap<mir::Local, vir::LocalDeclSnap<'vir>>,
+    pub declared_remotes: FxHashSet<vir::LocalDeclSnap<'vir>>,
+    pub remote_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
+
+    pub pf_declared_vars: FxHashSet<vir::LocalDeclSnap<'vir>>,
+    pub pf_place_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
+    pub pf_declared_remotes: FxHashSet<vir::LocalDeclSnap<'vir>>,
+    pub pf_remote_to_local_decl: FxHashMap<Place<'vir>, vir::LocalDeclSnap<'vir>>,
+
+    pub proof_mode: bool,
+    pub proof_blocks: Vec<ProofScript<'vir>>,
+    pub proof_bools: Vec<vir::LocalDeclBool<'vir>>,
+
+    pub proof_ctr: usize,
     pub tmp_ctr: usize,
     pub label_ctr: usize,
     pub call_labels: FxHashMap<mir::BasicBlock, (&'vir str, &'vir str)>,
@@ -245,6 +276,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         for stmt in stmts {
             self.stmt(stmt);
         }
+    }
+
+    pub(crate) fn new_proof_bool(&mut self) -> vir::ExprBool<'vir> {
+        let name = vir::vir_format!(self.vcx, "_proof_bool_{}", self.proof_ctr);
+        self.proof_ctr += 1;
+        let decl = self.vcx.mk_local_decl(name, vir::TYPE_BOOL);
+        self.proof_bools.push(decl);
+        self.vcx.mk_local_ex(decl)
     }
 
     fn comment(&mut self, msg: &'vir str) {
@@ -472,6 +511,17 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 let remote_place = borrow.blocked_place().place();
                 let remote_decl = if let Some(decl) = self.remote_to_local_decl.get(&remote_place) {
                     *decl
+                } else if self.proof_mode {
+                    let remote_name = vir::vir_format_identifier!(
+                        self.vcx,
+                        "_pf_{}s_remote",
+                        remote_place.local.as_usize()
+                    )
+                    .to_str();
+                    let snap = self.vcx.mk_local_decl(remote_name, deref_enc.snap.ty());
+                    self.pf_declared_remotes.insert(snap);
+                    self.pf_remote_to_local_decl.insert(remote_place, snap);
+                    snap
                 } else {
                     let remote_name = vir::vir_format_identifier!(
                         self.vcx,
@@ -479,18 +529,34 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                         remote_place.local.as_usize()
                     )
                     .to_str();
-                    let local = self.vcx.mk_local_decl(remote_name, deref_enc.snap.ty());
-
-                    self.declared_remotes
-                        .insert((remote_name, deref_enc.snap.ty()));
-                    self.remote_to_local_decl.insert(remote_place, local);
-
-                    local
+                    let snap = self.vcx.mk_local_decl(remote_name, deref_enc.snap.ty());
+                    self.declared_remotes.insert(snap);
+                    self.remote_to_local_decl.insert(remote_place, snap);
+                    snap
                 };
 
                 let lhs = remote_decl.expr(self.vcx);
                 let rhs = deref_enc.snap;
                 self.stmt(self.vcx.mk_pure_assign_stmt(lhs, rhs));
+
+                if self.proof_mode {
+                    self.pf_place_to_local_decl
+                        .insert(remote_place, remote_decl);
+                }
+
+                let assigned_ref = borrow.assigned_ref();
+                let assigned_local = assigned_ref.place().local;
+                let cons = self
+                    .ty_use_purified(assigned_ref.ty(self.pcg_ctxt()).ty)
+                    .expect_mutref()
+                    .value_to_snap(lhs);
+
+                if !self.proof_mode {
+                    self.local_to_return
+                        .insert(assigned_local, self.local_defs[assigned_local].local_snap);
+                    self.return_to_remote
+                        .insert(assigned_local, cons.upcast_ty());
+                }
             }
             BorrowPcgEdgeKind::Borrow(borrow) if !borrow.is_mut() && edge_action.is_remove() => {
                 let blocked_place = borrow.blocked_place().place();
@@ -537,8 +603,8 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                             .collect::<Result<Vec<_>, EncodeFullError<'vir, E>>>()?;
                         let (label_pre, label_post) = self.call_labels[&call.location().block];
                         wand_enc_output.apply_reconstructors(
-                            &wand_args,
-                            self.vcx.alloc_slice(&vec![dest_snap.as_dyn()]),
+                            self.vcx.alloc_slice(&vec![dest_snap]),
+                            self.vcx.alloc_slice(&wand_args.as_dyn()),
                             label_pre,
                             label_post,
                             self,
@@ -697,6 +763,16 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         }
     }
 
+    fn update_vars(&mut self, target: Place<'vir>, decl: LocalDeclSnap<'vir>) {
+        if self.proof_mode {
+            self.pf_declared_vars.insert(decl);
+            self.pf_place_to_local_decl.insert(target, decl);
+        } else {
+            self.declared_vars.insert(decl);
+            self.place_to_local_decl.insert(target, decl);
+        }
+    }
+
     fn unpack(
         &mut self,
         place: Place<'vir>,
@@ -708,10 +784,16 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         let place_ty = place_enc.ty;
         let data = self.ty_use_purified(place_ty.ty);
 
-        let self_decl = self.place_to_local_decl.get(&place).map_or_else(
-            || self.local_defs.locals[place.local].local_snap,
-            |local_data| self.vcx.mk_local_decl(local_data.name, local_data.ty),
-        );
+        let self_decl = if self.proof_mode
+            && let Some(decl) = self.pf_place_to_local_decl.get(&place)
+        {
+            decl
+        } else {
+            self.place_to_local_decl
+                .get(&place)
+                .copied()
+                .unwrap_or_else(|| self.local_defs.locals[place.local].local_snap)
+        };
         let self_snap = self.vcx.mk_local_ex(self_decl);
 
         match &data.specifics {
@@ -730,7 +812,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     .to_str();
                     let lhs = self.vcx.mk_local_decl(variant_name, self_decl.ty);
                     self.stmt(self.vcx.mk_pure_assign_stmt(lhs.expr(self.vcx), self_snap));
-                    self.declared_vars.insert((variant_name, self_decl.ty));
+                    self.declared_vars.insert(lhs);
                     self.place_to_local_decl.insert(target_places[0], lhs);
                 }
                 None if let Some(vid) = place_ty.variant_index => {
@@ -746,8 +828,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                         let rhs = field.field_snap(self_snap.downcast_ty());
                         let lhs = self.vcx.mk_local_decl(field_name, rhs.ty());
                         self.stmt(self.vcx.mk_pure_assign_stmt(lhs.expr(self.vcx), rhs));
-                        self.declared_vars.insert((field_name, rhs.ty()));
-                        self.place_to_local_decl.insert(target_places[idx], lhs);
+                        self.update_vars(target_places[idx], lhs);
                     }
                 }
                 _ => return,
@@ -760,8 +841,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     let rhs = field.field_snap(self_snap.downcast_ty());
                     let lhs = self.vcx.mk_local_decl(field_name, rhs.ty());
                     self.stmt(self.vcx.mk_pure_assign_stmt(lhs.expr(self.vcx), rhs));
-                    self.declared_vars.insert((field_name, rhs.ty()));
-                    self.place_to_local_decl.insert(target_places[idx], lhs);
+                    self.update_vars(target_places[idx], lhs);
                 }
             }
             TySpecifics::ImmRef(data) => {
@@ -770,8 +850,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 let rhs = data.value_access(self_snap.downcast_ty());
                 let lhs = self.vcx.mk_local_decl(value_name, rhs.ty());
                 self.stmt(self.vcx.mk_pure_assign_stmt(lhs.expr(self.vcx), rhs));
-                self.declared_vars.insert((value_name, rhs.ty()));
-                self.place_to_local_decl.insert(target_places[0], lhs);
+                self.update_vars(target_places[0], lhs);
             }
             TySpecifics::MutRef(data) => {
                 let value_name =
@@ -779,9 +858,21 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 let rhs = data.value_access(self_snap.downcast_ty());
                 let lhs = self.vcx.mk_local_decl(value_name, rhs.ty());
                 self.stmt(self.vcx.mk_pure_assign_stmt(lhs.expr(self.vcx), rhs));
-                self.declared_vars.insert((value_name, rhs.ty()));
-                self.place_to_local_decl.insert(target_places[0], lhs);
+                self.update_vars(target_places[0], lhs);
             }
+        }
+    }
+
+    fn get_target_place_snap(&self, target: Place<'vir>) -> vir::ExprSnap<'vir> {
+        if self.proof_mode
+            && let Some(decl) = self.pf_place_to_local_decl.get(&target)
+        {
+            decl.expr(self.vcx)
+        } else {
+            self.place_to_local_decl
+                .get(&target)
+                .unwrap()
+                .expr(self.vcx)
         }
     }
 
@@ -796,10 +887,16 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         let place_ty = place_enc.ty;
         let data = self.ty_use_purified(place_ty.ty);
 
-        let self_decl = self.place_to_local_decl.get(&place).map_or_else(
-            || self.local_defs.locals[place.local].local_snap,
-            |local_data| self.vcx.mk_local_decl(local_data.name, local_data.ty),
-        );
+        let self_decl = if self.proof_mode
+            && let Some(decl) = self.pf_place_to_local_decl.get(&place)
+        {
+            decl
+        } else {
+            self.place_to_local_decl
+                .get(&place)
+                .copied()
+                .unwrap_or_else(|| self.local_defs.locals[place.local].local_snap)
+        };
         let self_snap = self.vcx.mk_local_ex(self_decl);
 
         match &data.specifics {
@@ -821,12 +918,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                         .fields
                         .iter()
                         .enumerate()
-                        .map(|(idx, _)| {
-                            self.place_to_local_decl
-                                .get(&target_places[idx])
-                                .unwrap()
-                                .expr(self.vcx)
-                        })
+                        .map(|(idx, _)| self.get_target_place_snap(target_places[idx]))
                         .collect::<Vec<_>>();
                     let cons = data.field_snaps_to_snap(tyvals, snaps);
                     self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
@@ -839,31 +931,18 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     .fields
                     .iter()
                     .enumerate()
-                    .map(|(idx, _)| {
-                        self.place_to_local_decl
-                            .get(&target_places[idx])
-                            .unwrap()
-                            .expr(self.vcx)
-                    })
+                    .map(|(idx, _)| self.get_target_place_snap(target_places[idx]))
                     .collect::<Vec<_>>();
                 let cons = data.field_snaps_to_snap(tyvals, snaps);
                 self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
             TySpecifics::ImmRef(data) => {
-                let inner = self
-                    .place_to_local_decl
-                    .get(&target_places[0])
-                    .unwrap()
-                    .expr(self.vcx);
+                let inner = self.get_target_place_snap(target_places[0]);
                 let cons = data.value_to_snap(inner);
                 self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
             TySpecifics::MutRef(data) => {
-                let inner = self
-                    .place_to_local_decl
-                    .get(&target_places[0])
-                    .unwrap()
-                    .expr(self.vcx);
+                let inner = self.get_target_place_snap(target_places[0]);
                 let cons = data.value_to_snap(inner);
                 self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
@@ -931,6 +1010,14 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     }
 
     pub(crate) fn encode_place(&mut self, place: Place<'vir>) -> EncodePlaceResult<'vir> {
+        if self.proof_mode
+            && let Some(decl) = self.pf_place_to_local_decl.get(&place)
+        {
+            return EncodePlaceResult {
+                snap: decl.expr(self.vcx),
+                ty: place.ty(self.pcg_ctxt()),
+            };
+        }
         if let Some(decl) = self.place_to_local_decl.get(&place) {
             return EncodePlaceResult {
                 snap: decl.expr(self.vcx),
@@ -938,7 +1025,13 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             };
         }
         let mut place_ty = mir::PlaceTy::from_ty(self.local_decls[place.local].ty);
-        let mut result = self.local_defs[place.local].local_snap_ex;
+        let mut result = if self.proof_mode
+            && let Some(decl) = self.pf_place_to_local_decl.get(&place)
+        {
+            decl.expr(self.vcx)
+        } else {
+            self.local_defs[place.local].local_snap_ex
+        };
         for (place, elem) in place.iter_projections() {
             result = self.encode_place_element(place.into(), elem, result);
             place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
@@ -1490,10 +1583,12 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for PurifiedEncVisito
                 let borrows = current_fpcs.statements.last().unwrap().states
                     [EvalStmtPhase::PostMain]
                     .borrow_pcg();
-                let wand_proofs = self.prove_wands(borrows).unwrap();
-                self.current_fpcs = Some(current_fpcs);
-                self.stmts(wand_proofs);
+                self.proof_mode = true;
+                let scripts = self.prove_wands(borrows).unwrap();
+                self.proof_mode = false;
 
+                self.proof_blocks.extend(scripts);
+                self.current_fpcs = Some(current_fpcs);
                 self.vcx
                     .mk_goto_stmt(self.vcx.alloc(vir::CfgBlockLabelData::End))
             }

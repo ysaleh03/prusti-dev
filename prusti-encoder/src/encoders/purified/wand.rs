@@ -48,7 +48,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         for i in inputs {
             self.encode_pcg_node(&*i, &mut wand_rhs, &mut old_outer);
             if package {
-                proof_block.extend(self.create_package_script(borrows_state, *i, &mut old_outer));
+                proof_block.extend(self.create_proof_block(borrows_state, *i, &mut old_outer));
             }
         }
         let mut wand_lhs = Vec::new();
@@ -69,7 +69,7 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         }
     }
 
-    fn create_package_script(
+    fn create_proof_block(
         &mut self,
         borrows_state: &BorrowsState<'_, 'vir>,
         rhs: impl Into<PcgNode<'vir>>,
