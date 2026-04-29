@@ -1,6 +1,7 @@
 use crate::encoders::{
-    FunctionCallEnc, Impure, MirLocalDefEnc, MirLocalDefEncOutput, MirLocalDefEncTask, NotPure,
-    Pure, Purified, TyUseImpureEnc, TyUsePurifiedEnc, ViperTupleEnc,
+    ConstEnc, FunctionCallEnc, Impure, MirLocalDefEnc, MirLocalDefEncOutput, MirLocalDefEncTask,
+    NotPure, Pure, Purified, TyUseImpureEnc, TyUsePurifiedEnc, ViperTupleEnc,
+    r#const::ConstEncTask,
     mir_fn::{CallTaskDescription, RustSignature},
     mir_shared::{EncodedCast, ExprResult, PureRvalueEnc},
     ty::{
@@ -29,9 +30,7 @@ use std::{collections::HashMap, fmt, marker::PhantomData};
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, CompType, add_debug_note};
 
-pub struct MirPureEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct MirPureEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Clone, Debug)]
 pub enum MirPureEncError {
@@ -457,6 +456,22 @@ impl<'vir: 'enc, 'enc> PureRvalueEnc<'vir> for Enc<'vir, 'enc, Impure> {
         })
     }
 
+    fn encode_constant_snap(
+        &mut self,
+        constant: &mir::ConstOperand<'vir>,
+    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>> {
+        {
+            let def_id = self.def_id();
+            self.deps()
+                .require_dep::<ConstEnc<Impure>>(ConstEncTask::Mir {
+                    const_: constant.const_,
+                    encoding_depth: 0,
+                    def_id,
+                    span: constant.span,
+                })
+        }
+    }
+
     fn encode_aggregate_snap(
         &mut self,
         rvalue_ty: ty::Ty<'vir>,
@@ -582,6 +597,22 @@ impl<'vir: 'enc, 'enc> PureRvalueEnc<'vir> for Enc<'vir, 'enc, Purified> {
             preconditions,
             expr: to_vir_ty.prim_to_snap.call()(from_prim).upcast_ty(),
         })
+    }
+
+    fn encode_constant_snap(
+        &mut self,
+        constant: &mir::ConstOperand<'vir>,
+    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>> {
+        {
+            let def_id = self.def_id();
+            self.deps()
+                .require_dep::<ConstEnc<Purified>>(ConstEncTask::Mir {
+                    const_: constant.const_,
+                    encoding_depth: 0,
+                    def_id,
+                    span: constant.span,
+                })
+        }
     }
 
     fn encode_aggregate_snap(

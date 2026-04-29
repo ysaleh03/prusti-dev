@@ -69,6 +69,11 @@ where
         ctxt: &Self::EncodePlaceCtxt,
     ) -> Result<EncodedCast<'vir, Self>, EncodeFullError<'vir, Self::Encoder>>;
 
+    fn encode_constant_snap(
+        &mut self,
+        constant: &mir::ConstOperand<'vir>,
+    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>>;
+
     fn encode_binop_snap(
         &mut self,
         rvalue_ty: ty::Ty<'vir>,
@@ -94,19 +99,6 @@ where
             .bin_op()
             .unwrap();
         Ok(binop_function.call()(encoded_l.downcast_ty(), encoded_r.downcast_ty()).upcast_ty())
-    }
-
-    fn encode_constant_snap(
-        &mut self,
-        constant: &mir::ConstOperand<'vir>,
-    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>> {
-        let def_id = self.def_id();
-        self.deps().require_dep::<ConstEnc>(ConstEncTask::Mir {
-            const_: constant.const_,
-            encoding_depth: 0,
-            def_id,
-            span: constant.span,
-        })
     }
 
     fn encode_unary_op_snap(

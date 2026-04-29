@@ -1,7 +1,8 @@
 use prusti_rustc_interface::middle::ty;
+use prusti_utils::config;
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
-use crate::encoders::{ConstEnc, r#const::ConstEncTask, ty::RustTyDecomposition};
+use crate::encoders::{ConstEnc, Impure, Purified, r#const::ConstEncTask, ty::RustTyDecomposition};
 
 use super::{GArgs, GenericParamsEnc};
 
@@ -74,7 +75,12 @@ impl TaskEncoder for GArgsTyEnc {
                     ty,
                     context: task_key.context,
                 };
-                deps.require_dep::<ConstEnc>(task)
+                // TODO: make this not terrible..
+                if config::enable_purification_optimization() {
+                    deps.require_dep::<ConstEnc<Purified>>(task)
+                } else {
+                    deps.require_dep::<ConstEnc<Impure>>(task)
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let args = vir::with_vcx(|vcx| GArgsTy {

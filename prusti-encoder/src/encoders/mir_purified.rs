@@ -40,7 +40,9 @@ use vir::{
 };
 
 use crate::encoders::{
-    self, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncOutput, PurifiedWandEncTask,
+    self, ConstEnc, FunctionCallEnc, Purified, PurifiedWandEnc, PurifiedWandEncOutput,
+    PurifiedWandEncTask,
+    r#const::ConstEncTask,
     mir_fn::{CallTaskDescription, RustSignature},
     mir_shared::{EncodedCast, ExprResult, PureRvalueEnc},
     ty::{
@@ -1277,6 +1279,22 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for PurifiedEncVisitor<'vir
             preconditions,
             expr: to_vir_ty.prim_to_snap.call()(from_prim).upcast_ty(),
         })
+    }
+
+    fn encode_constant_snap(
+        &mut self,
+        constant: &mir::ConstOperand<'vir>,
+    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>> {
+        {
+            let def_id = self.def_id();
+            self.deps()
+                .require_dep::<ConstEnc<Purified>>(ConstEncTask::Mir {
+                    const_: constant.const_,
+                    encoding_depth: 0,
+                    def_id,
+                    span: constant.span,
+                })
+        }
     }
 
     fn encode_aggregate_snap(
