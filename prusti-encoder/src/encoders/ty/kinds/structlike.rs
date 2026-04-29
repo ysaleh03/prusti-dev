@@ -1,5 +1,5 @@
 use crate::encoders::{
-    ConstEnc,
+    ConstEnc, Purified,
     r#const::ConstEncTask,
     ty::{
         RustTyDatas, RustTyDecomposition,
@@ -454,7 +454,7 @@ fn arg_ty_exprs_from_source<'vir>(
                 ty,
                 context: task_key.context(),
             };
-            deps.require_dep::<ConstEnc>(task).unwrap()
+            deps.require_dep::<ConstEnc<Purified>>(task).unwrap()
         })
         .collect::<Vec<_>>();
     vir::with_vcx(|vcx| GArgsTy {
