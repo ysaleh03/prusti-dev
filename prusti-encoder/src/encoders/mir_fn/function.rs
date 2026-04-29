@@ -13,9 +13,7 @@ use crate::encoders::{
 
 // Function wrapper
 
-pub struct FunctionCallEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct FunctionCallEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Debug, Clone)]
 pub struct FunctionCallEncOutput<'vir> {
@@ -136,9 +134,7 @@ impl TaskEncoder for FunctionCallEnc<Purified> {
 
 // Function encoder
 
-struct FunctionEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+struct FunctionEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Debug, Clone)]
 struct FunctionEncOutputRef<'vir> {

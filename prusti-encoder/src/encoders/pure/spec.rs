@@ -18,9 +18,7 @@ use crate::encoders::{
     mir_pure::PureKind,
     ty::{RustTyDecomposition, generics::GParams, use_pure::TyUsePureEnc},
 };
-pub struct MirSpecEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct MirSpecEnc<P: NotPure>(PhantomData<P>);
 
 /// The VIR expression and span corresponding to an `assert_on_expiry`
 /// predicate. It will be conjoined to the left-hand side of the wand for the

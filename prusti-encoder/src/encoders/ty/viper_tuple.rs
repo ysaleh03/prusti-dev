@@ -15,9 +15,7 @@ use crate::encoders::{
     },
 };
 
-pub struct ViperTupleEnc<P: NotImpure> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct ViperTupleEnc<P: NotImpure>(PhantomData<P>);
 
 #[derive(Clone, Debug)]
 pub struct ViperTupleEncOutput<'vir, P: NotImpure>

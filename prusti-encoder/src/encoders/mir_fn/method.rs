@@ -23,9 +23,7 @@ use crate::{
 };
 
 // Method wrapper
-pub struct MethodCallEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct MethodCallEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Debug, Clone)]
 pub struct MethodCallEncOutput<'vir, P: NotPure + PurityCasters> {
@@ -180,9 +178,7 @@ impl TaskEncoder for MethodCallEnc<Purified> {
 
 // Method encoder
 
-pub(super) struct MethodEnc<P: NotPure> {
-    _phantom_data: PhantomData<P>,
-}
+pub(super) struct MethodEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Debug, Clone)]
 pub struct MethodEncOutputRef<'vir, P: Purity> {

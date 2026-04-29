@@ -18,9 +18,7 @@ use crate::{
     trait_support::is_function_with_body,
 };
 
-pub struct MirLocalDefEnc<P: Purity> {
-    _phantom_data: PhantomData<P>,
-}
+pub struct MirLocalDefEnc<P: Purity>(PhantomData<P>);
 
 #[derive(Clone, Debug)]
 pub struct MirLocalDefEncOutputRef {
