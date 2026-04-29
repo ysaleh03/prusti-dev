@@ -52,10 +52,6 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                 continue;
             }
 
-            // println!("wand data: {:?}", wand_data.def_id);
-            // println!("lhs: {:?}", wand_data.lhs);
-            // println!("rhs: {:?}", wand_data.rhs);
-
             for &lhs_node in wand_data.lhs.iter() {
                 let local = lhs_node.mir_local();
                 let decl = self.local_defs[local].local_snap;
@@ -521,9 +517,7 @@ pub struct ReconstructorEncOutput<'vir> {
 }
 
 #[derive(Clone, Debug)]
-pub enum ReconstructorEncError {
-    Unsupported(#[allow(dead_code)] String),
-}
+pub struct ReconstructorEncError;
 
 impl TaskEncoder for ReconstructorEnc {
     task_encoder::encoder_cache!(ReconstructorEnc);
