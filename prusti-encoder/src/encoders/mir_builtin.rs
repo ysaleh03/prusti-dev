@@ -94,7 +94,13 @@ impl TaskEncoder for MirBuiltinEnc {
                 Self::handle_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)
             }
             MirBuiltinEncTask::CheckedBinOp(res_ty, op, l_ty, r_ty) => {
-                Self::handle_checked_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)
+                if config::use_purified_enc() {
+                    Self::handle_purified_checked_bin_op(
+                        vcx, deps, *task_key, res_ty, op, l_ty, r_ty,
+                    )
+                } else {
+                    Self::handle_checked_bin_op(vcx, deps, *task_key, res_ty, op, l_ty, r_ty)
+                }
             }
         })?;
         Ok((MirBuiltinEncOutput { function }, ()))
@@ -127,14 +133,14 @@ impl MirBuiltinEnc {
         arg_ty: ty::Ty<'vir>,
     ) -> Result<vir::Function<'vir>, EncodeFullError<'vir, Self>> {
         let ty_task = RustTyDecomposition::from_prim_ty(arg_ty);
-        let arg_ty = deps.require_dep::<TyUsePureEnc>(ty_task)?;
+        let arg_ty_pure = deps.require_dep::<TyUsePureEnc>(ty_task)?;
 
         let ty_task = RustTyDecomposition::from_prim_ty(vcx.tcx().types.usize);
-        let res_ty = deps.require_dep::<TyUsePureEnc>(ty_task)?;
+        let res_ty_pure = deps.require_dep::<TyUsePureEnc>(ty_task)?;
 
-        let name = vir::vir_format_identifier!(vcx, "mir_len"); // TODO: name (Slice or Array)
-        let arg_ty_snap = arg_ty.snapshot.downcast_ty();
-        let res_ty_snap = res_ty.snapshot.downcast_ty();
+        let name = vir::vir_format_identifier!(vcx, "mir_len_{arg_ty_pure:?}");
+        let arg_ty_snap = arg_ty_pure.snapshot.downcast_ty();
+        let res_ty_snap = res_ty_pure.snapshot.downcast_ty();
         let function = FunctionIdn::new(name, arg_ty_snap, res_ty_snap);
         deps.emit_output_ref(key, MirBuiltinEncOutputRef::Len(function))?;
 
@@ -527,7 +533,7 @@ impl MirBuiltinEnc {
             int_name(r_ty)
         );
         let res_ty_task = RustTyDecomposition::from_ty(res_ty, vcx.tcx(), GParams::empty());
-        let e_res_ty = deps.require_dep::<TyUsePurifiedEnc>(res_ty_task)?;
+        let e_res_ty = deps.require_dep::<TyUsePureEnc>(res_ty_task)?;
         let e_res_ty_snap = e_res_ty.snapshot.downcast_ty();
         let function = FunctionIdn::new(name, (e_l_ty_snap, e_r_ty_snap), e_res_ty_snap);
         deps.emit_output_ref(key, MirBuiltinEncOutputRef::BinOp(function))?;
@@ -546,20 +552,12 @@ impl MirBuiltinEnc {
         let e_rvalue_pure_ty = e_rvalue_pure_ty.expect_primitive();
         assert_eq!(vir::TYPE_INT.upcast_ty(), e_rvalue_pure_ty.prim_type);
         let prim_type = e_rvalue_pure_ty.prim_type.downcast_ty::<vir::Int>();
-        let prim_tyval = deps
-            .require_ref::<TyConstructorEnc>(rvalue_pure_ty_task.ty)?
-            .ty_constructor
-            .call()(&[], &[]);
         let bool_ty_task = RustTyDecomposition::from_prim_ty(bool_ty);
         let e_bool = deps.require_dep::<TyUsePureEnc>(bool_ty_task)?;
         let bool_cons = e_bool
             .expect_primitive()
             .prim_to_snap
             .cast_args::<vir::Bool>(vir::TYPE_BOOL);
-        let bool_tyval = deps
-            .require_ref::<TyConstructorEnc>(bool_ty_task.ty)?
-            .ty_constructor
-            .call()(&[], &[]);
 
         // Unbounded value
         let val_exp = vcx
@@ -576,6 +574,114 @@ impl MirBuiltinEnc {
         let wrapped_val_exp = Self::get_wrapped_val(vcx, val, rvalue_pure_ty);
         let wrapped_val = vcx.mk_local_ex(wrapped_val_decl);
         let wrapped_val_snap = (e_rvalue_pure_ty.prim_to_snap)(wrapped_val.upcast_ty());
+        // Overflowed?
+        let overflowed = if config::check_overflows() {
+            vcx.mk_bin_op_expr(vir::BinOpKind::CmpNe, wrapped_val, val)
+                .downcast_ty()
+        } else {
+            vcx.mk_bool::<false>()
+        };
+        let overflowed_snap = bool_cons(overflowed);
+        // `tuple(prim_to_snap(wrapped_val), wrapped_val != val)`
+        let tuple = e_res_ty.expect_structlike().field_snaps_to_snap(vec![
+            wrapped_val_snap.upcast_ty(),
+            overflowed_snap.upcast_ty(),
+        ]);
+        // `let wrapped_val == (val ..) in $tuple`
+        let inner_let = vcx.mk_let_expr(wrapped_val_decl, wrapped_val_exp, tuple);
+
+        Ok(vcx.mk_function(
+            function,
+            (lhs_decl, rhs_decl),
+            &[],
+            &[],
+            None,
+            Some(vcx.mk_let_expr(val_decl, val_exp, inner_let)),
+        ))
+    }
+
+    fn handle_purified_checked_bin_op<'vir>(
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+        key: <Self as TaskEncoder>::TaskKey<'vir>,
+        res_ty: ty::Ty<'vir>,
+        op: mir::BinOp,
+        l_ty: ty::Ty<'vir>,
+        r_ty: ty::Ty<'vir>,
+    ) -> Result<vir::Function<'vir>, EncodeFullError<'vir, Self>> {
+        // `op` can only be `Add`, `Sub` or `Mul`, or their overflowing version
+        assert!(matches!(
+            op,
+            mir::BinOp::Add
+                | mir::BinOp::Sub
+                | mir::BinOp::Mul
+                | mir::BinOp::AddWithOverflow
+                | mir::BinOp::SubWithOverflow
+                | mir::BinOp::MulWithOverflow
+        ));
+        let l_ty_task = RustTyDecomposition::from_prim_ty(l_ty);
+        let e_l_ty = deps.require_dep::<TyUsePurifiedEnc>(l_ty_task)?;
+        let r_ty_task = RustTyDecomposition::from_prim_ty(r_ty);
+        let e_r_ty = deps.require_dep::<TyUsePurifiedEnc>(r_ty_task)?;
+        let e_l_ty_snap = e_l_ty.snapshot.downcast_ty();
+        let e_r_ty_snap = e_r_ty.snapshot.downcast_ty();
+
+        let name = vir::vir_format_identifier!(
+            vcx,
+            "mir_checkedbinop_{op:?}_{}_{}",
+            int_name(l_ty),
+            int_name(r_ty)
+        );
+        let res_ty_task = RustTyDecomposition::from_ty(res_ty, vcx.tcx(), GParams::empty());
+        let e_res_ty = deps.require_dep::<TyUsePurifiedEnc>(res_ty_task)?;
+        let e_res_ty_snap = e_res_ty.snapshot.downcast_ty();
+        let function = FunctionIdn::new(name, (e_l_ty_snap, e_r_ty_snap), e_res_ty_snap);
+        deps.emit_output_ref(key, MirBuiltinEncOutputRef::BinOp(function))?;
+
+        let lhs_decl = vcx.mk_local_decl("arg1", e_l_ty_snap);
+        let rhs_decl = vcx.mk_local_decl("arg2", e_r_ty_snap);
+
+        // The result of a checked add will always be `(T, bool)`, get the `T`
+        // type
+        let rvalue_purified_ty = res_ty.tuple_fields()[0];
+        let bool_ty = res_ty.tuple_fields()[1];
+        assert!(bool_ty.is_bool());
+
+        let rvalue_purified_ty_task = RustTyDecomposition::from_prim_ty(rvalue_purified_ty);
+        let e_rvalue_purified_ty = deps.require_dep::<TyUsePurifiedEnc>(rvalue_purified_ty_task)?;
+        let e_rvalue_purified_ty = e_rvalue_purified_ty.expect_primitive();
+        assert_eq!(vir::TYPE_INT.upcast_ty(), e_rvalue_purified_ty.prim_type);
+        let prim_type = e_rvalue_purified_ty.prim_type.downcast_ty::<vir::Int>();
+        let prim_tyval = deps
+            .require_ref::<TyConstructorEnc>(rvalue_purified_ty_task.ty)?
+            .ty_constructor
+            .call()(&[], &[]);
+        let bool_ty_task = RustTyDecomposition::from_prim_ty(bool_ty);
+        let e_bool = deps.require_dep::<TyUsePurifiedEnc>(bool_ty_task)?;
+        let bool_cons = e_bool
+            .expect_primitive()
+            .prim_to_snap
+            .cast_args::<vir::Bool>(vir::TYPE_BOOL);
+        let bool_tyval = deps
+            .require_ref::<TyConstructorEnc>(bool_ty_task.ty)?
+            .ty_constructor
+            .call()(&[], &[]);
+
+        // Unbounded value
+        let val_exp = vcx
+            .mk_bin_op_expr(
+                vir::BinOpKind::from(op),
+                (e_l_ty.expect_purified_native().snap_to_prim)(vcx.mk_local_ex(lhs_decl)),
+                (e_r_ty.expect_purified_native().snap_to_prim)(vcx.mk_local_ex(rhs_decl)),
+            )
+            .downcast_ty();
+        let val_decl = vcx.mk_local_decl("val", prim_type);
+        let val = vcx.mk_local_ex(val_decl);
+        // Wrapped value
+        let wrapped_val_decl = vcx.mk_local_decl("wrapped_val", prim_type);
+        let wrapped_val_exp = Self::get_wrapped_val(vcx, val, rvalue_purified_ty);
+        let wrapped_val = vcx.mk_local_ex(wrapped_val_decl);
+        let wrapped_val_snap = (e_rvalue_purified_ty.prim_to_snap)(wrapped_val.upcast_ty());
         // Overflowed?
         let overflowed = if config::check_overflows() {
             vcx.mk_bin_op_expr(vir::BinOpKind::CmpNe, wrapped_val, val)

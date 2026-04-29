@@ -16,7 +16,7 @@ use crate::encoders::{
     Impure, MirLocalDefEncTask, MirPureEnc, NotPure, Purified, TyUsePurifiedEnc,
     mir_fn::RustSignature,
     mir_pure::PureKind,
-    ty::{RustTyDecomposition, generics::GParams, use_pure::TyUsePureEnc},
+    ty::{RustTyDecomposition, use_pure::TyUsePureEnc},
 };
 pub struct MirSpecEnc<P: NotPure>(PhantomData<P>);
 
@@ -98,7 +98,7 @@ impl TaskEncoder for MirSpecEnc<Impure> {
         let (def_id, pure) = *task_key;
         deps.emit_output_ref(*task_key, ())?;
 
-        let local_defs = deps.require_dep::<crate::encoders::local_def::MirLocalDefEnc<Purified>>(
+        let local_defs = deps.require_dep::<crate::encoders::local_def::MirLocalDefEnc<Impure>>(
             MirLocalDefEncTask::Local {
                 def_id,
                 all_locals: false,
@@ -314,7 +314,6 @@ impl TaskEncoder for MirSpecEnc<Purified> {
     ) -> EncodeFullResult<'vir, Self> {
         let (def_id, pure) = *task_key;
         let signature = RustSignature::new(def_id);
-        let params = GParams::from(def_id);
 
         deps.emit_output_ref(*task_key, ())?;
 

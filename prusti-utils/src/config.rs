@@ -117,7 +117,7 @@ lazy_static::lazy_static! {
         settings.set_default("json_communication", false).unwrap();
         settings.set_default("optimizations", "all").unwrap();
         settings.set_default("intern_names", true).unwrap();
-        settings.set_default("enable_purification_optimization", false).unwrap();
+        settings.set_default("use_purified_enc", false).unwrap();
         // settings.set_default("enable_manual_axiomatization", false).unwrap();
         settings.set_default("unsafe_core_proof", false).unwrap();
         settings.set_default("verify_core_proof", true).unwrap();
@@ -766,8 +766,8 @@ pub fn optimizations() -> Optimizations {
 /// based) operations.
 ///
 /// **Note:** this option is highly experimental.
-pub fn enable_purification_optimization() -> bool {
-    read_setting("enable_purification_optimization")
+pub fn use_purified_enc() -> bool {
+    read_setting("use_purified_enc")
 }
 
 /// Deadline (in seconds) within which Prusti should encode and verify

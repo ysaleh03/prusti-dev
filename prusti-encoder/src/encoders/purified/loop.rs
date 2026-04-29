@@ -6,7 +6,8 @@ use pcg::{
     pcg::{EvalStmtPhase, PcgNode},
     results::PcgBasicBlock,
     utils::{
-        HasCompilerCtxt, Place, maybe_old::MaybeLabelledPlace, maybe_remote::MaybeRemotePlace,
+        HasCompilerCtxt, HasPlace, Place, maybe_old::MaybeLabelledPlace,
+        maybe_remote::MaybeRemotePlace,
     },
 };
 use prusti_rustc_interface::middle::mir;
@@ -38,17 +39,17 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
         let loop_invariant_place_capabilities =
             cfpcs.loop_invariant_place_capabilities(loop_place_usages, ctxt);
 
-        // for (place, capability) in loop_invariant_place_capabilities.iter() {
-        //     if capability.is_write() {
-        //         continue; // No permissions are encoded for places with write capabilities currently
-        //     }
-        //     let (place_res, _snap, _, _) = self.encode_place_with_snap(*place);
-        //     let ty = (*place).ty(self.pcg_ctxt());
-        //     let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
-        //     let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
-        //     // let pred = ty_out.ref_to_pred(self.vcx, place_res.expr.expect_predicate(), None);
-        //     // inv.push(pred);
-        // }
+        for (place, capability) in loop_invariant_place_capabilities.iter() {
+            if capability.is_write() {
+                continue; // No permissions are encoded for places with write capabilities currently
+            }
+            let (place_res, snap, _, _) = self.encode_place_with_snap(*place);
+            let ty = (*place).ty(self.pcg_ctxt());
+            let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
+            let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
+            let pred = ty_out.snap_to_ty_assertion(self.vcx, snap);
+            inv.push(pred);
+        }
 
         for (inputs, outputs) in self.get_abstraction_edges(state.borrow_pcg().graph()) {
             let mut let_bind = WandOldOuter::LetBind(Vec::new());
@@ -92,15 +93,15 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
     ) {
         match node {
             PcgNode::Place(place) => {
-                // let p = place.place();
-                // let ty = (*p).ty(self.local_decls, self.vcx.tcx());
-                // let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
-                // let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
-                // let p = self.encode_place(p);
-                // let p = self.configure_old((*place).into(), p.expr.expect_predicate(), old_outer);
+                let p = place.place();
+                let ty = (*p).ty(self.local_decls, self.vcx.tcx());
+                let task = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
+                let ty_out = self.deps.require_dep::<TyUsePurifiedEnc>(task).unwrap();
+                let p = self.encode_place(p);
+                let p = self.configure_old((*place).into(), p.snap, old_outer);
 
-                // let pred = ty_out.ref_to_pred(self.vcx, p, None);
-                // wand_rhs.push(pred);
+                let pred = ty_out.snap_to_ty_assertion(self.vcx, p);
+                wand_rhs.push(pred);
             }
             PcgNode::LifetimeProjection(r) => {
                 let exprs = self.encode_lifetime_projection(*r, old_outer);
@@ -122,16 +123,15 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
             PcgLifetimeProjectionBase::Const(c) => todo!("{c:?}"),
         };
         let ty = RustTyDecomposition::from_ty(ty.ty, self.vcx.tcx(), self.def_id);
-        // let indirect = self
-        //     .deps
-        //     .require_dep::<IndirectPredicatesEnc<crate::encoders::Purified>>(r.with_base(ty))
-        //     .unwrap();
-        // indirect
-        //     .predicate_applications
-        //     .into_iter()
-        //     .map(|expr| expr.reify(self.vcx, place_snap))
-        //     .collect::<Vec<_>>()
-        vec![]
+        let indirect = self
+            .deps
+            .require_dep::<IndirectPredicatesEnc<crate::encoders::Purified>>(r.with_base(ty))
+            .unwrap();
+        indirect
+            .predicate_applications
+            .into_iter()
+            .map(|expr| expr.reify(self.vcx, place_snap))
+            .collect::<Vec<_>>()
     }
 
     fn get_place(place: MaybeRemotePlace<'vir>) -> Place<'vir> {

@@ -57,7 +57,7 @@ pub fn encode_all_in_crate<'tcx>(tcx: ty::TyCtxt<'tcx>) {
                 .unwrap_or_default();
 
                 if !(is_trusted && is_pure) {
-                    if config::enable_purification_optimization() {
+                    if config::use_purified_enc() {
                         let _ = method::MethodEnc::<Purified>::encode(def_id, false);
                     } else {
                         let _ = method::MethodEnc::<Impure>::encode(def_id, false);

@@ -3,8 +3,7 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::CastType;
 
 use crate::encoders::{
-    ConstEnc, MirBuiltinEnc, MirBuiltinEncTask, NotImpure,
-    r#const::ConstEncTask,
+    MirBuiltinEnc, MirBuiltinEncTask, NotImpure,
     ty::{
         UseTyDatas,
         data::{Ty, TyDatas},

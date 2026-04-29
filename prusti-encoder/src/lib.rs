@@ -70,7 +70,7 @@ pub fn test_entrypoint<'tcx>(
     if config::show_ide_info() {
         vir::with_vcx(|vcx| vcx.emit_contract_spans(env_diagnostic));
     }
-    let purified = config::enable_purification_optimization();
+    let purified = config::use_purified_enc();
 
     let mut program = task_encoder::Program::default();
 

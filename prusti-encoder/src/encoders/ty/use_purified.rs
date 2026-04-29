@@ -296,18 +296,7 @@ impl<'vir> TyUsePurifiedMutRef<'vir> {
     }
 }
 
-impl<'vir> TyData<'vir, UsePurifiedTyDatas> {
-    // pub fn pack(
-    //     &self,
-    //     variant: Option<abi::VariantIdx>,
-    //     self_snap: vir::ExprSnap<'vir>,
-    //     label: Option<vir::OldLabel<'vir>>,
-    // ) -> Vec<vir::Stmt<'vir>> {
-    //     if let Some(variant) = variant {
-    //         return self.expect_variant(variant).inner.pack();
-    //     }
-    // }
-}
+impl<'vir> TyData<'vir, UsePurifiedTyDatas> {}
 
 impl<'vir> TyUsePurifiedStruct<'vir> {
     pub fn field_snaps_to_snap<Curr, Next>(

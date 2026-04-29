@@ -76,7 +76,7 @@ impl TaskEncoder for GArgsTyEnc {
                     context: task_key.context,
                 };
                 // TODO: make this not terrible..
-                if config::enable_purification_optimization() {
+                if config::use_purified_enc() {
                     deps.require_dep::<ConstEnc<Purified>>(task)
                 } else {
                     deps.require_dep::<ConstEnc<Impure>>(task)

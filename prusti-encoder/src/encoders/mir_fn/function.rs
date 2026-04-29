@@ -170,7 +170,6 @@ impl TaskEncoder for FunctionEnc<Impure> {
     ) -> EncodeFullResult<'vir, Self> {
         vir::with_vcx(|vcx| {
             let def_id = *task_key;
-            let signature = RustSignature::new(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
             let local_defs =
                 deps.require_dep::<MirLocalDefEnc<Impure>>(MirLocalDefEncTask::Local {
@@ -222,29 +221,30 @@ impl TaskEncoder for FunctionEnc<Impure> {
 
             // TODO: type preconditions do not currently work
 
-            let arg_type_assertions = local_defs
-                .args()
-                .zip(signature.inputs.iter())
-                .map(|(arg, ty)| {
-                    let decomposition = ty.decompose(params);
-                    let snap = vcx.mk_local_ex(arg.local_snap);
-                    generics.ty_assertion(deps, snap, decomposition)
-                })
-                .collect::<Vec<_>>();
+            // let arg_type_assertions = local_defs
+            //     .args()
+            //     .zip(signature.inputs.iter())
+            //     .map(|(arg, ty)| {
+            //         let decomposition = ty.decompose(params);
+            //         let snap = vcx.mk_local_ex(arg.local_snap);
+            //         generics.ty_assertion(deps, snap, decomposition)
+            //     })
+            //     .collect::<Vec<_>>();
 
             tracing::debug!("finished {def_id:?}");
 
-            let mut pres = arg_type_assertions;
+            // let mut pres = arg_type_assertions;
+            let mut pres = Vec::new();
             pres.extend(spec.pres);
 
             // TODO: type preconditions do not currently work
+            // let ret = local_defs.ret();
+            // let snap = vcx.mk_result(ret.local_snap.ty());
+            // let decomposition = signature.output.decompose(params);
+            // let ret_type_assertions = generics.ty_assertion(deps, snap, decomposition);
 
-            let ret = local_defs.ret();
-            let snap = vcx.mk_result(ret.local_snap.ty());
-            let decomposition = signature.output.decompose(params);
-            let ret_type_assertions = generics.ty_assertion(deps, snap, decomposition);
-
-            let mut posts = vec![ret_type_assertions];
+            // let mut posts = vec![ret_type_assertions];
+            let mut posts = Vec::new();
             posts.extend(spec.posts);
 
             let func_args = local_defs.local_decl_args().collect::<Vec<_>>();
