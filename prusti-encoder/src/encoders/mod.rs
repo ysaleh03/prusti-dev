@@ -29,6 +29,7 @@ pub use purified::fn_wand::{
 };
 pub(super) use spec::with_proc_spec;
 pub use spec::{SpecEnc, SpecEncTask, is_function_trusted, is_type_trusted};
+use task_encoder::TaskEncoder;
 pub use ty::{
     use_impure::TyUseImpureEnc,
     use_pure::TyUsePureEnc,
@@ -43,7 +44,7 @@ pub(crate) trait Purity:
     'static + std::fmt::Debug + Clone + Copy + PartialEq + Eq + std::hash::Hash
 {
     type ArgTy: vir::CompType;
-    type TyUseEnc = ty::TyUseEnc<Self>;
+    type TyUseEnc: TaskEncoder;
 }
 pub(crate) trait NotImpure: Purity {}
 pub(crate) trait NotPure: Purity {}
@@ -56,6 +57,7 @@ pub struct Pure;
 
 impl Purity for Pure {
     type ArgTy = vir::Ref;
+    type TyUseEnc = TyUsePureEnc;
 }
 impl NotImpure for Pure {}
 
@@ -67,6 +69,7 @@ pub struct Impure;
 
 impl Purity for Impure {
     type ArgTy = vir::Ref;
+    type TyUseEnc = TyUseImpureEnc;
 }
 impl NotPure for Impure {}
 
@@ -78,6 +81,7 @@ pub struct Purified;
 
 impl Purity for Purified {
     type ArgTy = vir::Snap;
+    type TyUseEnc = TyUsePurifiedEnc;
 }
 impl NotImpure for Purified {}
 impl NotPure for Purified {}
