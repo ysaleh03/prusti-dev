@@ -3,6 +3,7 @@
 #![allow(clippy::result_large_err)]
 use std::ops::Deref;
 
+use prusti_utils::config;
 use task_encoder::{TaskEncoder, TaskEncoderDependencies};
 use vir::{
     Arity, BackendInterpretationPair, CastType, CompType, DomainAxiomData, DomainIdnSnap,
@@ -310,7 +311,10 @@ impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
         );
         let self_name = self.name;
         let name = vir::vir_format!(self.vcx, "{self_name}_{name}",);
-        let n_typarams = self.params.ty_args().len();
+        let mut n_typarams = 0 as usize;
+        if config::use_purified_enc() {
+            n_typarams = self.params.ty_args().len();
+        }
         let locals = self.vcx.alloc_slice(
             &A::params(fields)
                 .into_iter()
