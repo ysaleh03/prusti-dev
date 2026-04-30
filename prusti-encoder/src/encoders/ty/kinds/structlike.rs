@@ -11,7 +11,10 @@ use crate::encoders::{
         impure::{ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData},
         lifted::{TyConstructorEnc, TypeOfEnc},
         pure::{PureTyDatas, TyPureEnc, TyPureFieldData, TyPureStructData},
-        purified::{PurifiedTyDatas, TyPurifiedEnc, TyPurifiedFieldData, TyPurifiedStructData},
+        purified::{
+            PurifiedTyDatas, TyPurifiedEnc, TyPurifiedFieldData, TyPurifiedStructData,
+            TyPurifiedTyParamData,
+        },
         use_impure::TyUseImpureEnc,
         use_pure::TyUsePureEnc,
         use_purified::TyUsePurifiedEnc,
@@ -47,7 +50,7 @@ pub(super) fn ty_pure_variant<'vir>(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let field_tys = builder.vcx.alloc_slice(&field_tys);
-    let (field_snaps_to_snap, des) = builder.constructor(prefix, field_tys, discr);
+    let (field_snaps_to_snap, des) = builder.constructor(prefix, field_tys, discr, 0);
     assert_eq!(des.len(), data.fields.len());
     let des = des
         .iter()
@@ -254,13 +257,14 @@ pub(super) fn ty_purified_variant<'vir>(
 
     let tyvals = vcx.alloc_slice(&params.iter().map(|_| vir::TYPE_TYVAL).collect::<Vec<_>>());
     let field_tys = vcx.alloc_slice(&field_ty_refs.iter().map(|t| t.snapshot).collect::<Vec<_>>());
-    let (field_snaps_to_snap, des) = builder.constructor(prefix, (tyvals, field_tys), discr);
+    let (field_snaps_to_snap, des) =
+        builder.constructor(prefix, (tyvals, field_tys), discr, params.len());
     let (ty_des, field_des) = des.split_at(params.len());
 
     assert_eq!(ty_des.len(), data.data.len());
     let typarams = ty_des
         .iter()
-        .map(|read| TyPurifiedFieldData {
+        .map(|read| TyPurifiedTyParamData {
             read: read.downcast_ty(),
         })
         .collect::<Vec<_>>();

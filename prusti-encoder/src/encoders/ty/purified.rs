@@ -111,6 +111,11 @@ pub struct TyPurifiedFieldData<'vir> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct TyPurifiedTyParamData<'vir> {
+    pub(super) read: AdtDestructor<'vir, vir::CSnap, vir::TyVal>,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct TyPurifiedEnumData<'vir> {
     #[allow(dead_code)]
     pub(super) discr_ty: vir::TypeSnap<'vir>,

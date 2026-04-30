@@ -13,7 +13,7 @@ use vir::{CastType, HasType};
 pub(crate) fn ty_pure<'vir>(
     builder: &mut AdtBuilder<'vir, crate::encoders::Pure>,
 ) -> Result<TyPureMutRef<'vir>, EncodeFullError<'vir, TyPureEnc>> {
-    let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_REF, None);
+    let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_REF, None, 0);
 
     Ok(TyPureMutRefData {
         prim_to_snap: field_snaps_to_snap,
@@ -99,7 +99,7 @@ pub(crate) fn ty_purified<'vir>(
         .require_ref::<TypeOfEnc>(data.decompose(task_key.params).ty)?
         .typeof_function;
 
-    let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None);
+    let (field_snaps_to_snap, field_access) = builder.constructor("", vir::TYPE_PSNAP, None, 0);
 
     builder.axiom(
         vir::vir_format!(vcx, "typeof"),

@@ -3,7 +3,6 @@
 #![allow(clippy::result_large_err)]
 use std::ops::Deref;
 
-use prusti_utils::config;
 use task_encoder::{TaskEncoder, TaskEncoderDependencies};
 use vir::{
     Arity, BackendInterpretationPair, CastType, CompType, DomainAxiomData, DomainIdnSnap,
@@ -299,6 +298,7 @@ impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
         prefix: &str,
         fields: A::Tys<'vir>,
         discr: Option<vir::ExprCSnap<'vir>>,
+        nparams: usize,
     ) -> (
         FunctionIdn<'vir, A, vir::CSnap>,
         Vec<vir::AdtDestructor<'vir, vir::CSnap, vir::Dyn>>,
@@ -311,19 +311,15 @@ impl<'vir, P: NotImpure> AdtBuilder<'vir, P> {
         );
         let self_name = self.name;
         let name = vir::vir_format!(self.vcx, "{self_name}_{name}",);
-        let mut n_typarams = 0 as usize;
-        if config::use_purified_enc() {
-            n_typarams = self.params.ty_args().len();
-        }
         let locals = self.vcx.alloc_slice(
             &A::params(fields)
                 .into_iter()
                 .enumerate()
                 .map(|(i, ty)| {
-                    let name = if i < n_typarams {
+                    let name = if i < nparams {
                         vir::vir_format!(self.vcx, "{self_name}_{prefix}typaram_{i}",)
                     } else {
-                        vir::vir_format!(self.vcx, "{self_name}_{prefix}{}", i - n_typarams)
+                        vir::vir_format!(self.vcx, "{self_name}_{prefix}{}", i - nparams)
                     };
                     self.vcx.mk_local_decl(name, ty)
                 })
