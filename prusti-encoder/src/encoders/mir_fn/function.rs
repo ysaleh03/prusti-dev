@@ -5,10 +5,12 @@ use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDepen
 use vir::{FunctionIdn, HasType, Reify};
 
 use crate::encoders::{
-    Impure, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, NotPure,
-    Pure, PureKind, Purified,
+    Impure, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, NotImpure,
+    NotPure, Pure, PureKind, Purified,
     mir_fn::{CallTaskDescription, RustSignature},
-    ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
+    ty::generics::{
+        GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc, PurityCasters,
+    },
 };
 
 // Function wrapper
@@ -16,14 +18,14 @@ use crate::encoders::{
 pub struct FunctionCallEnc<P: NotPure>(PhantomData<P>);
 
 #[derive(Debug, Clone)]
-pub struct FunctionCallEncOutput<'vir> {
+pub struct FunctionCallEncOutput<'vir, P: PurityCasters> {
     function: FunctionEncOutputRef<'vir>,
     ty_args: GArgsTy<'vir>,
-    inputs: Vec<GArgCaster<'vir, Pure>>,
-    output: GArgCaster<'vir, Pure>,
+    inputs: Vec<GArgCaster<'vir, P>>,
+    output: GArgCaster<'vir, P>,
 }
 
-impl<'vir> FunctionCallEncOutput<'vir> {
+impl<'vir> FunctionCallEncOutput<'vir, Pure> {
     pub fn call<Curr, Next>(
         &self,
         mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
@@ -45,7 +47,7 @@ impl<'vir> FunctionCallEncOutput<'vir> {
 impl TaskEncoder for FunctionCallEnc<Impure> {
     task_encoder::encoder_cache!(FunctionCallEnc<Impure>);
     type TaskDescription<'tcx> = CallTaskDescription<'tcx>;
-    type OutputFullDependency<'vir> = FunctionCallEncOutput<'vir>;
+    type OutputFullDependency<'vir> = FunctionCallEncOutput<'vir, Pure>;
 
     fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
         *task
@@ -87,10 +89,29 @@ impl TaskEncoder for FunctionCallEnc<Impure> {
     }
 }
 
+impl<'vir> FunctionCallEncOutput<'vir, Purified> {
+    pub fn call<Curr, Next>(
+        &self,
+        mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
+    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
+        assert_eq!(self.inputs.len(), args.len());
+        let a = args.iter_mut().zip(self.inputs.iter());
+        for (arg, caster) in a {
+            *arg = caster.cast_to_callee_ctx(*arg);
+        }
+        let call = self.function.function_ref.call()(
+            &args,
+            self.ty_args.get_ty(),
+            self.ty_args.get_const(),
+        );
+        self.output.cast_to_caller_ctx(call)
+    }
+}
+
 impl TaskEncoder for FunctionCallEnc<Purified> {
     task_encoder::encoder_cache!(FunctionCallEnc<Purified>);
     type TaskDescription<'tcx> = CallTaskDescription<'tcx>;
-    type OutputFullDependency<'vir> = FunctionCallEncOutput<'vir>;
+    type OutputFullDependency<'vir> = FunctionCallEncOutput<'vir, Purified>;
 
     fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
         *task
@@ -109,13 +130,13 @@ impl TaskEncoder for FunctionCallEnc<Purified> {
             .iter()
             .map(|ty| {
                 let normalized = ty.decompose_compare_normalize(signature.gparams, task_key.gargs);
-                deps.require_dep::<GArgsCastEnc<Pure>>(normalized)
+                deps.require_dep::<GArgsCastEnc<Purified>>(normalized)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let normalized = signature
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
-        let output = deps.require_dep::<GArgsCastEnc<Pure>>(normalized)?;
+        let output = deps.require_dep::<GArgsCastEnc<Purified>>(normalized)?;
         Ok((
             (),
             FunctionCallEncOutput {
