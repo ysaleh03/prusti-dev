@@ -266,8 +266,9 @@ impl TaskEncoder for MethodEnc<Impure> {
             // wands in case of a reborrowing function.
             let mut pres = Vec::new();
             let mut posts = Vec::new();
-            let spec = deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, false), span)?;
-            let function_data = FunctionData::new(def_id, params.rust_params(), None);
+            let spec =
+                deps.require_dep_spanned::<MirSpecEnc<Impure>>((def_id, def_id, false), span)?;
+            let function_data = FunctionData::new(def_id);
             let wands = deps.require_dep_spanned::<WandEnc>(
                 WandEncTask {
                     data: function_data,
@@ -476,8 +477,9 @@ impl TaskEncoder for MethodEnc<Purified> {
             // parameter types and the functional spec.
             let mut pres = Vec::new();
             let mut posts = Vec::new();
-            let spec = deps.require_dep_spanned::<MirSpecEnc<Purified>>((def_id, false), span)?;
-            let function_data = FunctionData::new(def_id, gparams.rust_params(), None);
+            let spec =
+                deps.require_dep_spanned::<MirSpecEnc<Purified>>((def_id, def_id, false), span)?;
+            let function_data = FunctionData::new(def_id);
             let wands = deps.require_dep_spanned::<PurifiedWandEnc>(
                 PurifiedWandEncTask {
                     data: function_data,

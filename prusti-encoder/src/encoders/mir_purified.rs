@@ -586,11 +586,12 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 //   function call; instead we should figure out which
                 //   wand it is based on the edge info.
                 // TODO: closures
-                let wand_enc_output =
-                    self.deps
-                        .require_dep::<PurifiedWandEnc>(PurifiedWandEncTask {
-                            data: call.function_data().unwrap(),
-                        })?;
+                let wand_enc_output = self
+                    .deps
+                    .require_dep::<PurifiedWandEnc>(PurifiedWandEncTask {
+                        data: call.function_data().unwrap(),
+                    })
+                    .unwrap();
                 let bb = &self.body[call.location().block];
                 let terminator = bb.terminator.as_ref().unwrap();
                 match &terminator.kind {
@@ -743,11 +744,11 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                     None,
                 );
             }
-            // RepackOp::Weaken(weaken)
-            //     if weaken.from_cap().is_exclusive() && weaken.to_cap().is_write() =>
-            // {
-            //     self.pcg_weaken(weaken.place())
-            // }
+            RepackOp::Weaken(weaken)
+                if weaken.from_cap().is_exclusive() && weaken.to_cap().is_write() =>
+            {
+                self.pcg_weaken(weaken.place(), weaken.is_for_storage_dead())
+            }
             other => {
                 if should_ignore(other) {
                     self.stmt(self.vcx.mk_comment_stmt(vir::vir_format!(
@@ -949,6 +950,34 @@ impl<'vir, 'enc, E: TaskEncoder> PurifiedEncVisitor<'vir, 'enc, E> {
                 self.stmt(self.vcx.mk_pure_assign_stmt(self_snap.downcast_ty(), cons));
             }
         }
+    }
+
+    fn pcg_weaken(&mut self, place: Place<'vir>, for_storage_dead: bool) {
+        let place_ty = place.ty(self.pcg_ctxt());
+        assert!(place_ty.variant_index.is_none());
+
+        // Skip the exhale for StorageDead-triggered weakens, since the place may
+        // have already been moved/consumed and no longer hold permissions.
+        // Temporary workaround until https://github.com/prusti/pcg/issues/137
+        // is resolved.
+        if for_storage_dead {
+            comment!(
+                self,
+                "Weaken(E, W) for {:?} (skipped exhale: StorageDead)",
+                place
+            );
+            return;
+        }
+
+        let place_ty_out = self.ty_use_purified(place_ty.ty);
+
+        let place_enc = self.encode_place(place);
+        comment!(self, "exhale due to Weaken(E, W)");
+        // self.stmt(self.vcx.mk_exhale_stmt(place_ty_out.ref_to_pred(
+        //     self.vcx,
+        //     place_enc.expr.expect_predicate(),
+        //     None,
+        // )));
     }
 
     fn loop_analysis(&mut self) -> &LoopAnalysis {

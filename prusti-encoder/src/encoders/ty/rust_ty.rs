@@ -20,13 +20,13 @@ pub struct RustTyDecomposition<'tcx> {
     pub args: GArgs<'tcx>,
 }
 
-impl<'tcx, Ctxt> HasRegions<'tcx, Ctxt> for RustTyDecomposition<'tcx> {
-    fn regions(&self, _ctxt: Ctxt) -> IndexVec<RegionIdx, PcgRegion> {
+impl<'tcx, Ctxt: Copy> HasRegions<'tcx, Ctxt> for RustTyDecomposition<'tcx> {
+    fn regions(&self, _ctxt: Ctxt) -> IndexVec<RegionIdx, PcgRegion<'tcx>> {
         self.args
             .args()
             .iter()
-            .flat_map(|arg| arg.as_region())
-            .map(|region| region.into())
+            .flat_map(|arg| arg.walk())
+            .filter_map(|arg| arg.as_region().map(PcgRegion::from))
             .unique()
             .collect()
     }

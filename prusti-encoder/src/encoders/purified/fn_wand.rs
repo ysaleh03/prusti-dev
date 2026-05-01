@@ -3,7 +3,7 @@ use crate::encoders::{
     TyUsePurifiedEnc,
     mir_fn::RustSignature,
     mir_purified::ProofScript,
-    pure::spec::{EncodedPledge, MirSpecEnc},
+    pure::spec::{EncodedPledge, MirSpecEnc, PledgeExpr},
     ty::{
         RustTyDecomposition,
         generics::{
@@ -44,6 +44,18 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
     ) -> Result<Vec<ProofScript<'vir>>, EncodeFullError<'vir, E>> {
         let mut proof_scripts = Vec::new();
         let label = self.new_label("proof_post");
+
+        let result = self.local_defs.locals[mir::RETURN_PLACE].local_snap;
+        let result = self
+            .vcx
+            .mk_local_decl(
+                vir::vir_format!(self.vcx, "_pf{}", result.name),
+                result.ty(),
+            )
+            .expr(self.vcx);
+
+        let args = self.local_defs.args().map(|a| a.impure_snap);
+        let args = PledgeExpr::pledge_args(result, args);
 
         let wand_datas = self.wands.viper_wands();
 
@@ -95,16 +107,18 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                 body.extend(unblock);
             }
 
-            let spec = self
-                .deps
-                .require_dep::<MirSpecEnc<Purified>>((wand_data.def_id, false))?;
+            let spec = self.deps.require_dep::<MirSpecEnc<Purified>>((
+                wand_data.def_id,
+                wand_data.def_id,
+                false,
+            ))?;
 
             for EncodedPledge {
                 expiry_obligation,
-                spec,
-                span,
+                expiry_postcondition,
             } in spec.pledges.iter().copied()
             {
+                let span = expiry_postcondition.span();
                 self.vcx.with_span(span, |vcx| {
                     vcx.handle_error("exhale.failed:assertion.false", move |_| {
                         Some(vec![PrustiError::verification(
@@ -113,8 +127,9 @@ impl<'vir, E: TaskEncoder> PurifiedEncVisitor<'vir, '_, E> {
                         )])
                     });
 
-                    expiry_obligation.map(|ob| pres.push(vcx.mk_inhale_stmt(ob.expr)));
-                    posts.push(vcx.mk_exhale_stmt(spec));
+                    expiry_obligation
+                        .map(|ob| pres.push(vcx.mk_inhale_stmt(ob.purified_expr(args))));
+                    posts.push(vcx.mk_exhale_stmt(expiry_postcondition.purified_expr(args)));
                 });
             }
             let proof_script = pres
@@ -150,12 +165,12 @@ pub struct PurifiedWandEncOutput<'vir> {
 
 impl<'vir> PurifiedWandEncOutput<'vir> {
     pub(crate) fn fn_sig(&self, vcx: &'vir vir::VirCtxt<'vir>) -> ty::FnSig<'vir> {
-        self.function_data.instantiated_fn_sig(vcx.tcx())
+        self.function_data.identity_fn_sig(vcx.tcx())
     }
 
     pub(crate) fn g_params(&self, vcx: &'vir vir::VirCtxt<'vir>) -> GParams<'vir> {
         GParams::new(
-            self.function_data.substs(),
+            self.function_data.identity_substs(vcx.tcx()),
             self.function_data.param_env(vcx.tcx()),
             false,
         )
@@ -328,15 +343,10 @@ impl TaskEncoder for PurifiedWandEnc {
                 )
             })?;
 
-            let coupled_edges = shape.coupled_edges().map_err(|e| {
-                EncodeFullError::EncodingError(
-                    PurifiedWandEncError::Unsupported(format!("coupled edges: {e:?}")),
-                    None,
-                )
-            })?;
+            let coupled_edges = shape.coupled_edges();
 
             let (inputs, outputs) = shape.take_inputs_and_outputs();
-            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, false))?;
+            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, def_id, false))?;
             if coupled_edges.is_empty() {
                 assert!(spec.pledges.is_empty());
                 return Ok((
@@ -365,16 +375,13 @@ impl TaskEncoder for PurifiedWandEnc {
                     PurifiedWandData::new(def_id, targets, sources)
                 })
                 .collect();
-
-            Ok((
-                (),
-                PurifiedWandEncOutput {
-                    function_data: task_key.data,
-                    inputs,
-                    outputs,
-                    wands,
-                },
-            ))
+            let output: PurifiedWandEncOutput<'vir> = PurifiedWandEncOutput {
+                function_data: task_key.data,
+                inputs,
+                outputs,
+                wands,
+            };
+            Ok(((), output))
         })
     }
 }
@@ -469,29 +476,34 @@ impl TaskEncoder for ReconstructorCallEnc {
         let method_ref = deps.require_ref::<ReconstructorEnc>(task_key.wand_data.clone())?;
         let signature = RustSignature::new(task_key.def_id());
 
-        let gargs = GArgs::new(task_key.def_id(), task_key.fn_data.substs());
-        let ty_args = deps.require_dep::<GArgsTyEnc>(gargs)?;
-        let inputs = signature
-            .inputs
-            .iter()
-            .map(|ty| {
-                let normalized = ty.decompose_compare_normalize(signature.gparams, gargs);
-                deps.require_dep::<GArgsCastEnc<Purified>>(normalized)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let normalized = signature
-            .output
-            .decompose_compare_normalize(signature.gparams, gargs);
-        let output = deps.require_dep::<GArgsCastEnc<Purified>>(normalized)?;
-        Ok((
-            (),
-            ReconstructorCallEncOutput {
-                method: method_ref,
-                ty_args,
-                inputs,
-                outputs: vec![output],
-            },
-        ))
+        vir::with_vcx(|vcx| {
+            let gargs = GArgs::new(
+                task_key.def_id(),
+                task_key.fn_data.identity_substs(vcx.tcx()),
+            );
+            let ty_args = deps.require_dep::<GArgsTyEnc>(gargs)?;
+            let inputs = signature
+                .inputs
+                .iter()
+                .map(|ty| {
+                    let normalized = ty.decompose_compare_normalize(signature.gparams, gargs);
+                    deps.require_dep::<GArgsCastEnc<Purified>>(normalized)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let normalized = signature
+                .output
+                .decompose_compare_normalize(signature.gparams, gargs);
+            let output = deps.require_dep::<GArgsCastEnc<Purified>>(normalized)?;
+            Ok((
+                (),
+                ReconstructorCallEncOutput {
+                    method: method_ref,
+                    ty_args,
+                    inputs,
+                    outputs: vec![output],
+                },
+            ))
+        })
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -591,15 +603,20 @@ impl TaskEncoder for ReconstructorEnc {
                 ),
             );
 
+            assert!(args.len() == 1);
+            let pledge_args =
+                PledgeExpr::pledge_args(args[0].expr(vcx), rets.iter().map(|r| r.expr(vcx)));
+
             deps.emit_output_ref(task_key.clone(), ReconstructorEncOutputRef { method_ref })?;
 
             let pledges = deps
-                .require_dep_spanned::<MirSpecEnc<Purified>>((def_id, false), span)?
+                .require_dep_spanned::<MirSpecEnc<Purified>>((def_id, def_id, false), span)?
                 .pledges;
 
             for p in pledges {
-                p.expiry_obligation_expr().map(|b| pres.push(b));
-                posts.push(p.spec);
+                p.expiry_obligation
+                    .map(|b| pres.push(b.purified_expr(pledge_args)));
+                posts.push(p.expiry_postcondition.purified_expr(pledge_args));
             }
 
             let method = vcx.mk_method(

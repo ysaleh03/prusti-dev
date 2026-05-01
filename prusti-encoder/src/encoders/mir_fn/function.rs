@@ -214,7 +214,7 @@ impl TaskEncoder for FunctionEnc<Impure> {
             deps.emit_output_ref(def_id, FunctionEncOutputRef { function_ref })?;
 
             let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
-            let spec = deps.require_dep::<MirSpecEnc<Impure>>((def_id, true))?;
+            let spec = deps.require_dep::<MirSpecEnc<Impure>>((def_id, def_id, true))?;
 
             let expr = if trusted {
                 None
@@ -331,7 +331,7 @@ impl TaskEncoder for FunctionEnc<Purified> {
             deps.emit_output_ref(def_id, FunctionEncOutputRef { function_ref })?;
 
             let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
-            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, true))?;
+            let spec = deps.require_dep::<MirSpecEnc<Purified>>((def_id, def_id, true))?;
 
             let expr = if trusted {
                 None
