@@ -241,7 +241,9 @@ impl ProcedureSpecification {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TyEncodable, TyDecodable)]
 pub enum ProcedureSpecificationKind {
     Impure,
+    Mendel,
     Pure,
+    PureUnstable,
     /// The specification is a predicate with the enclosed body.
     /// The body can be None to account for abstract predicates.
     Predicate(Option<DefId>),
@@ -256,7 +258,9 @@ impl Display for ProcedureSpecificationKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcedureSpecificationKind::Impure => write!(f, "Impure"),
+            ProcedureSpecificationKind::Mendel => write!(f, "Mendel"),
             ProcedureSpecificationKind::Pure => write!(f, "Pure"),
+            ProcedureSpecificationKind::PureUnstable => write!(f, "PureUnstable"),
             ProcedureSpecificationKind::Predicate(_) => write!(f, "Predicate"),
         }
     }
@@ -264,6 +268,10 @@ impl Display for ProcedureSpecificationKind {
 impl ProcedureSpecificationKind {
     pub fn is_impure(&self) -> bool {
         matches!(self, ProcedureSpecificationKind::Impure)
+    }
+
+    pub fn is_mendel(&self) -> bool {
+        matches!(self, ProcedureSpecificationKind::Mendel)
     }
 }
 
@@ -687,11 +695,23 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         ))
     }
 
+    pub fn is_mendel(&self) -> Result<bool, ProcedureSpecificationKindError> {
+        self.validate()?;
+
+        Ok(matches!(
+            self.extract_with_selective_replacement(),
+            Some(ProcedureSpecificationKind::Mendel)
+        ))
+    }
+
     pub fn is_impure(&self) -> Result<bool, ProcedureSpecificationKindError> {
         self.validate()?;
 
         Ok(match self.extract_with_selective_replacement() {
-            Some(refined) => matches!(refined, ProcedureSpecificationKind::Impure),
+            Some(refined) => matches!(
+                refined,
+                ProcedureSpecificationKind::Impure | ProcedureSpecificationKind::Mendel
+            ),
             _ => true,
         })
     }
@@ -711,9 +731,12 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         use ProcedureSpecificationKind::*;
         if let SpecificationItem::Refined(base, refined) = self {
             match (base, refined) {
-                (Impure, Impure) | (Impure, Pure) | (Pure, Pure) | (Predicate(_), Predicate(_)) => {
-                    Ok(())
-                }
+                (Impure, Impure)
+                | (Impure, Mendel)
+                | (Impure, Pure)
+                | (Impure, PureUnstable)
+                | (Pure, Pure)
+                | (Predicate(_), Predicate(_)) => Ok(()),
                 _ => Err(ProcedureSpecificationKindError::InvalidSpecKindRefinement(
                     *base, *refined,
                 )),

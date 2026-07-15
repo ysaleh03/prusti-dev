@@ -41,6 +41,8 @@ use prusti_specs::specifications::common::SpecificationId;
 struct ProcedureSpecRefs {
     spec_id_refs: Vec<SpecIdRef>,
     pure: bool,
+    pure_unstable: bool,
+    mendel: bool,
     abstract_predicate: bool,
     trusted: bool,
 }
@@ -51,6 +53,10 @@ impl From<&ProcedureSpecRefs> for ProcedureSpecificationKind {
             ProcedureSpecificationKind::Predicate(None)
         } else if refs.pure {
             ProcedureSpecificationKind::Pure
+        } else if refs.pure_unstable {
+            ProcedureSpecificationKind::PureUnstable
+        } else if refs.mendel {
+            ProcedureSpecificationKind::Mendel
         } else {
             ProcedureSpecificationKind::Impure
         }
@@ -432,14 +438,19 @@ fn get_procedure_spec_ids(def_id: DefId, attrs: &[hir::Attribute]) -> Option<Pro
     );
 
     let pure = has_prusti_attr(attrs, "pure");
+    let pure_unstable = has_prusti_attr(attrs, "pure_unstable");
+    let mendel = has_prusti_attr(attrs, "mendel");
     let trusted = has_prusti_attr(attrs, "trusted")
         || (!is_predicate && config::opt_in_verification() && !has_prusti_attr(attrs, "verified"));
     let abstract_predicate = has_abstract_predicate_attr(attrs);
 
-    if abstract_predicate || pure || trusted || !spec_id_refs.is_empty() {
+    if abstract_predicate || pure || pure_unstable || mendel || trusted || !spec_id_refs.is_empty()
+    {
         Some(ProcedureSpecRefs {
             spec_id_refs,
             pure,
+            pure_unstable,
+            mendel,
             abstract_predicate,
             trusted,
         })

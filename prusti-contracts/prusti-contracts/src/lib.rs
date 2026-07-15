@@ -45,6 +45,12 @@ pub use prusti_contracts_proc_macros::assert_on_expiry;
 /// A macro for marking a function as pure.
 pub use prusti_contracts_proc_macros::pure;
 
+/// A macro for marking a function as pure_unstable.
+pub use prusti_contracts_proc_macros::pure_unstable;
+
+/// A macro for marking a function as mendel.
+pub use prusti_contracts_proc_macros::mendel;
+
 /// A macro for marking a function as trusted.
 pub use prusti_contracts_proc_macros::trusted;
 

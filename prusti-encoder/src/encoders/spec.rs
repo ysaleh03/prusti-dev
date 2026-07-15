@@ -46,6 +46,15 @@ where
     })
 }
 
+pub fn is_function_mendel(def_id: DefId) -> bool {
+    let substs = ty::GenericArgs::identity_for_item(vir::with_vcx(|vcx| vcx.tcx()), def_id);
+    with_proc_spec(
+        SpecQuery::GetProcKind(def_id, substs),
+        |proc_spec: &ProcedureSpecification| proc_spec.kind.is_mendel().unwrap_or_default(),
+    )
+    .unwrap_or_default()
+}
+
 pub fn is_function_trusted(def_id: DefId) -> bool {
     let substs = ty::GenericArgs::identity_for_item(vir::with_vcx(|vcx| vcx.tcx()), def_id);
     with_proc_spec(

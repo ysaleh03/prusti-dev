@@ -85,6 +85,8 @@ fn extract_prusti_attributes(
                     }
                     // Nothing to do for attributes without arguments.
                     SpecAttributeKind::Pure
+                    | SpecAttributeKind::PureUnstable
+                    | SpecAttributeKind::Mendel
                     | SpecAttributeKind::Terminates
                     | SpecAttributeKind::Trusted
                     | SpecAttributeKind::Predicate
@@ -167,6 +169,8 @@ fn generate_spec_and_assertions(
             SpecAttributeKind::AfterExpiry => generate_for_after_expiry(attr_tokens, item),
             SpecAttributeKind::AssertOnExpiry => generate_for_assert_on_expiry(attr_tokens, item),
             SpecAttributeKind::Pure => generate_for_pure(attr_tokens, item),
+            SpecAttributeKind::PureUnstable => generate_for_pure_unstable(attr_tokens, item),
+            SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, item),
             SpecAttributeKind::Verified => generate_for_verified(attr_tokens, item),
             SpecAttributeKind::Terminates => generate_for_terminates(attr_tokens, item),
             SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, item),
@@ -294,6 +298,40 @@ fn generate_for_pure(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedR
         vec![],
         vec![parse_quote_spanned! {item.span()=>
             #[prusti::pure]
+        }],
+    ))
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "pure_unstable" annotations.
+fn generate_for_pure_unstable(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+    if !attr.is_empty() {
+        return Err(syn::Error::new(
+            attr.span(),
+            "the `#[pure_unstable]` attribute does not take parameters",
+        ));
+    }
+
+    Ok((
+        vec![],
+        vec![parse_quote_spanned! {item.span()=>
+            #[prusti::pure_unstable]
+        }],
+    ))
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "mendel" annotations.
+fn generate_for_mendel(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+    if !attr.is_empty() {
+        return Err(syn::Error::new(
+            attr.span(),
+            "the `#[mendel]` attribute does not take parameters",
+        ));
+    }
+
+    Ok((
+        vec![],
+        vec![parse_quote_spanned! {item.span()=>
+            #[prusti::mendel]
         }],
     ))
 }
@@ -865,6 +903,8 @@ fn extract_prusti_attributes_for_types(
                     SpecAttributeKind::AssertOnExpiry => unreachable!("assert_on_expiry on type"),
                     SpecAttributeKind::RefineSpec => unreachable!("refine_spec on type"),
                     SpecAttributeKind::Pure => unreachable!("pure on type"),
+                    SpecAttributeKind::PureUnstable => unreachable!("pure_unstable on type"),
+                    SpecAttributeKind::Mendel => unreachable!("mendel on type"),
                     SpecAttributeKind::Verified => unreachable!("verified on type"),
                     SpecAttributeKind::Invariant => unreachable!("invariant on type"),
                     SpecAttributeKind::Predicate => unreachable!("predicate on type"),
@@ -911,6 +951,8 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::AfterExpiry => unreachable!(),
             SpecAttributeKind::AssertOnExpiry => unreachable!(),
             SpecAttributeKind::Pure => unreachable!(),
+            SpecAttributeKind::PureUnstable => unreachable!(),
+            SpecAttributeKind::Mendel => unreachable!(),
             SpecAttributeKind::Verified => unreachable!(),
             SpecAttributeKind::Predicate => unreachable!(),
             SpecAttributeKind::Invariant => unreachable!(),
