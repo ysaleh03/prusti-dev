@@ -60,7 +60,7 @@ macro_rules! result_to_tokens {
 
 fn extract_prusti_attributes(
     item: &mut untyped::AnyFnItem,
-) -> Vec<(SpecAttributeKind, TokenStream)> {
+) -> Vec<(SpecAttributeKind, Span, TokenStream)> {
     let mut prusti_attributes = Vec::new();
     let mut regular_attributes = Vec::new();
     for attr in item.attrs_mut().drain(0..) {
@@ -69,6 +69,9 @@ fn extract_prusti_attributes(
         {
             let idx = attr.path.segments.len() - 1;
             if let Ok(attr_kind) = attr.path.segments[idx].ident.to_string().try_into() {
+                // The span of the annotation itself, so diagnostics can point
+                // at the specific attribute rather than the whole item.
+                let attr_span = attr.path.span();
                 let tokens = match attr_kind {
                     SpecAttributeKind::Requires
                     | SpecAttributeKind::Ensures
@@ -104,7 +107,7 @@ fn extract_prusti_attributes(
                         unreachable!("print_counterexample on function")
                     }
                 };
-                prusti_attributes.push((attr_kind, tokens));
+                prusti_attributes.push((attr_kind, attr_span, tokens));
             } else {
                 regular_attributes.push(attr);
             }
@@ -127,8 +130,9 @@ pub fn rewrite_prusti_attributes(
 ) -> TokenStream {
     let mut item: untyped::AnyFnItem = handle_result!(syn::parse2(item_tokens));
 
-    // Start with the outer attribute
-    let mut prusti_attributes = vec![(outer_attr_kind, outer_attr_tokens)];
+    // Start with the outer attribute. It is the one the compiler ran as the
+    // procedural macro, so its span is the call site.
+    let mut prusti_attributes = vec![(outer_attr_kind, Span::call_site(), outer_attr_tokens)];
 
     // Collect the remaining Prusti attributes, removing them from `item`.
     prusti_attributes.extend(extract_prusti_attributes(&mut item));
@@ -136,7 +140,7 @@ pub fn rewrite_prusti_attributes(
     // make sure to also update the check in the predicate! handling method
     if prusti_attributes
         .iter()
-        .any(|(ak, _)| ak == &SpecAttributeKind::Predicate)
+        .any(|(ak, _, _)| ak == &SpecAttributeKind::Predicate)
     {
         return syn::Error::new(
             item.span(),
@@ -160,26 +164,30 @@ type GeneratedResult = syn::Result<(Vec<syn::Item>, Vec<syn::Attribute>)>;
 
 /// Generate spec items and attributes for `item` from the Prusti attributes
 fn generate_spec_and_assertions(
-    mut prusti_attributes: Vec<(SpecAttributeKind, TokenStream)>,
+    mut prusti_attributes: Vec<(SpecAttributeKind, Span, TokenStream)>,
     item: &untyped::AnyFnItem,
 ) -> GeneratedResult {
     let mut generated_items = vec![];
     let mut generated_attributes = vec![];
 
-    for (attr_kind, attr_tokens) in prusti_attributes.drain(..) {
+    for (attr_kind, attr_span, attr_tokens) in prusti_attributes.drain(..) {
         let rewriting_result = match attr_kind {
-            SpecAttributeKind::Requires => generate_for_requires(attr_tokens, item),
-            SpecAttributeKind::Ensures => generate_for_ensures(attr_tokens, item),
-            SpecAttributeKind::AfterExpiry => generate_for_after_expiry(attr_tokens, item),
-            SpecAttributeKind::AssertOnExpiry => generate_for_assert_on_expiry(attr_tokens, item),
-            SpecAttributeKind::Pure => generate_for_pure(attr_tokens, item),
+            SpecAttributeKind::Requires => generate_for_requires(attr_tokens, attr_span, item),
+            SpecAttributeKind::Ensures => generate_for_ensures(attr_tokens, attr_span, item),
+            SpecAttributeKind::AfterExpiry => {
+                generate_for_after_expiry(attr_tokens, attr_span, item)
+            }
+            SpecAttributeKind::AssertOnExpiry => {
+                generate_for_assert_on_expiry(attr_tokens, attr_span, item)
+            }
+            SpecAttributeKind::Pure => generate_for_pure(attr_tokens, attr_span, item),
             SpecAttributeKind::PureUnstable => generate_for_pure_unstable(attr_tokens, item),
             SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, item),
             SpecAttributeKind::AbstractPointer => generate_for_abstract_ptr(attr_tokens, item),
             SpecAttributeKind::LocalRegion => generate_for_local_region(attr_tokens, item),
-            SpecAttributeKind::Verified => generate_for_verified(attr_tokens, item),
-            SpecAttributeKind::Terminates => generate_for_terminates(attr_tokens, item),
-            SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, item),
+            SpecAttributeKind::Verified => generate_for_verified(attr_tokens, attr_span, item),
+            SpecAttributeKind::Terminates => generate_for_terminates(attr_tokens, attr_span, item),
+            SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, attr_span, item),
             // Predicates are handled separately below; the entry in the SpecAttributeKind enum
             // only exists so we successfully parse it and emit an error in
             // `check_incompatible_attrs`; so we'll never reach here.
@@ -198,7 +206,11 @@ fn generate_spec_and_assertions(
 }
 
 /// Generate spec items and attributes to typecheck the and later retrieve "requires" annotations.
-fn generate_for_requires(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_requires(
+    attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     let mut rewriter = rewriter::AstRewriter::new();
     let spec_id = rewriter.generate_spec_id();
     let spec_id_str = spec_id.to_string();
@@ -206,14 +218,18 @@ fn generate_for_requires(attr: TokenStream, item: &untyped::AnyFnItem) -> Genera
         rewriter.process_assertion(rewriter::SpecItemType::Precondition, spec_id, attr, item)?;
     Ok((
         vec![spec_item],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::pre_spec_id_ref = #spec_id_str]
         }],
     ))
 }
 
 /// Generate spec items and attributes to typecheck the and later retrieve "ensures" annotations.
-fn generate_for_ensures(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_ensures(
+    attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     let mut rewriter = rewriter::AstRewriter::new();
     let spec_id = rewriter.generate_spec_id();
     let spec_id_str = spec_id.to_string();
@@ -221,28 +237,36 @@ fn generate_for_ensures(attr: TokenStream, item: &untyped::AnyFnItem) -> Generat
         rewriter.process_assertion(rewriter::SpecItemType::Postcondition, spec_id, attr, item)?;
     Ok((
         vec![spec_item],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::post_spec_id_ref = #spec_id_str]
         }],
     ))
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "after_expiry" annotations.
-fn generate_for_after_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_after_expiry(
+    attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     let mut rewriter = rewriter::AstRewriter::new();
     let spec_id = rewriter.generate_spec_id();
     let spec_id_str = spec_id.to_string();
     let spec_item = rewriter.process_pledge(spec_id, attr, item)?;
     Ok((
         vec![spec_item],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::pledge_spec_id_ref = #spec_id_str]
         }],
     ))
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "after_expiry" annotations.
-fn generate_for_assert_on_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_assert_on_expiry(
+    attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     let mut rewriter = rewriter::AstRewriter::new();
     let spec_id_lhs = rewriter.generate_spec_id();
     let spec_id_lhs_str = spec_id_lhs.to_string();
@@ -253,10 +277,10 @@ fn generate_for_assert_on_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -
     Ok((
         vec![spec_item_lhs, spec_item_rhs],
         vec![
-            parse_quote_spanned! {item.span()=>
+            parse_quote_spanned! {span=>
                 #[prusti::assert_pledge_spec_id_ref_lhs = #spec_id_lhs_str]
             },
-            parse_quote_spanned! {item.span()=>
+            parse_quote_spanned! {span=>
                 #[prusti::assert_pledge_spec_id_ref_rhs = #spec_id_rhs_str]
             },
         ],
@@ -264,7 +288,11 @@ fn generate_for_assert_on_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "terminates" annotations.
-fn generate_for_terminates(mut attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_terminates(
+    mut attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if attr.is_empty() {
         attr = quote! { Int::from(1) };
     } else {
@@ -285,14 +313,14 @@ fn generate_for_terminates(mut attr: TokenStream, item: &untyped::AnyFnItem) -> 
 
     Ok((
         vec![spec_item],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::terminates_spec_id_ref = #spec_id_str]
         }],
     ))
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "pure" annotations.
-fn generate_for_pure(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_pure(attr: TokenStream, span: Span, _item: &untyped::AnyFnItem) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -302,7 +330,7 @@ fn generate_for_pure(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedR
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::pure]
         }],
     ))
@@ -377,7 +405,11 @@ fn generate_for_local_region(attr: TokenStream, item: &untyped::AnyFnItem) -> Ge
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "verified" annotations.
-fn generate_for_verified(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_verified(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -387,7 +419,7 @@ fn generate_for_verified(attr: TokenStream, item: &untyped::AnyFnItem) -> Genera
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::verified]
         }],
     ))
@@ -409,7 +441,11 @@ fn generate_for_pure_refinements(item: &untyped::AnyFnItem) -> GeneratedResult {
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "trusted" annotations.
-fn generate_for_trusted(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_trusted(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -419,7 +455,7 @@ fn generate_for_trusted(attr: TokenStream, item: &untyped::AnyFnItem) -> Generat
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::trusted]
         }],
     ))
@@ -643,8 +679,8 @@ pub fn refine_trait_spec(_attr: TokenStream, tokens: TokenStream) -> TokenStream
 
                 let illegal_attribute_span = prusti_attributes
                     .iter()
-                    .filter(|(kind, _)| kind == &SpecAttributeKind::RefineSpec)
-                    .map(|(_, tokens)| tokens.span())
+                    .filter(|(kind, _, _)| kind == &SpecAttributeKind::RefineSpec)
+                    .map(|(_, _, tokens)| tokens.span())
                     .next();
                 if let Some(span) = illegal_attribute_span {
                     let err = Err(syn::Error::new(
@@ -703,6 +739,7 @@ pub fn refine_trait_spec(_attr: TokenStream, tokens: TokenStream) -> TokenStream
     impl_block.items = new_items;
     quote_spanned! {impl_block.span()=>
         #(#generated_spec_items)*
+        #[prusti::refine_trait_spec]
         #[prusti::specs_version = #SPECS_VERSION]
         #impl_block
     }
