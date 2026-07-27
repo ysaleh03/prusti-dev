@@ -644,9 +644,9 @@ mod private {
 
     #[non_exhaustive]
     #[derive(PartialEq, Eq, Copy, Clone)]
-    pub struct AbsPtr<T>{
+    pub struct AbsPtr<T> {
         _phantom: PhantomData<T>,
-    };
+    }
 
     impl<T> AbsPtr<T> {
         // #[ghost_fn]

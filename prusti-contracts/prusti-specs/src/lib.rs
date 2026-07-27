@@ -18,7 +18,6 @@ mod rewriter;
 mod span_overrider;
 mod spec_attribute_kind;
 mod mendel_spec_rewriter;
-mod mendel_spec_rewriter;
 pub mod specifications;
 mod type_model;
 mod user_provided_type_params;
@@ -182,8 +181,10 @@ fn generate_spec_and_assertions(
                 generate_for_assert_on_expiry(attr_tokens, attr_span, item)
             }
             SpecAttributeKind::Pure => generate_for_pure(attr_tokens, attr_span, item),
-            SpecAttributeKind::PureUnstable => generate_for_pure_unstable(attr_tokens, item),
-            SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, item),
+            SpecAttributeKind::PureUnstable => {
+                generate_for_pure_unstable(attr_tokens, attr_span, item)
+            }
+            SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, attr_span, item),
             SpecAttributeKind::AbstractPointer => generate_for_abstract_ptr(attr_tokens, item),
             SpecAttributeKind::LocalRegion => generate_for_local_region(attr_tokens, item),
             SpecAttributeKind::Verified => generate_for_verified(attr_tokens, attr_span, item),
@@ -373,7 +374,7 @@ fn generate_for_mendel(
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::mendel]
         }],
     ))
