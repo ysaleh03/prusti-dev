@@ -18,6 +18,7 @@ mod rewriter;
 mod span_overrider;
 mod spec_attribute_kind;
 mod mendel_spec_rewriter;
+mod mendel_spec_rewriter;
 pub mod specifications;
 mod type_model;
 mod user_provided_type_params;
@@ -337,7 +338,11 @@ fn generate_for_pure(attr: TokenStream, span: Span, _item: &untyped::AnyFnItem) 
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "pure_unstable" annotations.
-fn generate_for_pure_unstable(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_pure_unstable(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -347,14 +352,18 @@ fn generate_for_pure_unstable(attr: TokenStream, item: &untyped::AnyFnItem) -> G
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::pure_unstable]
         }],
     ))
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "mendel" annotations.
-fn generate_for_mendel(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_mendel(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -364,7 +373,7 @@ fn generate_for_mendel(attr: TokenStream, item: &untyped::AnyFnItem) -> Generate
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span()=>
             #[prusti::mendel]
         }],
     ))
