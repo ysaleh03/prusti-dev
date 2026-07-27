@@ -17,6 +17,7 @@ mod predicate;
 mod rewriter;
 mod span_overrider;
 mod spec_attribute_kind;
+mod mendel_spec_rewriter;
 pub mod specifications;
 mod type_model;
 mod user_provided_type_params;
@@ -34,6 +35,7 @@ use crate::{
     specifications::preparser::{parse_prusti, parse_type_cond_spec, NestedSpec},
 };
 pub use extern_spec_rewriter::ExternSpecKind;
+pub use mendel_spec_rewriter::MendelSpecKind;
 use parse_closure_macro::ClosureWithSpec;
 pub use spec_attribute_kind::SpecAttributeKind;
 use specifications::{common::SpecificationId, untyped};
@@ -90,7 +92,9 @@ fn extract_prusti_attributes(
                     | SpecAttributeKind::Terminates
                     | SpecAttributeKind::Trusted
                     | SpecAttributeKind::Predicate
-                    | SpecAttributeKind::Verified => {
+                    | SpecAttributeKind::Verified
+                    | SpecAttributeKind::AbstractPointer
+                    | SpecAttributeKind::LocalRegion => {
                         assert!(attr.tokens.is_empty(), "Unexpected shape of an attribute.");
                         attr.tokens
                     }
@@ -171,6 +175,8 @@ fn generate_spec_and_assertions(
             SpecAttributeKind::Pure => generate_for_pure(attr_tokens, item),
             SpecAttributeKind::PureUnstable => generate_for_pure_unstable(attr_tokens, item),
             SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, item),
+            SpecAttributeKind::AbstractPointer => generate_for_abstract_ptr(attr_tokens, item),
+            SpecAttributeKind::LocalRegion => generate_for_local_region(attr_tokens, item),
             SpecAttributeKind::Verified => generate_for_verified(attr_tokens, item),
             SpecAttributeKind::Terminates => generate_for_terminates(attr_tokens, item),
             SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, item),
@@ -332,6 +338,40 @@ fn generate_for_mendel(attr: TokenStream, item: &untyped::AnyFnItem) -> Generate
         vec![],
         vec![parse_quote_spanned! {item.span()=>
             #[prusti::mendel]
+        }],
+    ))
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "abstract_ptr" annotations.
+fn generate_for_abstract_ptr(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+    if !attr.is_empty() {
+        return Err(syn::Error::new(
+            attr.span(),
+            "the `#[abstract_ptr]` attribute does not take parameters",
+        ));
+    }
+
+    Ok((
+        vec![],
+        vec![parse_quote_spanned! {item.span()=>
+            #[prusti::abstract_ptr]
+        }],
+    ))
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "local_region" annotations.
+fn generate_for_local_region(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+    if !attr.is_empty() {
+        return Err(syn::Error::new(
+            attr.span(),
+            "the `#[local_region]` attribute does not take parameters",
+        ));
+    }
+
+    Ok((
+        vec![],
+        vec![parse_quote_spanned! {item.span()=>
+            #[prusti::local_region]
         }],
     ))
 }
@@ -844,6 +884,64 @@ pub fn extern_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     })
 }
 
+pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    result_to_tokens!({
+        let item: syn::Item = syn::parse2(tokens)?;
+        let mod_path: syn::Path = Some(attr)
+            .filter(|attr| !attr.is_empty())
+            .map(syn::parse2)
+            .transpose()?
+            .unwrap_or_else(|| syn::Path {
+                leading_colon: None,
+                segments: syn::punctuated::Punctuated::new(),
+            });
+        match item {
+            // syn::Item::Impl(item_impl) => {
+            //     if !mod_path.segments.is_empty() {
+            //         return Err(syn::Error::new(
+            //             mod_path.span(),
+            //             "mendel_spec does not take a path argument for impls--you can qualify the involved types directly",
+            //         ));
+            //     }
+            //     mendel_spec_rewriter::impls::rewrite_mendel_spec(&item_impl)
+            // }
+            syn::Item::Trait(mut item_trait) => {
+                let token_stream =
+                    mendel_spec_rewriter::traits::rewrite_mendel_spec(&mut item_trait, mod_path);
+                let _ = token_stream.clone().map(|op| println!("{op}"));
+                token_stream
+            }
+            _ => Err(syn::Error::new(
+                Span::call_site(),
+                "Mendel specs cannot be attached to this item",
+            )),
+        }
+    })
+}
+
+struct DerefInput {
+    root: syn::Ident,
+    at: syn::Token![@],
+    name: syn::Ident,
+}
+
+impl syn::parse::Parse for DerefInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let root = input.call(<syn::Ident as syn::ext::IdentExt>::parse_any)?;
+        let at = input.parse()?;
+        let name = input.parse()?;
+        Ok(DerefInput { root, at, name })
+    }
+}
+
+pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
+    let deref_input: DerefInput =
+        syn::parse2(tokens).expect("Malformed deref input, expected <root>@<name>");
+    let root = deref_input.root;
+    let name = deref_input.name;
+    syn::parse_quote! { #root . #name () . deref() }
+}
+
 pub fn predicate(tokens: TokenStream) -> TokenStream {
     let parsed = handle_result!(predicate::parse_predicate(tokens));
     parsed.into_token_stream()
@@ -905,6 +1003,8 @@ fn extract_prusti_attributes_for_types(
                     SpecAttributeKind::Pure => unreachable!("pure on type"),
                     SpecAttributeKind::PureUnstable => unreachable!("pure_unstable on type"),
                     SpecAttributeKind::Mendel => unreachable!("mendel on type"),
+                    SpecAttributeKind::AbstractPointer => unreachable!("abstract_ptr on type"),
+                    SpecAttributeKind::LocalRegion => unreachable!("local_region on type"),
                     SpecAttributeKind::Verified => unreachable!("verified on type"),
                     SpecAttributeKind::Invariant => unreachable!("invariant on type"),
                     SpecAttributeKind::Predicate => unreachable!("predicate on type"),
@@ -953,6 +1053,8 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::Pure => unreachable!(),
             SpecAttributeKind::PureUnstable => unreachable!(),
             SpecAttributeKind::Mendel => unreachable!(),
+            SpecAttributeKind::AbstractPointer => unreachable!(),
+            SpecAttributeKind::LocalRegion => unreachable!(),
             SpecAttributeKind::Verified => unreachable!(),
             SpecAttributeKind::Predicate => unreachable!(),
             SpecAttributeKind::Invariant => unreachable!(),

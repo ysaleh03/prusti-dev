@@ -72,11 +72,23 @@ pub use prusti_contracts_proc_macros::prusti_assume;
 /// A macro for writing refutations using prusti syntax
 pub use prusti_contracts_proc_macros::prusti_refute;
 
+/// A macro for declaring abstract pointers using mendel syntax
+pub use prusti_contracts_proc_macros::abstract_ptr;
+
+/// A macro for declaring local regions using mendel syntax
+pub use prusti_contracts_proc_macros::local_region;
+
+/// A macro for dereferencing an abstract pointer using mendel syntax
+pub use prusti_contracts_proc_macros::ptr_deref;
+
 /// A macro for impl blocks that refine trait specifications.
 pub use prusti_contracts_proc_macros::refine_trait_spec;
 
 /// A macro for specifying external functions.
 pub use prusti_contracts_proc_macros::extern_spec;
+
+/// A macro for specifying types using mendel.
+pub use prusti_contracts_proc_macros::mendel_spec;
 
 /// A macro for defining a predicate using prusti expression syntax instead
 /// of just Rust expressions.
@@ -165,7 +177,10 @@ mod private {
     use std::cmp::Ordering;
 
     /// A macro for defining a closure with a specification.
-    pub use prusti_contracts_proc_macros::{closure, pure};
+    pub use prusti_contracts_proc_macros::{closure, ensures, ghost, pure, pure_unstable, trusted};
+
+    /// A macro for snapshot equality.
+    pub use crate::{snap, snapshot_equality};
 
     pub fn prusti_set_union_active_field<T>(_arg: T) {
         unreachable!();
@@ -402,6 +417,26 @@ mod private {
             panic!()
         }
     }
+
+    #[non_exhaustive]
+    #[derive(PartialEq, Eq, Copy, Clone)]
+    pub struct AbsPtr<T>{
+        _phantom: PhantomData<T>,
+    };
+
+    impl<T> AbsPtr<T> {
+        // #[ghost_fn]
+        #[trusted]
+        #[pure_unstable]
+        #[ensures(snap(&self.0) === result)]
+        pub fn deref(&self) -> T {
+            unimplemented!()
+        }
+    }
+
+    #[non_exhaustive]
+    #[derive(PartialEq, Eq, Copy, Clone)]
+    pub struct LocalRegion;
 }
 
 /// This function is used to mark the beginning of evaluation of expressions

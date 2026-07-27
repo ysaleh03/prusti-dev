@@ -54,6 +54,24 @@ pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
+pub fn mendel_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
+#[cfg(not(feature = "prusti"))]
+#[proc_macro_attribute]
+pub fn abstract_ptr(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
+#[cfg(not(feature = "prusti"))]
+#[proc_macro_attribute]
+pub fn local_region(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
+#[cfg(not(feature = "prusti"))]
+#[proc_macro_attribute]
 pub fn trusted(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     tokens
 }
@@ -197,6 +215,29 @@ pub fn mendel(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
+pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    prusti_specs::mendel_spec(attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn abstract_ptr(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(
+        SpecAttributeKind::AbstractPointer,
+        attr.into(),
+        tokens.into(),
+    )
+    .into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn local_region(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(SpecAttributeKind::LocalRegion, attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
 pub fn trusted(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     prusti_specs::trusted(attr.into(), tokens.into()).into()
 }
@@ -235,6 +276,12 @@ pub fn prusti_refute(tokens: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn closure(tokens: TokenStream) -> TokenStream {
     prusti_specs::closure(tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro]
+pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
+    prusti_specs::ptr_deref(tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]

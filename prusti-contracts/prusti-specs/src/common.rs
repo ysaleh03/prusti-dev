@@ -144,8 +144,8 @@ mod syn_extensions {
 /// See [SelfTypeRewriter]
 mod self_type_rewriter {
     use syn::{
-        parse_quote_spanned, spanned::Spanned, visit_mut::VisitMut, ImplItemMethod, ItemFn, Type,
-        TypePath, WhereClause,
+        parse_quote_spanned, spanned::Spanned, visit_mut::VisitMut, ImplItemMethod, ItemFn,
+        TraitItemMethod, Type, TypePath, WhereClause,
     };
 
     /// Given a replacement for the `Self` type and the trait it should fulfill,
@@ -189,6 +189,16 @@ mod self_type_rewriter {
         }
     }
 
+    impl SelfTypeRewriter for TraitItemMethod {
+        fn rewrite_self_type(&mut self, self_type: &Type, self_type_trait: Option<&TypePath>) {
+            let mut rewriter = Rewriter {
+                self_type,
+                self_type_trait,
+            };
+            rewriter.rewrite_trait_item_method(self);
+        }
+    }
+
     impl SelfTypeRewriter for WhereClause {
         fn rewrite_self_type(&mut self, self_type: &Type, self_type_trait: Option<&TypePath>) {
             let mut rewriter = Rewriter {
@@ -207,6 +217,10 @@ mod self_type_rewriter {
     impl Rewriter<'_> {
         pub fn rewrite_impl_item_method(&mut self, item: &mut ImplItemMethod) {
             syn::visit_mut::visit_impl_item_method_mut(self, item);
+        }
+
+        pub fn rewrite_trait_item_method(&mut self, item: &mut TraitItemMethod) {
+            syn::visit_mut::visit_trait_item_method_mut(self, item);
         }
 
         pub fn rewrite_item_fn(&mut self, item: &mut syn::ItemFn) {
@@ -261,7 +275,7 @@ mod receiver_rewriter {
     use quote::{quote, quote_spanned};
     use syn::{
         parse_quote_spanned, spanned::Spanned, visit_mut::VisitMut, FnArg, ImplItemMethod, ItemFn,
-        Macro, Type,
+        Macro, TraitItemMethod, Type,
     };
 
     /// Rewrites the receiver of a method-like item.
@@ -291,6 +305,13 @@ mod receiver_rewriter {
         }
     }
 
+    impl RewritableReceiver for TraitItemMethod {
+        fn rewrite_receiver(&mut self, new_ty: &Type) {
+            let mut rewriter = Rewriter { new_ty };
+            rewriter.rewrite_trait_item_method(self);
+        }
+    }
+
     impl RewritableReceiver for ItemFn {
         fn rewrite_receiver(&mut self, new_ty: &Type) {
             let mut rewriter = Rewriter { new_ty };
@@ -305,6 +326,10 @@ mod receiver_rewriter {
     impl Rewriter<'_> {
         fn rewrite_impl_item_method(&mut self, item: &mut ImplItemMethod) {
             syn::visit_mut::visit_impl_item_method_mut(self, item);
+        }
+
+        fn rewrite_trait_item_method(&mut self, item: &mut TraitItemMethod) {
+            syn::visit_mut::visit_trait_item_method_mut(self, item);
         }
 
         fn rewrite_item_fn(&mut self, item: &mut ItemFn) {

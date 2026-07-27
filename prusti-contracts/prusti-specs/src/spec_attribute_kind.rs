@@ -20,6 +20,8 @@ pub enum SpecAttributeKind {
     Terminates = 12,
     PrintCounterexample = 13,
     Verified = 14,
+    AbstractPointer = 15,
+    LocalRegion = 16,
 }
 
 impl TryFrom<String> for SpecAttributeKind {
@@ -41,6 +43,8 @@ impl TryFrom<String> for SpecAttributeKind {
             "model" => Ok(SpecAttributeKind::Model),
             "print_counterexample" => Ok(SpecAttributeKind::PrintCounterexample),
             "verified" => Ok(SpecAttributeKind::Verified),
+            "abstract_ptr" => Ok(SpecAttributeKind::AbstractPointer),
+            "local_region" => Ok(SpecAttributeKind::LocalRegion),
             _ => Err(name),
         }
     }

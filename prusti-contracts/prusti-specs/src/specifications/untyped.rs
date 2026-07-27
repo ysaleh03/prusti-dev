@@ -72,6 +72,13 @@ impl AnyFnItem {
         }
     }
 
+    pub fn expect_trait_item(self) -> syn::TraitItemMethod {
+        match self {
+            AnyFnItem::TraitMethod(i) => i,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn expect_foreign_item_fn(self) -> syn::ForeignItemFn {
         match self {
             AnyFnItem::ForeignFn(f) => f,
