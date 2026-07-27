@@ -418,6 +418,29 @@ mod private_shared {
     pub fn ghost_erased<T: ?Sized>() -> Ghost<T> {
         Ghost(PhantomData)
     }
+
+    use prusti_contracts_proc_macros::{pure_unstable, trusted};
+
+    pub struct AbsPtr<T>(PhantomData<T>);
+
+    impl<T> Clone for AbsPtr<T> {
+        fn clone(&self) -> Self {
+            AbsPtr(PhantomData)
+        }
+    }
+    impl<T> Copy for AbsPtr<T> {}
+
+    impl<T> AbsPtr<T> {
+        // #[ghost_fn]
+        #[trusted]
+        #[pure_unstable]
+        pub fn deref(&self) -> T {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct LocalRegion(());
 }
 
 #[cfg(not(feature = "prusti"))]
@@ -475,10 +498,7 @@ mod private {
     use core::{cmp::Ordering, ops::Deref};
 
     /// A macro for defining a closure with a specification.
-    pub use prusti_contracts_proc_macros::{closure, ensures, ghost, pure, pure_unstable, trusted};
-
-    /// A macro for snapshot equality.
-    pub use crate::{snap, snapshot_equality};
+    pub use prusti_contracts_proc_macros::{closure, pure};
 
     /// A macro for defining ghost blocks which will be left in for
     /// verification but omitted during compilation.
@@ -642,25 +662,25 @@ mod private {
         }
     }
 
-    #[non_exhaustive]
-    #[derive(PartialEq, Eq, Copy, Clone)]
-    pub struct AbsPtr<T> {
-        _phantom: PhantomData<T>,
-    }
+    // AbsPtr
 
-    impl<T> AbsPtr<T> {
-        // #[ghost_fn]
-        #[trusted]
-        #[pure_unstable]
-        #[ensures(snap(&self.0) === result)]
-        pub fn deref(&self) -> T {
-            unimplemented!()
+    /// Snapshot equality (see the note above).
+    impl<T> PartialEq for AbsPtr<T> {
+        fn eq(&self, _: &Self) -> bool {
+            panic!()
         }
     }
+    impl<T> Eq for AbsPtr<T> {}
 
-    #[non_exhaustive]
-    #[derive(PartialEq, Eq, Copy, Clone)]
-    pub struct LocalRegion;
+    // LocalRegion
+
+    /// Snapshot equality (see the note above).
+    impl PartialEq for LocalRegion {
+        fn eq(&self, _: &Self) -> bool {
+            panic!()
+        }
+    }
+    impl Eq for LocalRegion {}
 }
 
 /// This function is used to mark the beginning of evaluation of expressions

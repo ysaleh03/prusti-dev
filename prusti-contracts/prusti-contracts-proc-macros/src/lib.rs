@@ -54,18 +54,6 @@ pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn pure_unstable(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    tokens
-}
-
-#[cfg(not(feature = "prusti"))]
-#[proc_macro_attribute]
-pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    tokens
-}
-
-#[cfg(not(feature = "prusti"))]
-#[proc_macro_attribute]
 pub fn mendel_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
     TokenStream::new()
 }
@@ -205,18 +193,6 @@ pub fn assert_on_expiry(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn pure(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     rewrite_prusti_attributes(SpecAttributeKind::Pure, attr.into(), tokens.into()).into()
-}
-
-#[cfg(feature = "prusti")]
-#[proc_macro_attribute]
-pub fn pure_unstable(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    rewrite_prusti_attributes(SpecAttributeKind::PureUnstable, attr.into(), tokens.into()).into()
-}
-
-#[cfg(feature = "prusti")]
-#[proc_macro_attribute]
-pub fn mendel(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    rewrite_prusti_attributes(SpecAttributeKind::Mendel, attr.into(), tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]
