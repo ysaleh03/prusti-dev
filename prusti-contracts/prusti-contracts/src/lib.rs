@@ -55,6 +55,25 @@ pub use prusti_contracts_proc_macros::pure_unstable;
 /// A macro for marking a function as mendel.
 pub use prusti_contracts_proc_macros::mendel;
 
+/// A macro for declaring abstract pointers using mendel syntax.
+pub use prusti_contracts_proc_macros::abstract_ptr;
+
+/// A macro for declaring capabilties using mendel syntax.
+pub use prusti_contracts_proc_macros::capable;
+
+/// A macro for dereferencing an abstract pointer using mendel syntax.
+pub use prusti_contracts_proc_macros::ptr_deref;
+
+/// A macro for declaring ghost functions using mendel syntax.
+pub use prusti_contracts_proc_macros::ghost_fn;
+
+/// A macro for describing the data a function modifies.
+pub use prusti_contracts_proc_macros::modifies;
+// pub use prusti_contracts_proc_macros::modifies_none;
+
+/// A macro for describing the data a function reads.
+pub use prusti_contracts_proc_macros::reads;
+
 /// A macro for marking a function as trusted.
 pub use prusti_contracts_proc_macros::trusted;
 
@@ -75,15 +94,6 @@ pub use prusti_contracts_proc_macros::prusti_assume;
 
 /// A macro for writing refutations using prusti syntax
 pub use prusti_contracts_proc_macros::prusti_refute;
-
-/// A macro for declaring abstract pointers using mendel syntax
-pub use prusti_contracts_proc_macros::abstract_ptr;
-
-/// A macro for declaring local regions using mendel syntax
-pub use prusti_contracts_proc_macros::local_region;
-
-/// A macro for dereferencing an abstract pointer using mendel syntax
-pub use prusti_contracts_proc_macros::ptr_deref;
 
 /// A macro for impl blocks that refine trait specifications.
 pub use prusti_contracts_proc_macros::refine_trait_spec;
@@ -419,8 +429,12 @@ mod private_shared {
         Ghost(PhantomData)
     }
 
-    use prusti_contracts_proc_macros::{pure_unstable, trusted};
+    use prusti_contracts_proc_macros::{ghost_fn, pure_unstable, trusted};
 
+    /// A type to represent abstract pointers on the heap of type `T`,
+    /// usable only in mendel specifications and ghost code. Produced by
+    /// `abstract_ptr!` declarations in `#[mendel_spec]` traits; the
+    /// underlying value can be referred to using `abs_deref!`.
     pub struct AbsPtr<T>(PhantomData<T>);
 
     impl<T> Clone for AbsPtr<T> {
@@ -431,16 +445,59 @@ mod private_shared {
     impl<T> Copy for AbsPtr<T> {}
 
     impl<T> AbsPtr<T> {
-        // #[ghost_fn]
-        #[trusted]
-        #[pure_unstable]
-        pub fn deref(&self) -> T {
+        pub fn read(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn write(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn unique(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn local(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn immutable(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn readRef(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn writeRef(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn noReadRef(ptr: AbsPtr<T>) -> bool {
+            unimplemented!()
+        }
+        pub fn noWriteRef(ptr: AbsPtr<T>) -> bool {
             unimplemented!()
         }
     }
 
+    #[ghost_fn]
+    #[trusted]
+    #[pure_unstable]
+    pub fn ptr_deref<T>(ptr: AbsPtr<T>) -> T {
+        unimplemented!()
+    }
+
+    /// A type to represent the identity of a type instance,
+    /// usable only in mendel specifications and ghost code.
     #[derive(Clone, Copy)]
-    pub struct LocalRegion(());
+    pub struct ObjectID(());
+
+    impl ObjectID {
+        pub fn new<T>(_: impl Value<T>) -> Self {
+            ObjectID(())
+        }
+        pub fn new_ref<T>(_: &T) -> Self {
+            ObjectID(())
+        }
+    }
+
+    pub fn id<T>(input: &T) -> ObjectID {
+        ObjectID::new_ref(input)
+    }
 }
 
 #[cfg(not(feature = "prusti"))]
@@ -672,15 +729,15 @@ mod private {
     }
     impl<T> Eq for AbsPtr<T> {}
 
-    // LocalRegion
+    // ObjectID
 
     /// Snapshot equality (see the note above).
-    impl PartialEq for LocalRegion {
+    impl PartialEq for ObjectID {
         fn eq(&self, _: &Self) -> bool {
             panic!()
         }
     }
-    impl Eq for LocalRegion {}
+    impl Eq for ObjectID {}
 }
 
 /// This function is used to mark the beginning of evaluation of expressions

@@ -22,6 +22,8 @@ pub enum SpecItemType {
     Pledge,
     Predicate(TokenStream),
     Termination,
+    Modifies,
+    Reads,
 }
 
 impl std::fmt::Display for SpecItemType {
@@ -32,6 +34,8 @@ impl std::fmt::Display for SpecItemType {
             SpecItemType::Pledge => write!(f, "pledge"),
             SpecItemType::Predicate(_) => write!(f, "pred"),
             SpecItemType::Termination => write!(f, "term"),
+            SpecItemType::Modifies => write!(f, "mods"),
+            SpecItemType::Reads => write!(f, "reads"),
         }
     }
 }
@@ -119,6 +123,10 @@ impl AstRewriter {
                 quote_spanned! {item_span => Int::from(0) + },
             ),
             SpecItemType::Predicate(return_type) => (return_type.clone(), TokenStream::new()),
+            SpecItemType::Modifies | SpecItemType::Reads => (
+                quote_spanned! {item_span => Set<ObjectID>},
+                TokenStream::new(),
+            ),
             _ => (
                 quote_spanned! {item_span => bool},
                 quote_spanned! {item_span => !!},
@@ -217,6 +225,35 @@ impl AstRewriter {
         let lhs_item = self.generate_spec_item_fn(SpecItemType::Pledge, spec_id_lhs, lhs, item)?;
         let rhs_item = self.generate_spec_item_fn(SpecItemType::Pledge, spec_id_rhs, rhs, item)?;
         Ok((lhs_item, rhs_item))
+    }
+
+    pub fn process_capability(
+        &mut self,
+        spec_id: SpecificationId,
+        tokens: TokenStream,
+        item: &syn::ItemConst,
+    ) -> syn::Result<syn::Item> {
+        let expr = parse_prusti(tokens)?;
+        let item_span = expr.span();
+
+        let item_name = syn::Ident::new(
+            &format!("prusti_capable_item_{}_{}", item.ident, spec_id),
+            item_span,
+        );
+
+        let spec_id_str = spec_id.to_string();
+
+        let spec_item: syn::ItemFn = parse_quote_spanned! {item_span=>
+            #[allow(unused_must_use, unused_parens, unused_variables, dead_code, non_snake_case)]
+            #[prusti::spec_only]
+            #[prusti::spec_id = #spec_id_str]
+            fn #item_name(&self) -> bool {
+                let val: bool = #expr;
+                val
+            }
+        };
+
+        Ok(syn::Item::Fn(spec_item))
     }
 
     /// Parse a loop invariant into a Rust expression

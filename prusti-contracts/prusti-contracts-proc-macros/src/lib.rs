@@ -55,19 +55,31 @@ pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
 pub fn mendel_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
-    TokenStream::new()
+    tokens
 }
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn abstract_ptr(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
-    TokenStream::new()
+pub fn ghost_fn(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    tokens
 }
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn local_region(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
-    TokenStream::new()
+pub fn modifies(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    tokens
+}
+
+// #[cfg(not(feature = "prusti"))]
+// #[proc_macro_attribute]
+// pub fn modifies_none(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+//     tokens
+// }
+
+#[cfg(not(feature = "prusti"))]
+#[proc_macro_attribute]
+pub fn reads(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    tokens
 }
 
 #[cfg(not(feature = "prusti"))]
@@ -226,8 +238,32 @@ pub fn abstract_ptr(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
-pub fn local_region(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    rewrite_prusti_attributes(SpecAttributeKind::LocalRegion, attr.into(), tokens.into()).into()
+pub fn ghost_fn(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(SpecAttributeKind::GhostFn, attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn capable(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    prusti_specs::capable(attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn modifies(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(SpecAttributeKind::Modifies, attr.into(), tokens.into()).into()
+}
+
+// #[cfg(feature = "prusti")]
+// #[proc_macro_attribute]
+// pub fn modifies_none(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+//     rewrite_prusti_attributes(SpecAttributeKind::Modifies, attr.into(), tokens.into()).into()
+// }
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn reads(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(SpecAttributeKind::Reads, attr.into(), tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]

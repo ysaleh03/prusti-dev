@@ -77,7 +77,9 @@ fn extract_prusti_attributes(
                     | SpecAttributeKind::Ensures
                     | SpecAttributeKind::AfterExpiry
                     | SpecAttributeKind::AssertOnExpiry
-                    | SpecAttributeKind::RefineSpec => {
+                    | SpecAttributeKind::RefineSpec
+                    | SpecAttributeKind::Modifies
+                    | SpecAttributeKind::Reads => {
                         // We need to drop the surrounding parenthesis to make the
                         // tokens identical to the ones passed by the native procedural
                         // macro call.
@@ -97,7 +99,7 @@ fn extract_prusti_attributes(
                     | SpecAttributeKind::Predicate
                     | SpecAttributeKind::Verified
                     | SpecAttributeKind::AbstractPointer
-                    | SpecAttributeKind::LocalRegion => {
+                    | SpecAttributeKind::GhostFn => {
                         assert!(attr.tokens.is_empty(), "Unexpected shape of an attribute.");
                         attr.tokens
                     }
@@ -106,6 +108,7 @@ fn extract_prusti_attributes(
                     SpecAttributeKind::PrintCounterexample => {
                         unreachable!("print_counterexample on function")
                     }
+                    SpecAttributeKind::Capable => unreachable!("capable on a function"),
                 };
                 prusti_attributes.push((attr_kind, attr_span, tokens));
             } else {
@@ -185,8 +188,12 @@ fn generate_spec_and_assertions(
                 generate_for_pure_unstable(attr_tokens, attr_span, item)
             }
             SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, attr_span, item),
-            SpecAttributeKind::AbstractPointer => generate_for_abstract_ptr(attr_tokens, item),
-            SpecAttributeKind::LocalRegion => generate_for_local_region(attr_tokens, item),
+            SpecAttributeKind::AbstractPointer => {
+                generate_for_abstract_ptr(attr_tokens, attr_span, item)
+            }
+            SpecAttributeKind::GhostFn => generate_for_ghost_fn(attr_tokens, attr_span, item),
+            SpecAttributeKind::Modifies => generate_for_modifies(attr_tokens, attr_span, item),
+            SpecAttributeKind::Reads => generate_for_reads(attr_tokens, attr_span, item),
             SpecAttributeKind::Verified => generate_for_verified(attr_tokens, attr_span, item),
             SpecAttributeKind::Terminates => generate_for_terminates(attr_tokens, attr_span, item),
             SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, attr_span, item),
@@ -198,6 +205,7 @@ fn generate_spec_and_assertions(
             SpecAttributeKind::RefineSpec => type_cond_specs::generate(attr_tokens, item),
             SpecAttributeKind::Model => unreachable!(),
             SpecAttributeKind::PrintCounterexample => unreachable!(),
+            SpecAttributeKind::Capable => unreachable!(),
         };
         let (new_items, new_attributes) = rewriting_result?;
         generated_items.extend(new_items);
@@ -381,7 +389,11 @@ fn generate_for_mendel(
 }
 
 /// Generate spec items and attributes to typecheck and later retrieve "abstract_ptr" annotations.
-fn generate_for_abstract_ptr(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+fn generate_for_abstract_ptr(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
@@ -391,25 +403,61 @@ fn generate_for_abstract_ptr(attr: TokenStream, item: &untyped::AnyFnItem) -> Ge
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
+        vec![parse_quote_spanned! {span=>
             #[prusti::abstract_ptr]
         }],
     ))
 }
 
-/// Generate spec items and attributes to typecheck and later retrieve "local_region" annotations.
-fn generate_for_local_region(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+/// Generate spec items and attributes to typecheck and later retrieve "ghost_fn" annotations.
+fn generate_for_ghost_fn(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
-            "the `#[local_region]` attribute does not take parameters",
+            "the `#[ghost_fn]` attribute does not take parameters",
         ));
     }
 
     Ok((
         vec![],
-        vec![parse_quote_spanned! {item.span()=>
-            #[prusti::local_region]
+        vec![parse_quote_spanned! {span=>
+            #[prusti::ghost_fn]
+        }],
+    ))
+}
+
+fn generate_for_modifies(
+    attr: TokenStream,
+    span: Span,
+    item: &untyped::AnyFnItem,
+) -> GeneratedResult {
+    let mut rewriter = rewriter::AstRewriter::new();
+    let spec_id = rewriter.generate_spec_id();
+    let spec_id_str = spec_id.to_string();
+    let spec_item =
+        rewriter.process_assertion(rewriter::SpecItemType::Modifies, spec_id, attr, item)?;
+    Ok((
+        vec![spec_item],
+        vec![parse_quote_spanned! {span=>
+            #[prusti::pre_spec_id_ref = #spec_id_str]
+        }],
+    ))
+}
+
+fn generate_for_reads(attr: TokenStream, span: Span, item: &untyped::AnyFnItem) -> GeneratedResult {
+    let mut rewriter = rewriter::AstRewriter::new();
+    let spec_id = rewriter.generate_spec_id();
+    let spec_id_str = spec_id.to_string();
+    let spec_item =
+        rewriter.process_assertion(rewriter::SpecItemType::Reads, spec_id, attr, item)?;
+    Ok((
+        vec![spec_item],
+        vec![parse_quote_spanned! {span=>
+            #[prusti::pre_spec_id_ref = #spec_id_str]
         }],
     ))
 }
@@ -943,20 +991,32 @@ pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
                 segments: syn::punctuated::Punctuated::new(),
             });
         match item {
-            // syn::Item::Impl(item_impl) => {
-            //     if !mod_path.segments.is_empty() {
-            //         return Err(syn::Error::new(
-            //             mod_path.span(),
-            //             "mendel_spec does not take a path argument for impls--you can qualify the involved types directly",
-            //         ));
-            //     }
-            //     mendel_spec_rewriter::impls::rewrite_mendel_spec(&item_impl)
-            // }
+            syn::Item::Impl(item_impl) => {
+                if !mod_path.segments.is_empty() {
+                    return Err(syn::Error::new(
+                        mod_path.span(),
+                        "mendel_spec does not take a path argument for impls--you can qualify the involved types directly",
+                    ));
+                }
+                if item_impl.trait_.is_none() {
+                    return Err(syn::Error::new(
+                        item_impl.span(),
+                        "mendel impls must have an associated mendel trait",
+                    ));
+                }
+                if !item_impl.items.is_empty() {
+                    return Err(syn::Error::new(
+                        item_impl.items[0].span(),
+                        "unexpected item--mendel impls must be empty",
+                    ));
+                }
+                Ok(quote_spanned! {item_impl.span()=>
+                    #[prusti::mendel_spec]
+                    #item_impl
+                })
+            }
             syn::Item::Trait(mut item_trait) => {
-                let token_stream =
-                    mendel_spec_rewriter::traits::rewrite_mendel_spec(&mut item_trait, mod_path);
-                let _ = token_stream.clone().map(|op| println!("{op}"));
-                token_stream
+                mendel_spec_rewriter::traits::rewrite_mendel_spec(&mut item_trait, mod_path)
             }
             _ => Err(syn::Error::new(
                 Span::call_site(),
@@ -966,18 +1026,99 @@ pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     })
 }
 
+pub fn capable(outer_attr_tokens: TokenStream, tokens: TokenStream) -> TokenStream {
+    let mut item: syn::ItemConst = handle_result!(syn::parse2(tokens));
+
+    if !(item.ident.to_string() == "SHARED_CAPABILITIES"
+        || item.ident.to_string() == "MUTABLE_CAPABILITIES")
+    {
+        return result_to_tokens!({
+            Err(syn::Error::new(
+                Span::call_site(),
+                "capabilities cannot be attached to this item",
+            ))
+        });
+    }
+
+    // Start with the outer attribute. It is the one the compiler ran as the
+    // procedural macro, so its span is the call site.
+    let mut prusti_attributes = vec![(Span::call_site(), outer_attr_tokens)];
+
+    for attr in item.attrs.drain(0..) {
+        if attr.path.segments.len() == 1
+            || (attr.path.segments.len() == 2 && attr.path.segments[0].ident == "prusti_contracts")
+        {
+            let idx = attr.path.segments.len() - 1;
+            if let Ok(attr_kind) = attr.path.segments[idx].ident.to_string().try_into() {
+                // The span of the annotation itself, so diagnostics can point
+                // at the specific attribute rather than the whole item.
+                let attr_span = attr.path.span();
+                let tokens = match attr_kind {
+                    SpecAttributeKind::Capable => {
+                        // We need to drop the surrounding parenthesis to make the
+                        // tokens identical to the ones passed by the native procedural
+                        // macro call.
+                        let mut iter = attr.tokens.into_iter();
+                        let TokenTree::Group(group) = iter.next().unwrap() else {
+                            unreachable!()
+                        };
+                        assert!(iter.next().is_none(), "Unexpected shape of an attribute.");
+                        group.stream()
+                    }
+                    _ => unreachable!("expected capable"),
+                };
+                prusti_attributes.push((attr_span, tokens));
+            } else {
+                unreachable!("expected capable")
+            }
+        } else {
+            unreachable!("expected capable")
+        }
+    }
+
+    let mut generated_spec_items = vec![];
+    let mut generated_attributes = vec![];
+
+    for (attr_span, attr_tokens) in prusti_attributes {
+        let (new_items, new_attributes) =
+            handle_result!(generate_for_capable(attr_tokens, attr_span, &item));
+        generated_spec_items.extend(new_items);
+        generated_attributes.extend(new_attributes);
+    }
+
+    quote_spanned! {item.span()=>
+        #(#generated_spec_items)*
+        #(#generated_attributes)*
+        #[prusti::specs_version = #SPECS_VERSION]
+        #item
+    }
+}
+
+fn generate_for_capable(attr: TokenStream, span: Span, item: &syn::ItemConst) -> GeneratedResult {
+    let mut rewriter = rewriter::AstRewriter::new();
+    let spec_id = rewriter.generate_spec_id();
+    let spec_id_str = spec_id.to_string();
+    let spec_item = rewriter.process_capability(spec_id, attr, item)?;
+    Ok((
+        vec![spec_item],
+        vec![parse_quote_spanned! {span=>
+            #[prusti::pre_spec_id_ref = #spec_id_str]
+        }],
+    ))
+}
+
 struct DerefInput {
-    root: syn::Ident,
-    at: syn::Token![@],
-    name: syn::Ident,
+    root: syn::Expr,
+    _at: syn::Token![@],
+    name: syn::Expr,
 }
 
 impl syn::parse::Parse for DerefInput {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let root = input.call(<syn::Ident as syn::ext::IdentExt>::parse_any)?;
-        let at = input.parse()?;
+        let root = input.parse()?;
+        let _at = input.parse()?;
         let name = input.parse()?;
-        Ok(DerefInput { root, at, name })
+        Ok(DerefInput { root, _at, name })
     }
 }
 
@@ -986,7 +1127,7 @@ pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
         syn::parse2(tokens).expect("Malformed deref input, expected <root>@<name>");
     let root = deref_input.root;
     let name = deref_input.name;
-    syn::parse_quote! { #root . #name () . deref() }
+    syn::parse_quote! { ::prusti_contracts::ptr_deref(#root . #name ()) }
 }
 
 pub fn predicate(tokens: TokenStream) -> TokenStream {
@@ -1051,7 +1192,9 @@ fn extract_prusti_attributes_for_types(
                     SpecAttributeKind::PureUnstable => unreachable!("pure_unstable on type"),
                     SpecAttributeKind::Mendel => unreachable!("mendel on type"),
                     SpecAttributeKind::AbstractPointer => unreachable!("abstract_ptr on type"),
-                    SpecAttributeKind::LocalRegion => unreachable!("local_region on type"),
+                    SpecAttributeKind::GhostFn => unreachable!("ghost_fn on type"),
+                    SpecAttributeKind::Modifies => unreachable!("modifies on type"),
+                    SpecAttributeKind::Reads => unreachable!("reads on type"),
                     SpecAttributeKind::Verified => unreachable!("verified on type"),
                     SpecAttributeKind::Invariant => unreachable!("invariant on type"),
                     SpecAttributeKind::Predicate => unreachable!("predicate on type"),
@@ -1070,6 +1213,7 @@ fn extract_prusti_attributes_for_types(
                         };
                         group.stream()
                     }
+                    SpecAttributeKind::Capable => unreachable!("capable on type"),
                 };
                 prusti_attributes.push((attr_kind, tokens));
             } else {
@@ -1101,7 +1245,9 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::PureUnstable => unreachable!(),
             SpecAttributeKind::Mendel => unreachable!(),
             SpecAttributeKind::AbstractPointer => unreachable!(),
-            SpecAttributeKind::LocalRegion => unreachable!(),
+            SpecAttributeKind::GhostFn => unreachable!(),
+            SpecAttributeKind::Modifies => unreachable!(),
+            SpecAttributeKind::Reads => unreachable!(),
             SpecAttributeKind::Verified => unreachable!(),
             SpecAttributeKind::Predicate => unreachable!(),
             SpecAttributeKind::Invariant => unreachable!(),
@@ -1112,6 +1258,7 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::PrintCounterexample => {
                 generate_for_print_counterexample(attr_tokens, item)
             }
+            SpecAttributeKind::Capable => unreachable!(),
         };
         let (new_items, new_attributes) = rewriting_result?;
         generated_items.extend(new_items);

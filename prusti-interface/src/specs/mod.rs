@@ -221,6 +221,12 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                     SpecIdRef::Terminates(spec_id) => {
                         spec.set_terminates(*self.spec_functions.get(spec_id).unwrap());
                     }
+                    SpecIdRef::Modifies(spec_id) => {
+                        spec.add_modifies(*self.spec_functions.get(spec_id).unwrap(), self.env);
+                    }
+                    SpecIdRef::Reads(spec_id) => {
+                        spec.add_reads(*self.spec_functions.get(spec_id).unwrap(), self.env);
+                    }
                 }
             }
 

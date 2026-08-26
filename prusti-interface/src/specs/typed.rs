@@ -208,6 +208,8 @@ pub struct ProcedureSpecification {
     pub trusted: SpecificationItem<bool>,
     pub terminates: SpecificationItem<Option<LocalDefId>>,
     pub purity: SpecificationItem<Option<DefId>>, // for type-conditional spec refinements
+    pub modifies: SpecificationItem<Vec<DefId>>,
+    pub reads: SpecificationItem<Vec<DefId>>,
 }
 
 impl ProcedureSpecification {
@@ -224,6 +226,8 @@ impl ProcedureSpecification {
             trusted: SpecificationItem::Inherent(false),
             terminates: SpecificationItem::Inherent(None),
             purity: SpecificationItem::Inherent(None),
+            modifies: SpecificationItem::Empty,
+            reads: SpecificationItem::Empty,
         }
     }
 
@@ -243,6 +247,8 @@ impl ProcedureSpecification {
             trusted: SpecificationItem::Empty,
             terminates: SpecificationItem::Empty,
             purity: SpecificationItem::Empty,
+            modifies: SpecificationItem::Empty,
+            reads: SpecificationItem::Empty,
         }
     }
 }
@@ -478,6 +484,46 @@ impl SpecGraph<ProcedureSpecification> {
                     SpecificationItem::Inherent(ProcedureSpecificationKind::Pure);
                 // need to store this as well, since without pres or posts we couldn't find any def id with the trait bounds
                 constrained_spec.purity.set(Some(purity.to_def_id()));
+            }
+        }
+    }
+
+    /// Attaches the `modifies` clause `mods` to this [SpecGraph].
+    ///
+    /// If this modifies has a constraint it will be attached to the corresponding
+    /// constrained spec, otherwise just to the base spec.
+    pub fn add_modifies<'tcx>(&mut self, mods: LocalDefId, env: &Environment<'tcx>) {
+        match self.get_constraint(mods, env) {
+            None => {
+                self.base_spec.modifies.push(mods.to_def_id());
+                self.specs_with_constraints
+                    .values_mut()
+                    .for_each(|s| s.modifies.push(mods.to_def_id()));
+            }
+            Some(constraint) => {
+                self.get_constrained_spec_mut(constraint)
+                    .modifies
+                    .push(mods.to_def_id());
+            }
+        }
+    }
+
+    /// Attaches the `reads` clause `reads` to this [SpecGraph].
+    ///
+    /// If this reads has a constraint it will be attached to the corresponding
+    /// constrained spec, otherwise just to the base spec.
+    pub fn add_reads<'tcx>(&mut self, reads: LocalDefId, env: &Environment<'tcx>) {
+        match self.get_constraint(reads, env) {
+            None => {
+                self.base_spec.reads.push(reads.to_def_id());
+                self.specs_with_constraints
+                    .values_mut()
+                    .for_each(|s| s.reads.push(reads.to_def_id()));
+            }
+            Some(constraint) => {
+                self.get_constrained_spec_mut(constraint)
+                    .reads
+                    .push(reads.to_def_id());
             }
         }
     }
@@ -829,6 +875,8 @@ impl Refinable for ProcedureSpecification {
             trusted: self.trusted.refine(&other.trusted),
             terminates: self.terminates.refine(&other.terminates),
             purity: self.purity.refine(&other.purity),
+            modifies: self.modifies.refine(&other.modifies),
+            reads: self.reads.refine(&other.reads),
         }
     }
 }

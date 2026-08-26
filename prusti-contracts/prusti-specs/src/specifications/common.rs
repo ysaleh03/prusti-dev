@@ -63,6 +63,8 @@ pub enum SpecIdRef {
     },
     Predicate(SpecificationId),
     Terminates(SpecificationId),
+    Modifies(SpecificationId),
+    Reads(SpecificationId),
 }
 
 impl Display for SpecificationId {

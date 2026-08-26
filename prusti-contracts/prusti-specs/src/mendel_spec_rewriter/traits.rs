@@ -3,37 +3,19 @@ use super::common::*;
 use crate::is_predicate_macro;
 use proc_macro2::TokenStream;
 use quote::quote_spanned;
-use syn::{parse_quote, spanned::Spanned, TypeParam};
+use syn::{parse_quote, parse_quote_spanned, spanned::Spanned};
 
-/// Generates a struct for a `syn::ItemTrait` which is used for checking
-/// compilation of mendel specs on traits.
-///
-/// Given an mendel spec for traits
-/// ```rust
-/// #[mendel_spec]
-/// trait SomeTrait<T> {
-///     fn foo(&self, arg: Self::ArgTy) -> Self::RetTy;
-/// }
-/// ```
-/// it produces a struct
-/// ```rust
-/// struct Aux<T, TSelf> where TSelf: SomeTrait {
-///     // phantom data for T, TSelf
-/// }
-/// ```
-/// and a corresponding impl block with methods of `SomeTrait`.
-///
 pub fn rewrite_mendel_spec(
     item_trait: &mut syn::ItemTrait,
-    mod_path: syn::Path,
+    _mod_path: syn::Path,
 ) -> syn::Result<TokenStream> {
-    let mut trait_path = mod_path;
-    trait_path.segments.push(syn::PathSegment {
-        ident: item_trait.ident.clone(),
-        arguments: syn::PathArguments::None,
-    });
+    let mut new_trait = item_trait.clone();
+    new_trait.items = Vec::new();
 
-    for trait_item in item_trait.items.iter_mut() {
+    let mut shared: syn::TraitItemConst = parse_quote! { const SHARED_CAPABILITIES: () = (); };
+    let mut mutable: syn::TraitItemConst = parse_quote! { const MUTABLE_CAPABILITIES: () = (); };
+
+    for trait_item in item_trait.items.iter() {
         match trait_item {
             syn::TraitItem::Type(_) => {
                 return Err(syn::Error::new(
@@ -45,40 +27,48 @@ pub fn rewrite_mendel_spec(
                 if trait_method.default.is_none() {
                     return Err(syn::Error::new(
                         trait_method.span(),
-                        "this cannot be a stub",
+                        "Expected a method body; mendel specs cannot contain stubs",
                     ));
                 }
+                if !trait_method.attrs.contains(&parse_quote! { #[ghost_fn] }) {
+                    return Err(syn::Error::new(
+                        trait_method.span(),
+                        "Cannot declare non-ghost functions in mendel spec",
+                    ));
+                }
+                new_trait.items.push(trait_item.clone());
             }
             syn::TraitItem::Macro(makro) if is_abstract_ptr_macro(makro) => {
                 let accessor = generate_abstract_ptr_accessor(makro)?;
-                *trait_item = syn::TraitItem::Method(accessor);
+                new_trait.items.push(syn::TraitItem::Method(accessor));
             }
-            syn::TraitItem::Macro(makro) if is_local_region_macro(makro) => {
-                let accessor = generate_local_region_accessor(makro)?;
-                *trait_item = syn::TraitItem::Method(accessor);
+            syn::TraitItem::Macro(makro) if is_capable_macro(makro) => {
+                let (is_mutable, attr) = extend_with_macro(makro)?;
+                if is_mutable {
+                    mutable.attrs.push(attr);
+                } else {
+                    shared.attrs.push(attr);
+                }
             }
             syn::TraitItem::Macro(makro) if is_predicate_macro(makro) => {
                 return Err(syn::Error::new(
                     makro.span(),
-                    "Can not declare abstract predicate in mendel spec",
+                    "Cannot declare abstract predicate in mendel spec",
                 ));
             }
             _ => unimplemented!("Unimplemented trait item for mendel spec"),
         };
     }
 
-    Ok(quote_spanned! {item_trait.span()=>
-        #item_trait
-    })
-}
+    new_trait.items.extend(vec![
+        syn::TraitItem::Const(shared),
+        syn::TraitItem::Const(mutable),
+    ]);
 
-fn parse_trait_type_params(item_trait: &syn::ItemTrait) -> syn::Result<Vec<TypeParam>> {
-    item_trait
-        .generics
-        .type_params()
-        .cloned()
-        .map(check_for_legacy_attributes)
-        .collect()
+    Ok(quote_spanned! {item_trait.span()=>
+        #[prusti::mendel_spec]
+        #new_trait
+    })
 }
 
 #[derive(Debug)]
@@ -103,31 +93,108 @@ fn generate_abstract_ptr_accessor(
     let abstract_ptr_input: AbstractPtrInput = makro.mac.parse_body()?;
     let name = abstract_ptr_input.name;
     let ty = abstract_ptr_input.ty;
-    let method = parse_quote! {
-        #[abstract_ptr]
+    let method = parse_quote_spanned! {makro.span()=>
+        #[prusti::abstract_ptr]
         fn #name(&self) -> AbsPtr<#ty> { unimplemented!() }
     };
     Ok(method)
 }
 
-fn generate_local_region_accessor(
-    makro: &syn::TraitItemMacro,
-) -> syn::Result<syn::TraitItemMethod> {
-    let name: syn::Ident = makro.mac.parse_body()?;
-    let method = parse_quote! {
-        #[local_region]
-        fn #name(&self) -> LocalRegion { unimplemented!() }
+fn extend_with_macro(makro: &syn::TraitItemMacro) -> syn::Result<(bool, syn::Attribute)> {
+    let capable_input: CapableInput = makro.mac.parse_body()?;
+    let receiver = capable_input.receiver;
+
+    let capability = match capable_input.capability {
+        CapabilityInput { capability, ptr } => quote_spanned! {makro.span()=>
+            ::prusti_contracts::AbsPtr::#capability(self.#ptr())
+        },
     };
-    Ok(method)
+
+    let attr = if let Some(expr) = capable_input.side_conditions {
+        let side_conditions = quote_spanned! {expr.span()=> #expr };
+        parse_quote_spanned! {makro.span()=> #[capable(!#side_conditions || #capability)]}
+    } else {
+        parse_quote_spanned! {makro.span()=> #[capable(#capability)]}
+    };
+
+    Ok((receiver.mutability.is_some(), attr))
 }
 
-fn check_for_legacy_attributes(param: TypeParam) -> syn::Result<TypeParam> {
-    if let Some(attr) = param.attrs.first() {
-        Err(syn::Error::new(
-            attr.span(),
-            "The `#[concrete]` and `#[generic]` attributes are deprecated. To refine specs for specific concrete types, use type-conditional spec refinements instead.",
-        ))
-    } else {
-        Ok(param)
+#[derive(Debug)]
+struct CapabilityInput {
+    capability: syn::Ident,
+    ptr: syn::Ident,
+}
+
+impl syn::parse::Parse for CapabilityInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let capability: syn::Ident = input.parse()?;
+
+        let content;
+        syn::parenthesized!(content in input);
+
+        match capability.to_string().as_str() {
+            "read" | "write" | "local" | "unique" | "immutable" | "readRef" | "writeRef"
+            | "noReadRef" | "noWriteRef" => {
+                let ptr = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("unexpected tokens"));
+                }
+                Ok(CapabilityInput { capability, ptr })
+            }
+            _ => Err(syn::Error::new(capability.span(), "unknown capability")),
+        }
     }
 }
+
+#[derive(Debug)]
+struct CapableInput {
+    receiver: syn::Receiver,
+    _if: Option<syn::Token![if]>,
+    side_conditions: Option<syn::Expr>,
+    _fat_arrow: syn::Token![=>],
+    capability: CapabilityInput,
+}
+
+impl syn::parse::Parse for CapableInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let receiver: syn::Receiver = input.parse()?;
+
+        if !receiver.reference.clone().is_some_and(|r| r.1.is_none()) {
+            return Err(syn::Error::new(
+                receiver.span(),
+                "Expected `&self` or `&mut self`",
+            ));
+        }
+
+        let (_if, side_conditions) = if input.peek(syn::Token![if]) {
+            let _if = input.parse()?;
+            let expr = input.parse()?;
+            (Some(_if), Some(expr))
+        } else {
+            (None, None)
+        };
+
+        let _fat_arrow = input.parse()?;
+        let capability = input.parse()?;
+
+        Ok(CapableInput {
+            receiver,
+            _if,
+            side_conditions,
+            _fat_arrow,
+            capability,
+        })
+    }
+}
+
+// fn check_for_legacy_attributes(param: TypeParam) -> syn::Result<TypeParam> {
+//     if let Some(attr) = param.attrs.first() {
+//         Err(syn::Error::new(
+//             attr.span(),
+//             "The `#[concrete]` and `#[generic]` attributes are deprecated. To refine specs for specific concrete types, use type-conditional spec refinements instead.",
+//         ))
+//     } else {
+//         Ok(param)
+//     }
+// }
