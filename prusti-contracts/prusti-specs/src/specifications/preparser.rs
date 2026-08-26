@@ -182,6 +182,16 @@ impl PrustiTokenStream {
                     {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::Rust(RustOp::Assign))
                     }
+                    (TokenTree::Punct(punct), _, _, _)
+                        if punct.as_char() == '~' && punct.spacing() == Alone =>
+                    {
+                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::InstEq)
+                    }
+                    (TokenTree::Punct(punct), _, _, _)
+                        if punct.as_char() == '@' && punct.spacing() == Alone =>
+                    {
+                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::AbsPtr)
+                    }
                     (token @ TokenTree::Punct(punct), _, _, _) if punct.spacing() == Joint => {
                         // make sure to fully consume any Rust operator
                         // to avoid later mis-identifying its suffix
@@ -927,6 +937,8 @@ impl PrustiToken {
                 return Some(Self::SpecEnt(span, false));
             } else if operator2("~>", p1, p2) {
                 return Some(Self::CallDesc(span, false));
+            } else if operator2("!~", p1, p2) {
+                PrustiBinaryOp::InstNe
             } else {
                 return None;
             },
@@ -945,6 +957,8 @@ impl PrustiToken {
                 PrustiBinaryOp::SnapEq
             } else if operator3("!==", p1, p2, p3) {
                 PrustiBinaryOp::SnapNe
+            } else if operator3("=~=", p1, p2, p3) {
+                PrustiBinaryOp::InstSnapEq
             } else if operator3("..=", p1, p2, p3) {
                 PrustiBinaryOp::Rust(RustOp::RangeInclusive)
             } else if operator3("<<=", p1, p2, p3) {
@@ -980,6 +994,7 @@ impl PrustiToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrustiBinaryOp {
     Rust(RustOp),
+    AbsPtr,
     Iff,
     Implies,
     ImpliesReverse,
@@ -987,6 +1002,9 @@ enum PrustiBinaryOp {
     And,
     SnapEq,
     SnapNe,
+    InstEq,
+    InstNe,
+    InstSnapEq,
 }
 
 impl PrustiBinaryOp {
@@ -1007,6 +1025,7 @@ impl PrustiBinaryOp {
         // TODO: should <== and ==> have the same binding power? === and !==?
         match self {
             Self::Rust(_) => (0, 0),
+            Self::AbsPtr => (17, 17),
             Self::Iff => (4, 3),
             Self::Implies => (6, 5),
             Self::ImpliesReverse => (5, 6),
@@ -1014,6 +1033,9 @@ impl PrustiBinaryOp {
             Self::And => (9, 10),
             Self::SnapEq => (11, 12),
             Self::SnapNe => (11, 12),
+            Self::InstEq => (13, 14),
+            Self::InstNe => (13, 14),
+            Self::InstSnapEq => (15, 16),
         }
     }
 
@@ -1044,6 +1066,10 @@ impl PrustiBinaryOp {
             }
             Self::Or => quote_spanned! { span => #lhs || #rhs },
             Self::And => quote_spanned! { span => #lhs && #rhs },
+            Self::AbsPtr => {
+                let joined_span = join_spans(lhs.span(), rhs.span());
+                quote_spanned! { joined_span => #lhs . #raw_rhs () }
+            }
             Self::SnapEq => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
                 quote_spanned! { joined_span => (::prusti_contracts::Ghost::new_ref(&#lhs) == ::prusti_contracts::Ghost::new_ref(&#rhs)) }
@@ -1051,6 +1077,21 @@ impl PrustiBinaryOp {
             Self::SnapNe => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
                 quote_spanned! { joined_span => (::prusti_contracts::Ghost::new_ref(&#lhs) != ::prusti_contracts::Ghost::new_ref(&#rhs)) }
+            }
+            Self::InstEq => {
+                let joined_span = join_spans(lhs.span(), rhs.span());
+                quote_spanned! { joined_span => (::prusti_contracts::ObjectID::new_ref(&#lhs) == ::prusti_contracts::ObjectID::new_ref(&#rhs)) }
+            }
+            Self::InstNe => {
+                let joined_span = join_spans(lhs.span(), rhs.span());
+                quote_spanned! { joined_span => (::prusti_contracts::ObjectID::new_ref(&#lhs) != ::prusti_contracts::ObjectID::new_ref(&#rhs)) }
+            }
+            Self::InstSnapEq => {
+                let joined_span = join_spans(lhs.span(), rhs.span());
+                quote_spanned! { joined_span =>
+                (::prusti_contracts::Ghost::new_ref(&#lhs) == ::prusti_contracts::Ghost::new_ref(&#rhs)
+                    && ::prusti_contracts::ObjectID::new_ref(&#lhs) == ::prusti_contracts::ObjectID::new_ref(&#rhs))
+                }
             }
         }
     }
