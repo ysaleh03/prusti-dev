@@ -226,6 +226,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
     type BuiltinData = RustBuiltinData<'tcx>;
+    type AbsPtrData = LazyRustTy<'tcx>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -249,6 +250,7 @@ pub type RustImmRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::ImmRefData;
 pub type RustMutRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::MutRefData;
 pub type RustRaw<'tcx> = <RustTyDatas as TyDatas<'tcx>>::RawData;
 pub type RustBuiltin<'tcx> = <RustTyDatas as TyDatas<'tcx>>::BuiltinData;
+pub type RustAbsPtr<'tcx> = <RustTyDatas as TyDatas<'tcx>>::AbsPtrData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RustTyData<'tcx> {
@@ -691,6 +693,8 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                     }];
                     TySpecifics::mk_structlike((), fields)
                 }
+                "ObjectID" => TySpecifics::mk_structlike((), vec![]),
+                "AbsPtr" => TySpecifics::mk_absptr(LazyRustTy(Self::new_param_ty(0))),
                 // TODO: support other builtins (e.g. `Seq`, `Map`, `Set`, etc.)
                 s => todo!("Unimplemented builtin {s}"),
             }
