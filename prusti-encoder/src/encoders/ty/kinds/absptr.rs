@@ -13,7 +13,7 @@ pub(crate) fn ty_pure<'vir>(
     builder: &mut DomainBuilder<'vir>,
 ) -> Result<TyPureAbsPtr<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let arg_type = (builder.self_type(), vir::TYPE_INT);
-    let ptr_deref = builder.function("ptr_deref", arg_type, vir::TYPE_PSNAP);
+    let ptr_deref = builder.function("deref", arg_type, vir::TYPE_PSNAP);
 
     // TODO: need s_AbsPtr_typeof and s_Param_typeof here..
     // builder.axiom(
