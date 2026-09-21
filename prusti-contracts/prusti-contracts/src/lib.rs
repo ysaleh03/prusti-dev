@@ -101,15 +101,18 @@ pub use prusti_contracts_proc_macros::refine_trait_spec;
 /// A macro for specifying external functions.
 pub use prusti_contracts_proc_macros::extern_spec;
 
-/// A macro for specifying types using mendel.
-pub use prusti_contracts_proc_macros::mendel_spec;
+/// A macro for modelling types using mendel.
+pub use prusti_contracts_proc_macros::im_model;
+
+/// A macro for declaring capabilities using mendel.
+pub use prusti_contracts_proc_macros::im_spec;
 
 /// A macro for defining a predicate using prusti expression syntax instead
 /// of just Rust expressions.
 pub use prusti_contracts_proc_macros::predicate;
 
-/// Macro for creating type models.
-pub use prusti_contracts_proc_macros::model;
+/// A macro for creating type models.
+pub use prusti_contracts_proc_macros::type_model;
 
 /// A macro to add trait bounds on a generic type parameter and specifications
 /// which are active only when these bounds are satisfied for a call.
@@ -433,7 +436,7 @@ mod private_shared {
 
     /// A type to represent abstract pointers on the heap of type `T`,
     /// usable only in mendel specifications and ghost code. Produced by
-    /// `abstract_ptr!` declarations in `#[mendel_spec]` traits; the
+    /// `abstract_ptr!` declarations in `#[im_spec]` traits; the
     /// underlying value can be referred to using `abs_deref!`.
     pub struct AbsPtr<T>(PhantomData<T>);
 

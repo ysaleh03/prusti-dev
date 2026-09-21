@@ -315,12 +315,18 @@ impl PrustiBuiltin {
     /// These are forbidden in impure code, and should return an error.
     pub fn is_spec_only(&self) -> bool {
         match self {
-            Self::Spec(_) | Self::SnapEq | Self::SnapNe | Self::InstEq | Self::InstNe => true,
+            Self::Spec(_)
+            | Self::AbsPtr(_)
+            | Self::SnapEq
+            | Self::SnapNe
+            | Self::InstEq
+            | Self::InstNe => true,
             // `Call`/`Erased` are legitimate only inside a `ghost!` block's
             // dead arm, which is exempt from the spec-only rejection: a stray
             // executable `ghost_call` (i.e. not from a `ghost!` block) would
             // verify code whose runtime body is `unreachable!()`.
             Self::Ghost(GhostOp::Deref | GhostOp::Call | GhostOp::Erased) => true,
+            Self::ObjectID(ObjectOp::New) => true,
             Self::Seq(SeqOp::Contains) => true,
             Self::AnySet {
                 op: AnySetOp::IsSubset,
@@ -335,17 +341,6 @@ impl PrustiBuiltin {
             Self::Int(op) | Self::Real(op) => matches!(
                 op,
                 NumOp::Lt | NumOp::Le | NumOp::Gt | NumOp::Ge | NumOp::Cmp | NumOp::PartialCmp
-            ),
-            Self::AbsPtr(op) => matches!(
-                op,
-                AbsPtrOp::Read
-                    | AbsPtrOp::Local
-                    | AbsPtrOp::Write
-                    | AbsPtrOp::Unique
-                    | AbsPtrOp::ReadRef
-                    | AbsPtrOp::WriteRef
-                    | AbsPtrOp::NoReadRef
-                    | AbsPtrOp::NoWriteRef,
             ),
             _ => false,
         }

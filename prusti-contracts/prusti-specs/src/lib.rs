@@ -19,7 +19,7 @@ mod span_overrider;
 mod spec_attribute_kind;
 mod mendel_spec_rewriter;
 pub mod specifications;
-mod type_model;
+mod model;
 mod user_provided_type_params;
 mod print_counterexample;
 
@@ -979,7 +979,19 @@ pub fn extern_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     })
 }
 
-pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    if syn::parse2::<syn::DeriveInput>(tokens.clone()).is_ok() {
+        rewrite_prusti_attributes_for_types(SpecAttributeKind::Model, attr, tokens)
+    } else {
+        syn::Error::new(
+            attr.span(),
+            "Only structs can be attributed with an interior mutability model",
+        )
+        .to_compile_error()
+    }
+}
+
+pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     result_to_tokens!({
         let item: syn::Item = syn::parse2(tokens)?;
         let mod_path: syn::Path = Some(attr)
@@ -995,7 +1007,7 @@ pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
                 if !mod_path.segments.is_empty() {
                     return Err(syn::Error::new(
                         mod_path.span(),
-                        "mendel_spec does not take a path argument for impls--you can qualify the involved types directly",
+                        "im_spec does not take a path argument for impls--you can qualify the involved types directly",
                     ));
                 }
                 if item_impl.trait_.is_none() {
@@ -1011,12 +1023,12 @@ pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
                     ));
                 }
                 Ok(quote_spanned! {item_impl.span()=>
-                    #[prusti::mendel_spec]
+                    #[prusti::im_spec]
                     #item_impl
                 })
             }
             syn::Item::Trait(mut item_trait) => {
-                mendel_spec_rewriter::traits::rewrite_mendel_spec(&mut item_trait, mod_path)
+                mendel_spec_rewriter::traits::rewrite_im_spec(&mut item_trait, mod_path)
             }
             _ => Err(syn::Error::new(
                 Span::call_site(),
@@ -1254,7 +1266,7 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::RefineSpec => unreachable!(),
             SpecAttributeKind::Terminates => unreachable!(),
             SpecAttributeKind::Trusted => generate_for_trusted_for_types(attr_tokens, item),
-            SpecAttributeKind::Model => generate_for_model(attr_tokens, item),
+            SpecAttributeKind::Model => generate_for_type_model(attr_tokens, item),
             SpecAttributeKind::PrintCounterexample => {
                 generate_for_print_counterexample(attr_tokens, item)
             }
@@ -1268,11 +1280,35 @@ fn generate_spec_and_assertions_for_types(
     Ok((generated_items, generated_attributes))
 }
 
-/// Generate spec items and attributes to typecheck and later retrieve "model" annotations.
-fn generate_for_model(attr: TokenStream, item: &mut syn::DeriveInput) -> GeneratedResult {
+/// Generate spec items and attributes to typecheck and later retrieve "type_model" annotations.
+fn generate_for_type_model(attr: TokenStream, item: &mut syn::DeriveInput) -> GeneratedResult {
     match syn::Item::from(item.clone()) {
         syn::Item::Struct(item_struct) => {
-            match type_model::rewrite(item_struct) {
+            match model::rewrite(item_struct) {
+                Ok(result) => {
+                    match result.first() {
+                        Some(syn::Item::Struct(new_item)) => {
+                            *item = syn::DeriveInput::from(new_item.clone()); //the internal model replaces the original struct
+                            Ok((vec![result[1].clone(), result[2].clone()], vec![]))
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        }
+        _ => Err(syn::Error::new(
+            attr.span(),
+            "Only structs can be attributed with a type model",
+        )),
+    }
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "im_model" annotations.
+fn generate_for_im_model(attr: TokenStream, item: &mut syn::DeriveInput) -> GeneratedResult {
+    match syn::Item::from(item.clone()) {
+        syn::Item::Struct(item_struct) => {
+            match model::rewrite(item_struct) {
                 Ok(result) => {
                     match result.first() {
                         Some(syn::Item::Struct(new_item)) => {

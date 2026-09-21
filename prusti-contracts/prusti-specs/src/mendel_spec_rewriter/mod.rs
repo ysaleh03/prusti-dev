@@ -1,4 +1,4 @@
-//! Parsing of `#[mendel_spec]` attributed structures
+//! Parsing of `#[im_spec]` attributed structures
 pub mod traits;
 mod common;
 

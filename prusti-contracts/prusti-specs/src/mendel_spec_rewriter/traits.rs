@@ -5,7 +5,7 @@ use proc_macro2::TokenStream;
 use quote::quote_spanned;
 use syn::{parse_quote, parse_quote_spanned, spanned::Spanned};
 
-pub fn rewrite_mendel_spec(
+pub fn rewrite_im_spec(
     item_trait: &mut syn::ItemTrait,
     _mod_path: syn::Path,
 ) -> syn::Result<TokenStream> {
@@ -66,7 +66,7 @@ pub fn rewrite_mendel_spec(
     ]);
 
     Ok(quote_spanned! {item_trait.span()=>
-        #[prusti::mendel_spec]
+        #[prusti::im_spec]
         #new_trait
     })
 }

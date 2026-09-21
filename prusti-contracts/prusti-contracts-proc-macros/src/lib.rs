@@ -54,7 +54,7 @@ pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn mendel_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+pub fn im_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
     tokens
 }
 
@@ -138,7 +138,7 @@ pub fn predicate(_tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn model(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+pub fn type_model(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
@@ -221,8 +221,14 @@ pub fn mendel(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
-pub fn mendel_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    prusti_specs::mendel_spec(attr.into(), tokens.into()).into()
+pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    prusti_specs::im_model(attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
+pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    prusti_specs::im_spec(attr.into(), tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]
@@ -340,7 +346,7 @@ pub fn predicate(tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
-pub fn model(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
+pub fn type_model(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     prusti_specs::type_model(_attr.into(), tokens.into()).into()
 }
 

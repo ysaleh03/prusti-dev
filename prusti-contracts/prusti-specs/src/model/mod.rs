@@ -1,10 +1,12 @@
-//! Processes `#[model]` attributed types.
+//! Processes `#[type_model]` and `#[im_model]` attributed types.
 //!
 //! Usage documentation can be found in the corresponding macro definition.
 //!
-//! Given a `#[model]` attributed type `T`, this logic creates the following three items:
+//! Given a `#[type_model]` or `#[im_model]` attributed type `T`, this logic
+//! creates the following three items:
 //! * A struct `M` which holds the model's fields
-//! * A trait which provides a `model` method to be used in specifications
+//! * A trait which provides a `type_model` or `im_model` method to be used
+//!   in specifications
 //! * An implementation of the aforementioned trait for `T`.
 //!   The implementation is `unimplemented!()`, `#[pure]` and `#[trusted]`
 //!
@@ -40,16 +42,16 @@ pub fn rewrite(item_struct: syn::ItemStruct) -> syn::Result<Vec<syn::Item>> {
     }
 }
 
-type TypeModelGenerationResult<R> = Result<R, TypeModelGenerationError>;
+type ModelGenerationResult<R> = Result<R, ModelGenerationError>;
 
-fn rewrite_internal(item_struct: syn::ItemStruct) -> TypeModelGenerationResult<TypeModel> {
+fn rewrite_internal(item_struct: syn::ItemStruct) -> ModelGenerationResult<Model> {
     let idents = GeneratedIdents::generate(&item_struct);
 
     let model_struct = ModelStruct::create(&item_struct, &idents)?;
     let to_model_trait = ToModelTrait::create(&item_struct, &model_struct, &idents);
-    let model_impl = create_model_impl(&item_struct, &model_struct, &to_model_trait)?;
+    let model_impl = create_type_model_impl(&item_struct, &model_struct, &to_model_trait)?;
 
-    Ok(TypeModel {
+    Ok(Model {
         model_struct: model_struct.item,
         to_model_trait: to_model_trait.item,
         model_impl,
@@ -67,9 +69,9 @@ impl ModelStruct {
     fn create(
         item_struct: &syn::ItemStruct,
         idents: &GeneratedIdents,
-    ) -> TypeModelGenerationResult<Self> {
+    ) -> ModelGenerationResult<Self> {
         if item_struct.fields.is_empty() {
-            return Err(TypeModelGenerationError::MissingStructFields(
+            return Err(ModelGenerationError::MissingStructFields(
                 item_struct.span(),
             ));
         }
@@ -83,7 +85,7 @@ impl ModelStruct {
 
         let params = item_struct
             .parse_user_annotated_type_params()
-            .map_err(TypeModelGenerationError::NonParsableTypeParam)?;
+            .map_err(ModelGenerationError::NonParsableTypeParam)?;
         model_struct.generics.params.extend(
             params
                 .iter()
@@ -158,11 +160,11 @@ impl ToModelTrait {
     }
 }
 
-fn create_model_impl(
+fn create_type_model_impl(
     item_struct: &syn::ItemStruct,
     model_struct: &ModelStruct,
     to_model_trait: &ToModelTrait,
-) -> TypeModelGenerationResult<syn::ItemImpl> {
+) -> ModelGenerationResult<syn::ItemImpl> {
     let ident = &item_struct.ident;
 
     let mut rewritten_generics: Vec<syn::GenericParam> = Vec::new();
@@ -176,7 +178,7 @@ fn create_model_impl(
                 rewritten_generics.push(syn::GenericParam::Type(cloned))
             }
             syn::GenericParam::Const(const_param) => {
-                return Err(TypeModelGenerationError::ConstParamDisallowed(
+                return Err(ModelGenerationError::ConstParamDisallowed(
                     const_param.span(),
                 ))
             }
@@ -201,7 +203,57 @@ fn create_model_impl(
             #[trusted]
             #[pure]
             #[prusti::type_models_to_model_fn = #to_model_trait_str]
-            fn model(&self) -> #model_struct_path {
+            fn type_model(&self) -> #model_struct_path {
+                unimplemented!("Models can only be used in specifications")
+            }
+        }
+    })
+}
+
+fn create_im_model_impl(
+    item_struct: &syn::ItemStruct,
+    model_struct: &ModelStruct,
+    to_model_trait: &ToModelTrait,
+) -> ModelGenerationResult<syn::ItemImpl> {
+    let ident = &item_struct.ident;
+
+    let mut rewritten_generics: Vec<syn::GenericParam> = Vec::new();
+    for param in &item_struct.generics.params {
+        match param {
+            syn::GenericParam::Lifetime(_) => rewritten_generics.push(parse_quote!('_)),
+            syn::GenericParam::Type(type_param) => {
+                let mut cloned = type_param.clone();
+                cloned.attrs.clear();
+                cloned.bounds = Punctuated::default();
+                rewritten_generics.push(syn::GenericParam::Type(cloned))
+            }
+            syn::GenericParam::Const(const_param) => {
+                return Err(ModelGenerationError::ConstParamDisallowed(
+                    const_param.span(),
+                ))
+            }
+        }
+    }
+
+    let generic_params: Vec<syn::GenericParam> =
+        model_struct.item.generics.params.iter().cloned().collect();
+
+    let impl_path: syn::Path = parse_quote!(
+        #ident < #(#rewritten_generics),* >
+    );
+
+    let to_model_trait_path = &to_model_trait.path;
+    let model_struct_path = &model_struct.path;
+    let to_model_trait_str = &to_model_trait.item.ident.to_string();
+
+    Ok(parse_quote_spanned! {item_struct.span()=>
+        #[prusti::type_models_to_model_impl]
+        #[prusti::specs_version = #SPECS_VERSION]
+        impl<#(#generic_params),*> #to_model_trait_path for #impl_path {
+            #[trusted]
+            #[pure]
+            #[prusti::type_models_to_model_fn = #to_model_trait_str]
+            fn im_model(&self) -> #model_struct_path {
                 unimplemented!("Models can only be used in specifications")
             }
         }
@@ -242,7 +294,7 @@ impl GeneratedIdents {
 /// Errors that can happen during model generation.
 /// These are mostly wrong usages of the macro by the user.
 #[derive(Debug)]
-enum TypeModelGenerationError {
+enum ModelGenerationError {
     /// Thrown when the model contains no fields
     MissingStructFields(proc_macro2::Span),
 
@@ -253,34 +305,34 @@ enum TypeModelGenerationError {
     NonParsableTypeParam(UserAnnotatedTypeParamParserError),
 }
 
-impl std::convert::From<TypeModelGenerationError> for syn::Error {
-    fn from(err: TypeModelGenerationError) -> Self {
+impl std::convert::From<ModelGenerationError> for syn::Error {
+    fn from(err: ModelGenerationError) -> Self {
         match err {
-            TypeModelGenerationError::MissingStructFields(span) => {
+            ModelGenerationError::MissingStructFields(span) => {
                 syn::Error::new(span, "Type model must have at least one field")
             }
-            TypeModelGenerationError::ConstParamDisallowed(span) => {
+            ModelGenerationError::ConstParamDisallowed(span) => {
                 syn::Error::new(span, "Const generics are disallowed for models")
             }
-            TypeModelGenerationError::NonParsableTypeParam(parse_err) => parse_err.into(),
+            ModelGenerationError::NonParsableTypeParam(parse_err) => parse_err.into(),
         }
     }
 }
 
 /// Type to represent generated code during expansion of the `#[model]` macro
-struct TypeModel {
+struct Model {
     /// The struct which represents the model
     model_struct: syn::ItemStruct,
 
     /// A trait which will be implemented on the modelled type
-    /// to return the [TypeModel::model_struct]
+    /// to return the [Model::model_struct]
     to_model_trait: syn::ItemTrait,
 
-    /// The implementation of the [TypeModel::model_trait] on the modelled type.
+    /// The implementation of the [Model::model_trait] on the modelled type.
     model_impl: syn::ItemImpl,
 }
 
-impl ToTokens for TypeModel {
+impl ToTokens for Model {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.to_model_trait.to_tokens(tokens);
         self.model_struct.to_tokens(tokens);
@@ -302,7 +354,7 @@ mod tests {
         );
         let trait_impl: syn::ItemImpl = parse_quote!(impl ToModel for Foo {});
 
-        let rewritten_model = TypeModel {
+        let rewritten_model = Model {
             to_model_trait: to_model_trait.clone(),
             model_struct: model_struct.clone(),
             model_impl: trait_impl.clone(),
@@ -325,7 +377,7 @@ mod tests {
         let result = rewrite_internal(input);
         assert!(matches!(
             result,
-            Err(TypeModelGenerationError::MissingStructFields(_))
+            Err(ModelGenerationError::MissingStructFields(_))
         ));
     }
 
@@ -508,7 +560,7 @@ mod tests {
         let result = rewrite_internal(input);
         assert!(matches!(
             result,
-            Err(TypeModelGenerationError::ConstParamDisallowed(_))
+            Err(ModelGenerationError::ConstParamDisallowed(_))
         ));
     }
 
@@ -520,13 +572,13 @@ mod tests {
         let result = rewrite_internal(input);
         assert!(matches!(
             result,
-            Err(TypeModelGenerationError::NonParsableTypeParam(
+            Err(ModelGenerationError::NonParsableTypeParam(
                 UserAnnotatedTypeParamParserError::InvalidAnnotation(_)
             ))
         ));
     }
 
-    fn expect_ok(result: Result<TypeModel, TypeModelGenerationError>) -> TypeModel {
+    fn expect_ok(result: Result<Model, ModelGenerationError>) -> Model {
         result.expect("Expected Ok result")
     }
 
@@ -537,13 +589,13 @@ mod tests {
         );
     }
 
-    fn check_model_ident(model: &TypeModel, expected_prefix: &str) -> Ident {
+    fn check_model_ident(model: &Model, expected_prefix: &str) -> Ident {
         let ident = &model.model_struct.ident;
         assert!(ident.to_string().starts_with(expected_prefix));
         ident.clone()
     }
 
-    fn check_trait_ident(model: &TypeModel, expected_prefix: &str) -> Ident {
+    fn check_trait_ident(model: &Model, expected_prefix: &str) -> Ident {
         let ident = &model.to_model_trait.ident;
         assert!(ident.to_string().starts_with(expected_prefix));
         ident.clone()
