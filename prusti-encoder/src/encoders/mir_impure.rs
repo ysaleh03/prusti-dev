@@ -21,7 +21,7 @@ use pcg::{
     pcg::{CapabilityKind, EvalStmtPhase, Pcg, PcgNode, PcgSuccessor},
     results::PcgBasicBlock,
     utils::{
-        CompilerCtxt, HasPlace, Place, SnapshotLocation, display::DisplayWithCtxt,
+        CompilerCtxt, HasPlace, Place, PlaceLike, SnapshotLocation, display::DisplayWithCtxt,
         maybe_old::MaybeLabelledPlace,
     },
 };
@@ -164,6 +164,9 @@ where
 
     pub wands: WandEncOutput<'vir>,
 
+    pub mendel_mode: bool,
+    pub abstract_ptrs: FxHashMap<mir::LocalDecl<'vir>, AbsPtrExpr<'vir>>,
+
     pub tmp_ctr: usize,
     pub label_ctr: usize,
     pub call_labels: FxHashMap<mir::BasicBlock, (&'vir str, &'vir str)>,
@@ -183,6 +186,13 @@ where
     pub current_terminator: Option<vir::TerminatorStmt<'vir>>,
 
     pub encoded_blocks: Vec<vir::CfgBlock<'vir>>, // TODO: use IndexVec ?
+}
+
+/// Represents an abstract pointer and its associated implicit capabilities,
+/// including their side conditions.
+pub(crate) struct AbsPtrExpr<'vir> {
+    mutable: FxHashSet<(vir::ExprBool<'vir>, vir::ExprBool<'vir>)>,
+    shared: FxHashSet<(vir::ExprBool<'vir>, vir::ExprBool<'vir>)>,
 }
 
 /// Represents the translation of a MIR place. If the place crosses a shared
@@ -1223,17 +1233,68 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         )
     }
 
-    fn new_before_label(&mut self, location: mir::Location) {
+    fn new_before_label(&mut self, location: mir::Location) -> &'vir str {
         let label = self.location_label(
             LocationLabelPrefix::Before,
             location,
             self.current_block_pres.as_ref().unwrap(),
         );
         self.stmt(self.vcx.mk_label_stmt(label));
+        label
     }
 
     fn set_from_to_flag(&mut self, from: mir::BasicBlock, to: mir::BasicBlock) -> vir::Stmt<'vir> {
         self.from_to_vars.set_from_to_flag_stmt(self.vcx, from, to)
+    }
+
+    fn mendel_local_post_main(&mut self, before_label: &str, pcg: &Pcg<'_, 'vir>) {
+        comment!(
+            self,
+            "exhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
+        );
+        comment!(self, "pc := pc + 1");
+        comment!(
+            self,
+            "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
+        );
+        comment!(
+            self,
+            "inhale forall l: Loc :: local(l, pc) && local(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
+        );
+        comment!(
+            self,
+            "inhale forall l: Loc :: immutable(l, pc) && immutable(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
+        );
+
+        // TODO: Remebember projections with assoc. ptrs and check for their prefixes as well
+        for p in pcg.places_with_capapability(CapabilityKind::Read) {
+            if p.is_shared_ref(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p).1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
+                    place_expr
+                );
+            }
+        }
+
+        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
+            if p.is_shared_ref(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p).1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
+                    place_expr
+                );
+            } else if p.is_mut_ref(self.pcg_ctxt()) || p.is_owned(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p).1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale mutable capability for {:?}@inner }}",
+                    place_expr
+                );
+            }
+        }
     }
 
     pub fn visit_body(&mut self, body: &mir::Body<'vir>) -> Result<(), EncodeFullError<'vir, E>> {
@@ -1647,7 +1708,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.vcx.with_span(statement.source_info.span, |_vcx| {
             self.deps().check_cycle()?;
 
-            self.new_before_label(location);
+            let before_label = self.new_before_label(location);
 
             comment!(self, "[MIR] {location:?}: {statement:?}");
 
@@ -1739,6 +1800,15 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     statement.kind
                 ),
             }
+
+            if self.mendel_mode {
+                let current_fpcs = self.current_fpcs.take().unwrap();
+                let cfpcs = &current_fpcs.statements[location.statement_index];
+                let pcg = &cfpcs.states[EvalStmtPhase::PostMain];
+                self.mendel_local_post_main(before_label, pcg);
+                self.current_fpcs = Some(current_fpcs);
+            }
+
             Ok(())
         })
     }
@@ -1750,7 +1820,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     ) -> Result<(), EncodeFullError<'vir, E>> {
         self.deps().check_cycle()?;
 
-        self.new_before_label(location);
+        let before_label = self.new_before_label(location);
         comment!(self, "[MIR] {location:?}: {:?}", terminator.kind);
         let span = terminator.source_info.span;
 
@@ -1761,6 +1831,15 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_actions(&cfpcs.states[phase], &cfpcs.actions(phase), false)?;
         }
         self.current_fpcs = Some(current_fpcs);
+
+        // not sure if here is where this should go..
+        if self.mendel_mode {
+            let current_fpcs = self.current_fpcs.take().unwrap();
+            let cfpcs = &current_fpcs.statements[location.statement_index];
+            let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+            self.mendel_local_post_main(before_label, pcg);
+            self.current_fpcs = Some(current_fpcs);
+        }
 
         // A `ghost!` block's `if false` switch is encoded as an unconditional
         // jump into the ghost arm (the inline ghost body); the runtime
@@ -2165,6 +2244,13 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 self.vcx.mk_assume_false_stmt()
             }),
         };
+        if self.mendel_mode {
+            let current_fpcs = self.current_fpcs.take().unwrap();
+            let cfpcs = &current_fpcs.statements[location.statement_index];
+            let pcg = &cfpcs.states[EvalStmtPhase::PostMain];
+            self.mendel_local_post_main(before_label, pcg);
+            self.current_fpcs = Some(current_fpcs);
+        }
         assert!(self.current_terminator.replace(terminator).is_none());
         Ok(())
     }

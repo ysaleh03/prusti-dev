@@ -1,6 +1,9 @@
 use pcg::borrow_pcg::FunctionData;
 use prusti_interface::PrustiError;
-use prusti_rustc_interface::{middle::mir, span::def_id::DefId};
+use prusti_rustc_interface::{
+    middle::{mir, ty},
+    span::def_id::DefId,
+};
 use task_encoder::{
     EncodeFullError, EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies,
 };
@@ -149,6 +152,7 @@ impl TaskEncoder for MethodEnc {
         vir::with_vcx(|vcx| {
             let span = vcx.tcx().def_span(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
+            let mendel = crate::encoders::is_function_mendel(def_id);
 
             let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
                 MirLocalDefEncTask::Local {
@@ -262,6 +266,24 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
                     )
                 }
+                if mendel {
+                    start_stmts
+                        .push(vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; pc : Int }, None));
+                    start_stmts.push(vcx.mk_comment_stmt(
+                        "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)",
+                    ));
+                    for arg in (0..arg_count).map(mir::Local::from) {
+                        match body.local_decls[arg].ty.ref_mutability() {
+                            Some(ty::Mutability::Mut) => start_stmts.push(vcx.mk_comment_stmt(
+                                "if (side conditions) {{ inhale mutable capability for {arg:?}@inner }}",
+                            )),
+                            Some(ty::Mutability::Not) => start_stmts.push(vcx.mk_comment_stmt(
+                                "if (side conditions) {{ inhale shared capability for {arg:?}@inner }}",
+                            )),
+                            None => {}
+                        };
+                    }
+                }
                 // This will be overwritten later.
                 encoded_blocks.push(vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
@@ -285,6 +307,9 @@ impl TaskEncoder for MethodEnc {
                     body,
 
                     wands,
+
+                    mendel_mode: mendel,
+                    abstract_ptrs: Default::default(),
 
                     tmp_ctr: 0,
                     label_ctr: 0,
@@ -374,3 +399,38 @@ impl TaskEncoder for MethodEnc {
         }
     }
 }
+
+// fn has_interior_mutability<'tcx>(tcx: ty::TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
+//     struct InteriorMutabilityTyVisitor<'tcx>(ty::TyCtxt<'tcx>, HashSet<ty::Ty<'tcx>>);
+
+//     impl<'tcx> ty::TypeVisitor<ty::TyCtxt<'tcx>> for InteriorMutabilityTyVisitor<'tcx> {
+//         type Result = std::ops::ControlFlow<()>;
+
+//         fn visit_ty(&mut self, t: ty::Ty<'tcx>) -> Self::Result {
+//             println!("checking {t:?}");
+//             match t.kind() {
+//                 ty::TyKind::RawPtr(..) => std::ops::ControlFlow::Break(()),
+//                 ty::TyKind::Adt(adt_def, _) if adt_def.is_unsafe_cell() => {
+//                     std::ops::ControlFlow::Break(())
+//                 }
+//                 ty::TyKind::Adt(adt_def, args)
+//                     if !self.1.contains(&t)
+//                         && adt_def.all_fields().any(|f| {
+//                             let t = f.ty(self.0, args);
+//                             ty::TypeVisitable::visit_with(&t, self).is_break()
+//                         }) =>
+//                 {
+//                     std::ops::ControlFlow::Break(())
+//                 }
+//                 _ => {
+//                     self.1.insert(t);
+//                     ty::TypeSuperVisitable::super_visit_with(&t, self)
+//                 }
+//             }
+//         }
+//     }
+
+//     let visited = HashSet::new();
+//     let cf = ty::TypeVisitable::visit_with(&ty, &mut InteriorMutabilityTyVisitor(tcx, visited));
+//     cf.is_break()
+// }
