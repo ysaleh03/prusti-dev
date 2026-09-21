@@ -1,16 +1,17 @@
 use prusti_interface::PrustiError;
-use prusti_rustc_interface::{middle::ty, span::def_id::DefId};
+use prusti_rustc_interface::span::def_id::DefId;
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
 use vir::{FunctionIdn, Reify};
 
-use crate::{
-    encoders::{
-        MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure, PureKind,
-        mir_fn::{CallTaskDescription, RustSignature},
-        pure::spec::MirSpecEncMode,
-        ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
+use crate::encoders::{
+    MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure, PureKind,
+    TyUsePureEnc,
+    mir_fn::{CallTaskDescription, RustSignature},
+    pure::spec::MirSpecEncMode,
+    ty::{
+        generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
+        use_pure::TyUsePure,
     },
-    trait_support::is_function_with_body,
 };
 
 // Function wrapper
@@ -21,6 +22,7 @@ pub struct FunctionCallEnc;
 pub struct FunctionCallEncOutput<'vir> {
     function: FunctionEncOutputRef<'vir>,
     ty_args: GArgsTy<'vir>,
+    arg_tys: Vec<TyUsePure<'vir>>,
     inputs: Vec<GArgCaster<'vir, Pure>>,
     output: GArgCaster<'vir, Pure>,
 }
@@ -48,8 +50,12 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         assert_eq!(self.inputs.len(), args.len());
-        for (arg, caster) in args.iter_mut().zip(self.inputs.iter()) {
-            *arg = caster.cast_to_callee_ctx(*arg);
+        for ((arg, caster), ty) in args
+            .iter_mut()
+            .zip(self.inputs.iter())
+            .zip(self.arg_tys.iter())
+        {
+            *arg = caster.cast_to_callee_ctx(ty.dummy_ref_address(*arg));
         }
         let call = function.call()(&args, self.ty_args.get_ty(), self.ty_args.get_const());
         self.output.cast_to_caller_ctx(call)
@@ -94,6 +100,14 @@ impl TaskEncoder for FunctionCallEnc {
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Pure>>(normalized)?;
+        let arg_tys = signature
+            .inputs
+            .iter()
+            .map(|ty| {
+                let ty_task = ty.decompose_normalize(task_key.gargs);
+                deps.require_dep::<TyUsePureEnc>(ty_task)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok((
             (),
             FunctionCallEncOutput {
@@ -101,6 +115,7 @@ impl TaskEncoder for FunctionCallEnc {
                 ty_args,
                 inputs,
                 output,
+                arg_tys,
             },
         ))
     }
@@ -151,7 +166,6 @@ impl TaskEncoder for FunctionEnc {
     ) -> EncodeFullResult<'vir, Self> {
         vir::with_vcx(|vcx| {
             let def_id = *task_key;
-            let trusted = crate::encoders::is_function_trusted(def_id);
             let local_defs = deps.require_dep::<MirLocalDefEnc>(MirLocalDefEncTask::Local {
                 def_id,
                 all_locals: true,
@@ -159,10 +173,9 @@ impl TaskEncoder for FunctionEnc {
 
             tracing::debug!("encoding {def_id:?}");
 
-            let caller_ident =
-                vir::vir_format_identifier!(vcx, "cf_{}", vcx.tcx().def_path_str(def_id));
-            let function_ident =
-                vir::vir_format_identifier!(vcx, "f_{}", vcx.tcx().def_path_str(def_id));
+            let name = vir::ViperIdent::from_def_id(vcx, def_id);
+            let caller_ident = vir::vir_format_identifier!(vcx, "cf_{name}");
+            let function_ident = vir::vir_format_identifier!(vcx, "f_{name}");
             let arg_types = vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>());
             let return_type = local_defs.snap_ty_return();
             let params = GParams::from(def_id);
@@ -185,11 +198,10 @@ impl TaskEncoder for FunctionEnc {
                 },
             )?;
 
-            let substs = ty::GenericArgs::identity_for_item(vcx.tcx(), def_id);
             let spec =
                 deps.require_dep::<MirSpecEnc>((def_id, def_id, MirSpecEncMode::PureWithResult))?;
 
-            let expr = if trusted || !is_function_with_body(vcx.tcx(), def_id) {
+            let expr = if !crate::encoders::encodes_body(def_id) {
                 None
             } else {
                 // Encode the body of the function. If it cannot be encoded (e.g. it
@@ -200,9 +212,7 @@ impl TaskEncoder for FunctionEnc {
                     encoding_depth: 0,
                     kind: PureKind::Pure,
                     parent_def_id: def_id,
-                    param_env: vcx.tcx().param_env(def_id),
-                    substs,
-                    caller_def_id: None,
+                    gargs: params.identity_args(),
                 }) {
                     Ok(out) => {
                         let expr = out.expr.reify(vcx, (def_id, spec.pre_args));
@@ -215,13 +225,13 @@ impl TaskEncoder for FunctionEnc {
                         Some(expr)
                     }
                     Err(err) => {
+                        let (message, span) = super::dep_error(&err);
                         vcx.emit_early_error(PrustiError::unsupported(
                             format!(
-                                "cannot encode function body `{}`: {}",
+                                "cannot encode function body `{}`: {message}",
                                 vcx.tcx().def_path_str(def_id),
-                                super::dep_error_message(&err),
                             ),
-                            vcx.tcx().def_span(def_id).into(),
+                            span.unwrap_or_else(|| vcx.tcx().def_span(def_id)).into(),
                         ));
                         None
                     }

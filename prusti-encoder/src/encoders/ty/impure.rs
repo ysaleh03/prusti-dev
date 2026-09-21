@@ -22,7 +22,7 @@ impl<'vir> TyDatas<'vir> for ImpureTyDatas {
     type MutRefData = TyImpureMutRefData<'vir>;
     type RawData = TyImpureRawData;
     type FieldData = TyImpureFieldData<'vir>;
-    type StructData = ();
+    type StructData = TyImpureStructData<'vir>;
     type VariantData = TyImpureVariantData<'vir>;
     type EnumData = TyImpureEnumData<'vir>;
     type BuiltinData = ();
@@ -48,8 +48,25 @@ pub struct TyImpureRawData {}
 #[derive(Debug, Clone, Copy)]
 pub struct TyImpureMutRefData<'vir> {
     pub pure: <PureTyDatas as TyDatas<'vir>>::MutRefData,
-    /// For use in constructing a snapshot from just a `Ref` and metadata `PSnap`.
-    pub arbitrary_value: vir::FunctionIdn<'vir, (vir::Ref, vir::PSnap), vir::CSnap>,
+    /// For use in constructing a snapshot from just a `Ref` and metadata
+    /// `PSnap`. Takes the referent's type arguments so that the (unconstrained)
+    /// value slot is not shared between instantiations at different types.
+    pub arbitrary_value:
+        vir::FunctionIdn<'vir, (vir::Ref, vir::PSnap, vir::ManyTyVal, vir::ManyCSnap), vir::CSnap>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TyImpureStructData<'vir> {
+    /// The hardcoded extras when this struct is a `Box`.
+    pub box_data: Option<TyImpureBoxData<'vir>>,
+}
+
+/// The hardcoded extras of a `Box`: the pointer metadata, read out of the
+/// (folded) `Unique` predicate (the value field's address accessor is the
+/// similarly heap-dependent `address` function in its `TyImpureFieldData`).
+#[derive(Debug, Clone, Copy)]
+pub struct TyImpureBoxData<'vir> {
+    pub metadata: FunctionIdn<'vir, (vir::Ref, vir::ManyTyVal, vir::ManyCSnap), vir::PSnap>,
 }
 
 #[derive(Debug, Clone, Copy)]

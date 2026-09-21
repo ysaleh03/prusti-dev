@@ -4,14 +4,19 @@ use prusti_rustc_interface::{
     span::def_id::DefId,
 };
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
-use vir::{FunctionIdn, MethodIdn, vir_format_identifier};
+use vir::{FunctionIdn, MethodIdn, ViperIdent, vir_format_identifier};
 
 use crate::{
     encoders::{
         FunctionCallEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
         mir_fn::CallTaskDescription,
         pure::spec::MirSpecEncMode,
-        ty::generics::{GArgs, GParams, GenericParamsEnc},
+        ty::{
+            RustTyDecomposition,
+            generics::{GArgs, GParams, GenericParamsEnc, r#trait::TraitEnc, trait_impls},
+            lifted::TyConstructorEnc,
+            use_inhabited::TyUseInhabitedEnc,
+        },
     },
     trait_support::is_function_with_body,
 };
@@ -86,7 +91,7 @@ impl TaskEncoder for TraitFnEnc {
                 .trait_container(tcx)
                 .expect("task key should be the associated item of a trait");
 
-            let trait_name = vcx.alloc_str(tcx.item_name(trait_def_id).as_str());
+            let trait_name = ViperIdent::from_def_id(vcx, trait_def_id);
 
             let mut axioms = Vec::new();
             let mut funcs = Vec::new();
@@ -96,7 +101,7 @@ impl TaskEncoder for TraitFnEnc {
             // item_generics also includes parameters of trait itself
             let item_params = GParams::from(def_id);
             let item_generics = deps.require_dep::<GenericParamsEnc>(item_params)?;
-            let item_name = tcx.item_name(def_id);
+            let item_name = ViperIdent::from_def_id(vcx, def_id);
 
             let local_defs = deps.require_dep::<MirLocalDefEnc>(MirLocalDefEncTask::Local {
                 def_id,
@@ -176,8 +181,32 @@ impl TaskEncoder for TraitFnEnc {
                     call_stub_pure_function,
                 },
             )?;
+            // The stubs' semantics are given by the impls' axioms; require the
+            // trait so that its impls' condition/axiom triggers are registered
+            // (foreign traits are not encoded by `encode_all_in_crate`).
+            deps.require_ref::<TraitEnc>(trait_def_id)?;
             dom_funcs.push(vcx.mk_domain_function(pre_func, false, None));
             dom_funcs.push(vcx.mk_domain_function(post_func, false, None));
+
+            // The stub emitted below is only useful together with the axioms
+            // bridging the abstract pre/post functions to concrete impl
+            // specs. Unlock, per impl of the trait, the axioms of just the
+            // item implementing this function once the impl's constructor
+            // keys are requested - the same gating as the impl's condition
+            // (see `TraitEnc`), but calling a trait function must not pull in
+            // the trait's whole machinery.
+            for impl_did in tcx.all_impls(trait_def_id) {
+                let Some(&impl_item_def_id) = tcx.impl_item_implementor_ids(impl_did).get(&def_id)
+                else {
+                    continue;
+                };
+                let keys = trait_impls::impl_unlock_keys(impl_did);
+                let impl_span = tcx.def_span(impl_did);
+                TyConstructorEnc::on_all_requested(keys, move || {
+                    let _ =
+                        trait_impls::TraitImplItemEnc::encode(impl_item_def_id, false, impl_span);
+                });
+            }
 
             let func_args = local_defs.local_decl_args().collect::<Vec<_>>();
             let func_arg_exprs = vcx.alloc_slice(
@@ -263,6 +292,22 @@ impl TaskEncoder for TraitFnEnc {
                     item_generics.ty_exprs(),
                     item_generics.const_exprs(),
                 ));
+
+                // If the call succeeds, then its return type is definitely inhabited
+                // We need this postcondition to generate impure wrapper fns
+                // See tests/verify/pass/extern-spec/module-arg.rs
+                let ret_ty = tcx
+                    .instantiate_and_normalize_erasing_regions(
+                        ty::GenericArgs::identity_for_item(tcx, def_id),
+                        ty::TypingEnv::post_analysis(tcx, def_id),
+                        tcx.fn_sig(def_id),
+                    )
+                    .skip_binder()
+                    .output();
+                let ret_ty = RustTyDecomposition::from_ty(ret_ty, def_id);
+                stub_posts.push(deps.require_ref::<TyUseInhabitedEnc>(ret_ty)?.inhabited());
+                // stub_posts.push(local_defs.ret().inhabited);
+
                 let wrapped_call = call_stub_pure_function.unwrap().call()(
                     func_arg_exprs,
                     item_generics.ty_exprs(),

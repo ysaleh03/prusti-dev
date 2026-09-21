@@ -90,13 +90,14 @@ impl TaskEncoder for IndirectPredicatesEnc {
             let combined = ty.ty.zip(self_ty_enc);
             let mut predicate_applications = vec![];
             // Collects (accessor, indirect_predicate) pairs for the fields of a
-            // struct-like (used for structs and enum variants).
+            // struct-like (used for structs and enum variants). Fields are
+            // recursed into at their concrete (normalized) type.
             let collect_field_predicates =
                 |struct_data: StructData<'vir, (RustTyDatas, UsePureTyDatas)>,
                  deps: &mut TaskEncoderDependencies<'vir, IndirectPredicatesEnc>| {
                     let mut result = vec![];
                     for (field_ty, accessor) in struct_data.fields {
-                        let field_ty = field_ty.decompose_context(ty.ty.params, ty.args);
+                        let field_ty = field_ty.decompose_normalize(ty.args);
                         if let Some(new_projection) =
                             LifetimeProjection::new(field_ty, task_region, None, PrustiPcgCtxt)
                         {
@@ -144,8 +145,11 @@ impl TaskEncoder for IndirectPredicatesEnc {
                             }),
                         ));
                     }
+                    // Collect the indirect predicates of the referent itself
+                    // (e.g. of the inner reference in `&'a mut &'b mut i32`).
+                    let referent_ty = data.referent.decompose_normalize(ty.args);
                     if let Some(new_projection) =
-                        LifetimeProjection::new(inner_ty, task_region, None, PrustiPcgCtxt)
+                        LifetimeProjection::new(referent_ty, task_region, None, PrustiPcgCtxt)
                     {
                         let inner_indirect =
                             deps.require_dep::<IndirectPredicatesEnc>(new_projection)?;
@@ -158,12 +162,14 @@ impl TaskEncoder for IndirectPredicatesEnc {
                                         "ref_inner_indirect",
                                         vir::TYPE_BOOL,
                                         Box::new(move |vcx, self_expr: vir::ExprGenSnap<_, _>| {
+                                            let inner_snap = inner_impure.ref_to_snap(
+                                                ref_domain.deref_access(self_expr.downcast_ty()),
+                                            );
                                             inner_expr
                                                 .reify(
                                                     vcx,
-                                                    inner_impure.ref_to_snap(
-                                                        ref_domain
-                                                            .deref_access(self_expr.downcast_ty()),
+                                                    ref_domain.cast_to_caller_ctx(
+                                                        inner_snap.downcast_ty(),
                                                     ),
                                                 )
                                                 .kind

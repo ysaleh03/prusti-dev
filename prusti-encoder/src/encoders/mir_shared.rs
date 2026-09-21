@@ -24,9 +24,11 @@ use prusti_rustc_interface::{
 type ExprOutput<'vir, Enc: PureRvalueEnc<'vir>> =
     vir::ExprGenSnap<'vir, Enc::ExprCurr, Enc::ExprNext>;
 
+pub(crate) type EncodeResult<'vir, T, E> = Result<T, EncodeFullError<'vir, E>>;
+
 #[allow(type_alias_bounds)]
 type ExprResult<'vir, Enc: PureRvalueEnc<'vir>> =
-    Result<ExprOutput<'vir, Enc>, EncodeFullError<'vir, Enc::Encoder>>;
+    EncodeResult<'vir, ExprOutput<'vir, Enc>, Enc::Encoder>;
 
 #[allow(type_alias_bounds)]
 type CastSnap<'vir, Enc: PureRvalueEnc<'vir>> = (
@@ -37,12 +39,14 @@ type CastSnap<'vir, Enc: PureRvalueEnc<'vir>> = (
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum RustcIntrinsic {
     PtrMetadata,
+    DiscriminantValue,
 }
 
 impl RustcIntrinsic {
     pub(super) fn from_intrinsic(intrinsic: ty::IntrinsicDef) -> Option<Self> {
         Some(match intrinsic.name {
             sym::ptr_metadata => RustcIntrinsic::PtrMetadata,
+            sym::discriminant_value => RustcIntrinsic::DiscriminantValue,
             _ => return None,
         })
     }
@@ -67,21 +71,42 @@ pub(crate) trait PureRvalueEnc<'vir> {
     fn body(&self) -> &mir::Body<'vir>;
     fn ty_use_pure(&mut self, ty: ty::Ty<'vir>) -> TyUsePure<'vir>;
 
-    /// The pointer metadata for a freshly created reference of type `ref_ty`
-    /// when no metadata is carried over from the referent place (i.e. a thin
-    /// pointer to a sized referent): the snapshot of the referent's metadata
-    /// type, which is `()` for all sized types, built with its regular
-    /// (zero-field) constructor. Returns `None` for an unsized referent
-    /// (slice/`dyn`), whose metadata cannot be conjured here and must instead
-    /// be propagated from the wide pointer the place is reached through.
-    fn thin_ptr_metadata(
+    /// When creating a reference to a place, the metadata either comes from a
+    /// deref along the projections in the place (e.g. `(*x).last_field` would
+    /// take the metadata from `x`) or the place has no derefs in which case
+    /// rustc guarantees that it is `Sized` and thus the metadata is `()`. In
+    /// this case, this function constructs such a metadata value, panicking if
+    /// we could not prove that `ref_ty` points to a sized type (which should
+    /// never happen due to the rustc guarantee).
+    fn expect_thin_ptr_metadata(
         &mut self,
         ref_ty: ty::Ty<'vir>,
-    ) -> Option<vir::ExprGenSnap<'vir, Self::ExprCurr, Self::ExprNext>> {
+    ) -> vir::ExprGenSnap<'vir, Self::ExprCurr, Self::ExprNext> {
         let metadata_ty = ref_ty.pointee_metadata_ty_or_projection(self.vcx().tcx());
+        // `pointee_metadata_ty_or_projection` only resolves bound-independent
+        // ("trivial") sizedness, leaving e.g. `<Cell<T> as Pointee>::Metadata`
+        // as a projection even though the body's `T: Sized` bound makes it
+        // `()`. Normalize in the body's environment to resolve such cases.
+        let metadata_ty = self.context().normalize(metadata_ty);
+        assert!(
+            metadata_ty.is_unit(),
+            "expected metadata type {metadata_ty:?} to be unit for a sized referent"
+        );
         self.ty_use_pure(metadata_ty)
             .zst_to_snap()
-            .map(|m| m.upcast_ty())
+            .unwrap()
+            .upcast_ty()
+    }
+
+    /// The source position currently being encoded under: the MIR statement
+    /// (or, in a pure body, the expression) whose encoding is in progress.
+    /// Falls back to the body when no span is on the stack, as when encoding
+    /// the repacks of a terminator's outgoing edges.
+    fn current_span(&self) -> Span {
+        let vcx = self.vcx();
+        vcx.top_span()
+            .and_then(|span| vcx.get_span_from_id(span.id))
+            .unwrap_or_else(|| self.body().span)
     }
 
     /// Build an error for an unsupported feature reached during rvalue encoding.
@@ -110,7 +135,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
         &mut self,
         place: Place<'vir>,
         ctxt: &Self::EncodePlaceCtxt,
-    ) -> vir::ExprGenSnap<'vir, Self::ExprCurr, Self::ExprNext>;
+    ) -> ExprResult<'vir, Self>;
 
     fn encode_cast_snap(
         &mut self,
@@ -118,7 +143,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
         kind: mir::CastKind,
         operand: &mir::Operand<'vir>,
         ctxt: &Self::EncodePlaceCtxt,
-    ) -> Result<CastSnap<'vir, Self>, EncodeFullError<'vir, Self::Encoder>> {
+    ) -> EncodeResult<'vir, CastSnap<'vir, Self>, Self::Encoder> {
         let encoded_operand = self.encode_operand_snap(operand, ctxt)?.downcast_ty();
         let operand_ty = operand.ty(self.body(), self.vcx().tcx());
         let rvalue_ty = RustTyDecomposition::from_ty(rvalue_ty, self.context());
@@ -140,6 +165,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
         l: &mir::Operand<'vir>,
         r: &mir::Operand<'vir>,
         ctxt: &Self::EncodePlaceCtxt,
+        span: Span,
     ) -> ExprResult<'vir, Self> {
         let l_ty = l.ty(self.body(), self.vcx().tcx());
         let r_ty = r.ty(self.body(), self.vcx().tcx());
@@ -147,7 +173,9 @@ pub(crate) trait PureRvalueEnc<'vir> {
         let r_ty = RustTyDecomposition::from_ty(r_ty, self.context());
         let rvalue_ty = RustTyDecomposition::from_ty(rvalue_ty, self.context());
         let task = MirBuiltinBinOpTask::new(rvalue_ty, op, l_ty, r_ty);
-        let op = self.deps().require_dep::<MirBuiltinBinOpEnc>(task)?;
+        let op = self
+            .deps()
+            .require_dep_spanned::<MirBuiltinBinOpEnc>(task, span)?;
 
         let encoded_l = self.encode_operand_snap(l, ctxt)?;
         let encoded_r = self.encode_operand_snap(r, ctxt)?;
@@ -157,7 +185,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
     fn encode_constant_snap(
         &mut self,
         constant: &mir::ConstOperand<'vir>,
-    ) -> Result<vir::ExprCSnap<'vir>, EncodeFullError<'vir, Self::Encoder>> {
+    ) -> EncodeResult<'vir, vir::ExprCSnap<'vir>, Self::Encoder> {
         let context = self.context();
         self.deps().require_dep::<ConstEnc>(ConstEncTask::Mir {
             const_: constant.const_,
@@ -201,7 +229,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
         args: &[Spanned<mir::Operand<'vir>>],
         span: Span,
         ctxt: &Self::EncodePlaceCtxt,
-    ) -> Result<Option<ExprOutput<'vir, Self>>, EncodeFullError<'vir, Self::Encoder>> {
+    ) -> EncodeResult<'vir, Option<ExprOutput<'vir, Self>>, Self::Encoder> {
         if matches!(builtin, PrustiBuiltin::Spec(_)) {
             return Ok(None);
         }
@@ -278,6 +306,30 @@ pub(crate) trait PureRvalueEnc<'vir> {
                 assert_eq!(args.len(), 1);
                 let dest_ty = arg_tys[1].expect_ty();
                 self.encode_unary_op_snap(dest_ty, mir::UnOp::PtrMetadata, &args[0].node, ctxt)
+            }
+            // pub const fn discriminant_value<T>(v: &T) -> <T as DiscriminantKind>::Discriminant
+            RustcIntrinsic::DiscriminantValue => {
+                assert_eq!(arg_tys.len(), 1);
+                assert_eq!(args.len(), 1);
+                let enum_ty = arg_tys[0].expect_ty();
+                let Some(place) = args[0].node.place() else {
+                    return Err(self.unsupported_rvalue(
+                        "`discriminant_value` of a constant operand".to_string(),
+                        args[0].span,
+                    ));
+                };
+                let deref_place = self.vcx().tcx().mk_place_deref(place);
+                let snap = self.encode_place_snap(deref_place.into(), ctxt)?;
+                let e_enum_ty = self.ty_use_pure(enum_ty);
+                match e_enum_ty.get_enumlike() {
+                    Some(e_enum_ty) => {
+                        Ok(e_enum_ty.snap_to_discr_snap(snap.downcast_ty()).upcast_ty())
+                    }
+                    None => Err(self.unsupported_rvalue(
+                        format!("`discriminant_value` of `{enum_ty}`, which has no discriminant"),
+                        args[0].span,
+                    )),
+                }
             }
         }
     }

@@ -24,7 +24,10 @@ use crate::encoders::{
     custom::PairUseEnc,
     ty::{
         generics::{
-            GArgsCastEnc, r#trait::TraitEnc, trait_fn::TraitFnEnc, trait_impls::TraitImplEnc,
+            GArgsCastEnc,
+            r#trait::TraitEnc,
+            trait_fn::TraitFnEnc,
+            trait_impls::{TraitImplEnc, TraitImplItemEnc},
         },
         interpretation::bitvec::BitVecEnc,
         lifted::{TyConstructorEnc, TypeOfEnc},
@@ -59,7 +62,12 @@ pub fn test_entrypoint<'tcx>(
     procedures: Option<Vec<DefId>>,
     env_diagnostic: &EnvDiagnostic<'tcx>,
 ) -> request::RequestWithContext {
-    vir::init_vcx(vir::VirCtxt::new(tcx, body, def_spec));
+    let ident_style = if config::short_viper_names() {
+        vir::IdentStyle::ItemName
+    } else {
+        vir::IdentStyle::DefPath
+    };
+    vir::init_vcx(vir::VirCtxt::new(tcx, body, def_spec, ident_style));
     SELECTIVE_TASKS.with(|selective_tasks| {
         if let Some(procs) = procedures {
             selective_tasks
@@ -114,6 +122,7 @@ pub fn test_entrypoint<'tcx>(
     program.header("type constructors");
     TyConstructorEnc::emit_outputs(&mut program);
     TypeOfEnc::emit_outputs(&mut program);
+    crate::encoders::TyInhabitedEnc::emit_outputs(&mut program);
 
     program.header("constants");
     ConstEnc::emit_outputs(&mut program);
@@ -126,6 +135,7 @@ pub fn test_entrypoint<'tcx>(
     TraitEnc::emit_outputs(&mut program);
     TraitFnEnc::emit_outputs(&mut program);
     TraitImplEnc::emit_outputs(&mut program);
+    TraitImplItemEnc::emit_outputs(&mut program);
 
     if std::env::var("LOCAL_TESTING").is_ok() {
         std::fs::write("local-testing/simple.vpr", program.code()).unwrap();

@@ -1,5 +1,5 @@
 use crate::encoders::{
-    ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
+    EncodeResult, ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
     pure::spec::{EncodedPledge, MirSpecEncMode, PledgeArgs, PledgeExpr},
     ty::{
         RustTyDecomposition,
@@ -33,10 +33,10 @@ impl<'vir, E: TaskEncoder> ImpureEncVisitor<'vir, '_, E> {
     pub fn package_wands(
         &mut self,
         final_borrow_state: &BorrowsState<'_, 'vir>,
-    ) -> Result<Vec<vir::Stmt<'vir>>, EncodeFullError<'vir, E>> {
+    ) -> EncodeResult<'vir, Vec<vir::Stmt<'vir>>, E> {
         let mut wand_packages = Vec::new();
         let label = self.new_label("package_post");
-        let result = self.local_defs.locals[mir::RETURN_PLACE].impure_snap;
+        let result = self.local_defs[mir::RETURN_PLACE].impure_snap;
         let result = self.vcx.mk_local_labelled_old_expr(result, label);
         let args = self
             .local_defs
