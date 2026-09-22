@@ -19,6 +19,7 @@ use prusti_utils::config;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
+    ImStateEnc,
     ConstEnc, Impure, Pure,
     addr::RefDataEnc,
     custom::PairUseEnc,
@@ -111,6 +112,9 @@ pub fn test_entrypoint<'tcx>(
 
     program.header("impure generic casts");
     GArgsCastEnc::<Impure>::emit_outputs(&mut program);
+
+    program.header("interior mutability");
+    ImStateEnc::emit_outputs(&mut program);
 
     program.header("snapshots");
     crate::encoders::TyUsePureEnc::emit_outputs(&mut program);

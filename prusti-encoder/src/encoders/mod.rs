@@ -6,6 +6,7 @@ mod mir_shared;
 mod spec;
 mod pure;
 mod local_def;
+mod interior_mut;
 pub(super) mod ty;
 mod r#const;
 // TODO: move `mir_impure` to this dir:
@@ -14,6 +15,8 @@ pub mod impure;
 pub mod mir_fn;
 pub mod custom;
 pub mod addr;
+
+pub use interior_mut::state::ImStateEnc;
 
 pub use body::{encodes_body, impure_body, impure_body_with_facts, pure_body, spec_body};
 pub use builtin::{
