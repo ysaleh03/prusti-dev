@@ -1,5 +1,7 @@
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
+use crate::encoders::ImStateEnc;
+
 use super::{
     RustParamData, RustTy, RustTyDecomposition, TySpecifics,
     generics::{GArgsTy, GenericParamsEnc},
@@ -64,6 +66,8 @@ impl TaskEncoder for TyInhabitedEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
+        deps.require_dep::<ImStateEnc>(()); // TODO forces call of ImStateEnc, remove
+
         vir::with_vcx(|vcx| {
             let inhabited = Self::inhabited_fn();
             let ty = if matches!(

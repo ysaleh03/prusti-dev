@@ -117,9 +117,9 @@ impl_exp_type!(Dyn, TypeKind::Unsupported(..) => false, "Represents a dynamicall
 
 // Interior mutability
 
-impl_exp_type!(CRep => Rep | Dyn, ref kind if matches!(kind, TypeKind::Bool | TypeKind::Int | TypeKind::Perm | TypeKind::Set(_) | TypeKind::Multiset(_) | TypeKind::Seq(_) | TypeKind::Map(..)) || matches!(kind, TypeKind::Domain(name, ..) if name.starts_with("r_") && *name != "r_Param"), "A concrete rep type");
-impl_exp_type!(GRep[TYPE_GREP = Domain("r_Param", &[])] => Rep | Dyn, "The generic rep domain (`r_Param`)");
-impl_exp_type!(Rep => Dyn, ref kind if matches!(kind, TypeKind::Bool | TypeKind::Int | TypeKind::Perm | TypeKind::Set(_) | TypeKind::Multiset(_) | TypeKind::Seq(_) | TypeKind::Map(..)) || matches!(kind, TypeKind::Domain(name, ..) if name.starts_with("r_")), "A rep, either concrete or generic");
+// impl_exp_type!(CRep => Rep | Dyn, ref kind if matches!(kind, TypeKind::Bool | TypeKind::Int | TypeKind::Perm | TypeKind::Set(_) | TypeKind::Multiset(_) | TypeKind::Seq(_) | TypeKind::Map(..)) || matches!(kind, TypeKind::Domain(name, ..) if name.starts_with("r_") && *name != "r_Param"), "A concrete rep type");
+// impl_exp_type!(GRep[TYPE_GREP = Domain("r_Param", &[])] => Rep | Dyn, "The generic rep domain (`r_Param`)");
+// impl_exp_type!(Rep => Dyn, ref kind if matches!(kind, TypeKind::Bool | TypeKind::Int | TypeKind::Perm | TypeKind::Set(_) | TypeKind::Multiset(_) | TypeKind::Seq(_) | TypeKind::Map(..)) || matches!(kind, TypeKind::Domain(name, ..) if name.starts_with("r_")), "A rep, either concrete or generic");
 impl_exp_type!(ImState[TYPE_IMSTATE = Domain("ImState", &[])] => Dyn, "Interior mutability state type");
 
 #[macro_export]
