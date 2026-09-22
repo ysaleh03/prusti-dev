@@ -8,13 +8,15 @@ pub struct ImStateEncRef<'vir> {
     get_snap_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::TyVal, vir::Ref), vir::PSnap>,
     next_idn: vir::FunctionIdn<'vir, vir::ImState, vir::ImState>,
     lte_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::ImState), vir::Bool>,
-    allocated_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-    fresh_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
+    allocated_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::TyVal, vir::Ref), vir::Bool>,
+    fresh_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::TyVal, vir::Ref), vir::Bool>,
     moved_idn: vir::FunctionIdn<
         'vir,
         (vir::TyVal, vir::ImState, vir::Ref, vir::ImState, vir::Ref),
         vir::Bool,
     >,
+    modifiable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::TyVal, vir::Ref), vir::Bool>,
+    not_modified_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::TyVal, vir::Ref), vir::Bool>,
 }
 
 // TODO should e.g. modified go here as well so we can e.g. conditionally get exclusive from local?
@@ -22,7 +24,8 @@ pub struct ImStateEncRef<'vir> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CapabilityRef<'vir> {
-    exclusive_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::TyVal, vir::Ref), vir::Bool>,
+    exclusive_idn:
+        vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::TyVal, vir::Ref), vir::Bool>,
     shared_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::TyVal, vir::Ref), vir::Bool>,
     // First (Type, Ref) pair is the address/type which the second (Type, Ref) pair is shared under.
     local_exclusive_idn: vir::FunctionIdn<
@@ -157,13 +160,13 @@ impl TaskEncoder for ImStateEnc {
 
             let allocated_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("st_allocated"),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
+                (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
             let fresh_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("st_fresh"),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
+                (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
@@ -179,6 +182,18 @@ impl TaskEncoder for ImStateEnc {
                 vir::TYPE_BOOL,
             );
 
+            let modifiable_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("st_modifiable"),
+                (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
+            let not_modified_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("st_not_modified"),
+                (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
             deps.emit_output_ref(*task_key, ImStateEncRef {
                 capabilities,
                 get_snap_idn,
@@ -187,6 +202,8 @@ impl TaskEncoder for ImStateEnc {
                 allocated_idn,
                 fresh_idn,
                 moved_idn,
+                modifiable_idn,
+                not_modified_idn,
             });
 
             // Capabilities
@@ -223,6 +240,12 @@ impl TaskEncoder for ImStateEnc {
             let moved_fn = vcx.mk_domain_function(moved_idn, false, None);
             functions.push(moved_fn);
 
+            let modifiable_fn = vcx.mk_domain_function(modifiable_idn, false, None);
+            functions.push(modifiable_fn);
+
+            let not_modified_fn = vcx.mk_domain_function(not_modified_idn, false, None);
+            functions.push(not_modified_fn);
+
             // General Axioms
 
             let next_lte = vcx.mk_domain_axiom(vir::ViperIdent::new("next_lte"), vir::expr! {
@@ -244,15 +267,15 @@ impl TaskEncoder for ImStateEnc {
             // Triggers here search "backwards"
             // TODO do we also need a "forward" trigger?
             let allocated_lte = vcx.mk_domain_axiom(vir::ViperIdent::new("allocated_lte"), vir::expr!{
-                forall s0: ImState, s1: ImState, l: Ref :: { ([lte_idn](s0, s1)), ([allocated_idn](s1, l)) }
-                (([allocated_idn](s0, l)) && ([lte_idn](s0, s1))) ==> ([allocated_idn](s1, l))
+                forall s0: ImState, s1: ImState, t: Type, l: Ref :: { ([lte_idn](s0, s1)), ([allocated_idn](s1, t, l)) }
+                (([allocated_idn](s0, t, l)) && ([lte_idn](s0, s1))) ==> ([allocated_idn](s1, t, l))
             });
             axioms.push(allocated_lte);
 
             let fresh_allocated =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("fresh_allocated"), vir::expr! {
-                    forall s: ImState, l: Ref :: { ([fresh_idn](s, l)), ([allocated_idn](s, l)) }
-                    (([fresh_idn](s, l)) && ([allocated_idn](s, l))) ==> (false)
+                    forall s: ImState, t: Type, l: Ref :: { ([fresh_idn](s, t, l)), ([allocated_idn](s, t, l)) }
+                    (([fresh_idn](s, t, l)) && ([allocated_idn](s, t, l))) ==> (false)
                 });
             axioms.push(fresh_allocated);
 
@@ -270,30 +293,74 @@ impl TaskEncoder for ImStateEnc {
             });
             axioms.push(moved_eq);
 
+            let fresh_modifiable =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("fresh_modifiable"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref ::
+                    { ([fresh_idn](s, t, l)) }
+                    ([fresh_idn](s, t, l)) ==> ([modifiable_idn](s, t, l))
+                });
+            axioms.push(fresh_modifiable);
+
+            let modifiable_lte =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("modifiable_lte"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int ::
+                    { ([exclusive_idn](s, i, t, l)) }
+                    ([exclusive_idn](s, i, t, l)) ==> ([shared_idn](s, i, t, l))
+                });
+            axioms.push(modifiable_lte);
+
             // Capability Implications
 
+            let exclusive_shared =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("exclusive_shared"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int ::
+                    { ([exclusive_idn](s, i, t, l)) }
+                    ([exclusive_idn](s, i, t, l)) ==> ([shared_idn](s, i, t, l))
+                });
+            axioms.push(exclusive_shared);
+
+            let local_exclusive_exclusive = vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_exclusive"), vir::expr!{
+                forall s: ImState, tb: Type, t: Type, lb: Ref, l: Ref, i: Int ::
+                { ([local_exclusive_idn](s, i, tb, lb, t, l)), ([not_modified_idn](s, t, l)), ([modifiable_idn](s, t, l)) }
+                (([local_exclusive_idn](s, i, tb, lb, t, l)) &&
+                 (([not_modified_idn](s, t, l)) &&
+                  ([modifiable_idn](s, t, l)))) ==> ([exclusive_idn](s, i, t, l))
+            });
+            axioms.push(local_exclusive_exclusive);
+
+            let local_exclusive_shared =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_shared"), vir::expr! {
+                    forall s: ImState, tb: Type, t: Type, lb: Ref, l: Ref, i: Int ::
+                    { ([local_exclusive_idn](s, i, tb, lb, t, l)), ([not_modified_idn](s, t, l)) }
+                    (([local_exclusive_idn](s, i, tb, lb, t, l)) &&
+                     ([not_modified_idn](s, t, l))) ==> ([shared_idn](s, i, t, l))
+                });
+            axioms.push(local_exclusive_shared);
+
+            let exclusive_modifiable =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("exclusive_modifiable"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int ::
+                    { ([exclusive_idn](s, i, t, l)) }
+                    ([exclusive_idn](s, i, t, l)) ==> ([modifiable_idn](s, t, l))
+                });
+            axioms.push(exclusive_modifiable);
+
             // Two-State Axioms
-            
+
             let shared_stable = vcx.mk_domain_axiom(vir::ViperIdent::new("shared_stable"), vir::expr!{
                 forall t: Type, s: ImState, l: Ref, i: Int ::
-                { (([shared_idn](s, i, t, l)) as Dyn) /* , (([get_snap_idn](([next_idn](s)), t, l)) as Dyn) */ }
+                { ([shared_idn](s, i, t, l)) /* , (([get_snap_idn](([next_idn](s)), t, l)) as Dyn) */ }
                 ([shared_idn](s, i, t, l)) ==> (([get_snap_idn](s, t, l)) == ([get_snap_idn](([next_idn](s)), t, l)))
             });
             axioms.push(shared_stable);
 
-            let exclusive_moved = vcx.mk_domain_axiom(vir::ViperIdent::new("exclusive_moved"), vir::expr!{
-                forall t: Type, s: ImState, l: Ref, i: Int ::
-                { ([exclusive_idn](s, i, t, l)) }
-                ([exclusive_idn](s, i, t, l)) ==> ([moved_idn](t, s, l, ([next_idn](s)), l))
-            });
+            let exclusive_moved =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("exclusive_moved"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int ::
+                    { ([exclusive_idn](s, i, t, l)) }
+                    ([exclusive_idn](s, i, t, l)) ==> ([moved_idn](t, s, l, ([next_idn](s)), l))
+                });
             axioms.push(exclusive_moved);
-
-            // let unique_moved = vcx.mk_domain_axiom(vir::ViperIdent::new("shared_stable"), vir::expr!{
-            //     forall t: Type, s: ImState, l: Ref, i: Int ::
-            //     { ([shared_idn](s, i, t, l)), ([get_snap_idn](([next_idn](s)), t, l)) }
-            //     ([shared_idn](s, i, t, l)) ==> (([get_snap_idn](s, t, l)) == ([get_snap_idn](([next_idn](s)), t, l)))
-            // });
-            // axioms.push(shared_stable);
 
             // Domain
 
