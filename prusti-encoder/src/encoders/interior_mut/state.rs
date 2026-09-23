@@ -321,7 +321,7 @@ impl TaskEncoder for ImStateEnc {
 
             let local_exclusive_exclusive = vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_exclusive"), vir::expr!{
                 forall s: ImState, tb: Type, t: Type, lb: Ref, l: Ref, i: Int ::
-                { ([local_exclusive_idn](s, i, tb, lb, t, l)), ([not_modified_idn](s, t, l)), ([modifiable_idn](s, t, l)) }
+                { ([local_exclusive_idn](s, i, tb, lb, t, l)) }
                 (([local_exclusive_idn](s, i, tb, lb, t, l)) &&
                  (([not_modified_idn](s, t, l)) &&
                   ([modifiable_idn](s, t, l)))) ==> ([exclusive_idn](s, i, t, l))
@@ -331,7 +331,7 @@ impl TaskEncoder for ImStateEnc {
             let local_exclusive_shared =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_shared"), vir::expr! {
                     forall s: ImState, tb: Type, t: Type, lb: Ref, l: Ref, i: Int ::
-                    { ([local_exclusive_idn](s, i, tb, lb, t, l)), ([not_modified_idn](s, t, l)) }
+                    { ([local_exclusive_idn](s, i, tb, lb, t, l)) }
                     (([local_exclusive_idn](s, i, tb, lb, t, l)) &&
                      ([not_modified_idn](s, t, l))) ==> ([shared_idn](s, i, t, l))
                 });

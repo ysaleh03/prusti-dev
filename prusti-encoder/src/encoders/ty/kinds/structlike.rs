@@ -1,17 +1,11 @@
 use crate::encoders::{
-    TyUseImpureEnc,
     ty::{
-        RustTyDatas,
-        data::{StructData, TyData},
-        impure::{
+        data::{StructData, TyData}, impure::{
             ImpureTyDatas, PredicateBuilder, TyImpureEnc, TyImpureFieldData, TyImpureStructData,
-        },
-        pure::{
+        }, pure::{
             AdtBuilder, PureTyDatas, TyPureEnc, TyPureFieldData, TyPureFieldRef, TyPureStructData,
-        },
-        rust_ty::{RustFieldAddress, RustTySpecial},
-        use_pure::TyUsePureEnc,
-    },
+        }, rust_ty::{RustFieldAddress, RustTySpecial}, use_pure::TyUsePureEnc, RustTyDatas
+    }, ImStateEnc, TyUseImpureEnc
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::{CastType, HasType, PredicateIdn};
@@ -23,6 +17,10 @@ pub(crate) fn ty_pure<'vir>(
     builder: &mut AdtBuilder<'vir>,
 ) -> Result<StructData<'vir, PureTyDatas>, EncodeFullError<'vir, TyPureEnc>> {
     ty_pure_variant("", None, task_key, data, deps, builder)
+
+    // TODO somewhere here we look for a im_model to add abstract fields
+
+    // TODO generate struct axioms here?
 }
 
 pub(super) fn ty_pure_variant<'vir>(
@@ -58,6 +56,7 @@ pub(super) fn ty_pure_variant<'vir>(
     let params = builder.params.clone();
 
     assert_eq!(des.len(), data.fields.len());
+    let im_state = deps.require_ref::<ImStateEnc>(())?;
     let des = des
         .iter()
         .zip(&data.fields)
@@ -66,16 +65,49 @@ pub(super) fn ty_pure_variant<'vir>(
             let ref_to_field_ref = match field.address {
                 RustFieldAddress::Constant => {
                     let args = (ref_self_decl.ty(), params.ty_args(), params.const_args());
-                    let params = (ref_self_decl, params.ty_decls(), params.const_decls());
-                    TyPureFieldRef::Constant(builder.function(
+                    let function_idn = builder.domain_function(
                         &format!("{prefix}field_{idx}"),
                         args,
                         vir::TYPE_REF,
-                        params,
-                        &[],
-                        &[vir::expr! { ((ref_self) == (null)) == ((result: Ref) == (null)) }],
-                        None,
-                    ))
+                    );
+
+                    let call =
+                        function_idn.call()(ref_self, params.ty_exprs(), params.const_exprs());
+
+                    let qvars = params
+                        .ty_decls()
+                        .as_dyn()
+                        .iter()
+                        .chain(params.const_decls().as_dyn())
+                        .chain([ref_self_decl.as_dyn()].iter())
+                        .map(|decl| *decl)
+                        .collect::<Vec<_>>();
+
+                    let axiom_body = builder.vcx.mk_forall_expr(
+                        builder.vcx.alloc_slice(&qvars[..]),
+                        builder.vcx.alloc_slice(&[builder.vcx.mk_trigger(&[call])]),
+                        builder.vcx.mk_eq_expr(
+                            builder.vcx.mk_eq_expr(call, builder.vcx.mk_null()),
+                            builder.vcx.mk_eq_expr(ref_self, builder.vcx.mk_null()),
+                        ),
+                    );
+
+                    builder.domain_axiom(&format!("{prefix}field_{idx}_null"), axiom_body);
+
+                    // TODO axioms that state that the ImState snap at a field's ref is the same as the field of the parent snap
+                    // this suffices for handling moved
+
+                    // TODO for abstract fields we'd need an extra axiom for moved
+ 
+                    // builder.domain_axiom(
+                    //     &format!("{prefix}field_{idx}_im_field_addr"),
+                    //     vir::expr! {
+                    //         true
+                    //     }
+                    // );
+                    println!("self type: {:?}", builder.self_type());
+
+                    TyPureFieldRef::Constant(function_idn)
                 }
                 RustFieldAddress::Dynamic => TyPureFieldRef::Dynamic(box_data.unwrap().1),
             };
@@ -149,6 +181,7 @@ pub(crate) fn ty_impure_variant<'vir>(
             ref_to_field_ref: match field.1.ref_to_field_ref {
                 TyPureFieldRef::Constant(ref_to_field_ref) => ref_to_field_ref,
                 TyPureFieldRef::Dynamic(_) => box_data.unwrap().1,
+                TyPureFieldRef::Abstract(_) => todo!(), // TODO abstract field
             },
         })
         .collect::<Vec<_>>();

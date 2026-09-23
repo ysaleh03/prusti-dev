@@ -230,6 +230,9 @@ pub enum TyPureFieldRef<'vir> {
     /// `Unique` field, where the pointer is stored), i.e. heap-dependent given
     /// the `Ref` (see the impure encoder).
     Dynamic(FunctionIdn<'vir, vir::CSnap, vir::Ref>),
+    /// (Interior Mutability) a spec-only abstract field. It is not necessary to indicate
+    /// explicitly how the field address is computed.
+    Abstract(FunctionIdn<'vir, (vir::Ref, vir::CSnap, vir::ManyTyVal, vir::ManyCSnap), vir::Ref>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -275,6 +278,7 @@ pub enum TyPureEncLocalKind<'vir> {
     Adt {
         adt: vir::Adt<'vir>,
         discr_fn: Option<vir::Function<'vir>>,
+        domain: vir::Domain<'vir>,
     },
     None,
 }
@@ -379,8 +383,13 @@ impl TaskEncoder for TyPureEnc {
             }
             match output.kind {
                 TyPureEncLocalKind::Domain { domain } => program.add_domain(domain),
-                TyPureEncLocalKind::Adt { adt, discr_fn } => {
+                TyPureEncLocalKind::Adt {
+                    adt,
+                    discr_fn,
+                    domain,
+                } => {
                     program.add_adt(adt);
+                    program.add_domain(domain);
                     if let Some(discr_fn) = discr_fn {
                         program.add_function(discr_fn);
                     }
@@ -450,6 +459,10 @@ pub(crate) struct AdtBuilderData<'vir> {
     discr_fn: Option<DiscrFnBuilder<'vir>>,
     /// Other related functions (for example Ref field accessors).
     functions: Vec<vir::Function<'vir>>,
+    /// (Interior Mutability) Functions and axioms for IM encoding, e.g. getting field addresses and
+    /// axioms tying snapshots to the IM state.
+    domain_functions: Vec<vir::DomainFunction<'vir>>,
+    domain_axioms: Vec<vir::DomainAxiom<'vir>>,
 }
 
 #[derive(Default)]
@@ -605,7 +618,18 @@ impl<'vir> TyPureBuilder<'vir> {
                     };
                     df
                 });
-                TyPureEncLocalKind::Adt { adt, discr_fn }
+                let domain = self.vcx.mk_domain(
+                    vir::vir_format_identifier!(self.vcx, "dom_{}", self.name),
+                    &[],
+                    self.vcx.alloc_slice(data.domain_axioms.as_slice()),
+                    self.vcx.alloc_slice(data.domain_functions.as_slice()),
+                    None,
+                );
+                TyPureEncLocalKind::Adt {
+                    adt,
+                    discr_fn,
+                    domain,
+                }
             }
             // Natively-represented types (`Int`/`Real`/`bool`) emit nothing.
             BuilderData::None => TyPureEncLocalKind::None,
@@ -735,6 +759,29 @@ impl<'vir> AdtBuilder<'vir> {
         );
         self.data().functions.push(function);
         ident
+    }
+
+    pub(crate) fn domain_function<A: Arity, T: CompType>(
+        &mut self,
+        name: &str,
+        args: A::Tys<'vir>,
+        ret: Type<'vir, T>,
+    ) -> FunctionIdn<'vir, A, T> {
+        let name = vir::vir_format!(self.vcx, "{}_{name}", self.name);
+        let ident = FunctionIdn::new(vir::ViperIdent::new(name), args, ret);
+        let function = self.vcx.mk_domain_function(ident, false, None);
+        self.data().domain_functions.push(function);
+        ident
+    }
+
+    pub(crate) fn domain_axiom(
+        &mut self,
+        name: &str,
+        expr: vir::ExprBool<'vir>,
+    ) {
+        let name = vir::vir_format!(self.vcx, "{}_{name}", self.name);
+        let axiom = self.vcx.mk_domain_axiom(vir::ViperIdent::new(name), expr);
+        self.data().domain_axioms.push(axiom);
     }
 }
 

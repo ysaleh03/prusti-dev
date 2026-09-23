@@ -676,6 +676,7 @@ impl<'vir> TyUsePureField<'vir> {
             TyPureFieldRef::Dynamic(_) => {
                 panic!("field without a pure address (the value of a box)")
             }
+            TyPureFieldRef::Abstract(_) => todo!() // TODO abstract field
         }
     }
 }
