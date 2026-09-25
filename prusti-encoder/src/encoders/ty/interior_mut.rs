@@ -176,9 +176,14 @@ impl TaskEncoder for ImTyEnc {
                         let self_tyval = deps.require_dep::<TyExprEnc>(self_ty)?;
                         let self_caster =
                             deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                                param: task_key,
+                                param: RustTyDecomposition::param(),
                                 concrete: self_ty,
                             }))?;
+                        // let self_caster =
+                        //     deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                        //         param: task_key,
+                        //         concrete: self_ty,
+                        //     }))?;
                         let self_lookup = self_caster
                             .cast_to_caller_ctx(
                                 im_state.get_snap_idn.call()(state, self_tyval, self_addr)
@@ -196,11 +201,19 @@ impl TaskEncoder for ImTyEnc {
 
                         let field_ty = field_data.ty().decompose(task_key.params);
                         let field_tyval = deps.require_dep::<TyExprEnc>(field_ty)?;
-                        let field_caster =
+                        // let field_caster =
+                        //     deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                        //         param: field_ty.ty,
+                        //         concrete: field_ty,
+                        //     }))?;
+                        let field_caster = if field_ty.ty.specifics.is_param() {
+                            deps.require_dep::<GArgsCastEnc<Pure>>(None)?
+                        } else {
                             deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                                param: field_ty.ty,
+                                param: RustTyDecomposition::param(),
                                 concrete: field_ty,
-                            }))?;
+                            }))?
+                        };
                         let field_lookup = field_caster.cast_to_caller_ctx(
                             im_state.get_snap_idn.call()(state, field_tyval, field_addr)
                                 .upcast_ty(),
@@ -248,14 +261,26 @@ impl TaskEncoder for ImTyEnc {
                             place_idx,
                             im_caps.mutable_idn.call()(field_tyval, field_addr),
                         );
-                        axioms.push(vcx.mk_domain_axiom(
-                            vir::vir_format_identifier!(vcx, "{}_{}_mutable", task_key.name(), idx),
-                            vcx.mk_forall_expr(
-                                vcx.alloc_slice(&qvars[..]),
-                                &[],
-                                vcx.mk_bin_op_expr(vir::BinOpKind::Implies, self_mutable, field_mutable).downcast_ty(),
+                        axioms.push(
+                            vcx.mk_domain_axiom(
+                                vir::vir_format_identifier!(
+                                    vcx,
+                                    "{}_{}_mutable",
+                                    task_key.name(),
+                                    idx
+                                ),
+                                vcx.mk_forall_expr(
+                                    vcx.alloc_slice(&qvars[..]),
+                                    &[],
+                                    vcx.mk_bin_op_expr(
+                                        vir::BinOpKind::Implies,
+                                        self_mutable,
+                                        field_mutable,
+                                    )
+                                    .downcast_ty(),
+                                ),
                             ),
-                        ));
+                        );
 
                         let self_immutable = im_caps.in_state_idn.call()(
                             state,
@@ -267,15 +292,26 @@ impl TaskEncoder for ImTyEnc {
                             place_idx,
                             im_caps.immutable_idn.call()(field_tyval, field_addr),
                         );
-                        axioms.push(vcx.mk_domain_axiom(
-                            vir::vir_format_identifier!(vcx, "{}_{}_immutable", task_key.name(), idx),
-                            vcx.mk_forall_expr(
-                                vcx.alloc_slice(&qvars[..]),
-                                &[],
-                                vcx.mk_bin_op_expr(vir::BinOpKind::Implies, self_immutable, field_immutable).downcast_ty(),
+                        axioms.push(
+                            vcx.mk_domain_axiom(
+                                vir::vir_format_identifier!(
+                                    vcx,
+                                    "{}_{}_immutable",
+                                    task_key.name(),
+                                    idx
+                                ),
+                                vcx.mk_forall_expr(
+                                    vcx.alloc_slice(&qvars[..]),
+                                    &[],
+                                    vcx.mk_bin_op_expr(
+                                        vir::BinOpKind::Implies,
+                                        self_immutable,
+                                        field_immutable,
+                                    )
+                                    .downcast_ty(),
+                                ),
                             ),
-                        ));
- 
+                        );
                     }
 
                     for field in data.fields.iter() {
