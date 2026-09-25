@@ -104,7 +104,9 @@ impl TaskEncoder for ImTyEnc {
                 | TySpecifics::Opaque(_)
                 | TySpecifics::Primitive(_)
                 | TySpecifics::Raw(_)
-                | TySpecifics::Builtin(_) => todo!(),
+                | TySpecifics::Builtin(_) => {
+                    deps.emit_output_ref(task_key, ImTyRef::Other);
+                }
                 TySpecifics::ImmRef(data) => {
                     let snapshot = self_ty.snapshot;
                     let immref_ty = self_ty.expect_immref();
