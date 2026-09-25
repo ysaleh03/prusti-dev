@@ -7,6 +7,7 @@ pub mod use_impure;
 pub mod use_inhabited;
 pub mod use_pure;
 pub mod viper_tuple;
+pub mod interior_mut;
 
 pub mod lifted;
 pub mod generics;
@@ -16,6 +17,7 @@ pub mod interpretation;
 
 pub use data::TySpecifics;
 pub use inhabited::TyInhabitedEnc;
+pub use interior_mut::ImTyEnc;
 pub use rust_ty::*;
 
 /// Defines the collection of datas which are output by the Viper type encoders.

@@ -1,5 +1,7 @@
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
+use crate::encoders::ImCapEnc;
+
 use super::{
     RustParamData, RustTy, RustTyDecomposition, TySpecifics,
     generics::{GArgsTy, GenericParamsEnc},
@@ -64,6 +66,7 @@ impl TaskEncoder for TyInhabitedEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
+        deps.require_dep::<crate::encoders::ImCapEnc>(())?;
 
         vir::with_vcx(|vcx| {
             let inhabited = Self::inhabited_fn();
@@ -146,6 +149,7 @@ struct InhabitedWalker<'a, 'vir> {
 
 impl<'a, 'vir> InhabitedWalker<'a, 'vir> {
     fn encode(&mut self, ty: RustTy<'vir>) -> EncResult<'vir, vir::ExprBool<'vir>> {
+        self.deps.require_ref::<super::ImTyEnc>(ty);
         Ok(match &ty.specifics {
             TySpecifics::Param(RustParamData::Generic) => unreachable!(),
             TySpecifics::Param(RustParamData::Dyn)

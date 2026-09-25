@@ -19,8 +19,7 @@ use prusti_utils::config;
 use task_encoder::TaskEncoder;
 
 use crate::encoders::{
-    ImStateEnc,
-    ConstEnc, Impure, Pure,
+    ConstEnc, ImCapEnc, ImStateEnc, ImTyEnc, Impure, Pure,
     addr::RefDataEnc,
     custom::PairUseEnc,
     ty::{
@@ -115,6 +114,8 @@ pub fn test_entrypoint<'tcx>(
 
     program.header("interior mutability");
     ImStateEnc::emit_outputs(&mut program);
+    ImCapEnc::emit_outputs(&mut program);
+    ImTyEnc::emit_outputs(&mut program);
 
     program.header("snapshots");
     crate::encoders::TyUsePureEnc::emit_outputs(&mut program);
