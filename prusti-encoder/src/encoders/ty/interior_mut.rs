@@ -233,7 +233,7 @@ impl TaskEncoder for ImTyEnc {
                             .collect::<Vec<_>>();
 
                         axioms.push(vcx.mk_domain_axiom(
-                            vir::vir_format_identifier!(vcx, "{}_{}_state", task_key.name(), idx),
+                            vir::vir_format_identifier!(vcx, "im_{}_{}_state", task_key.name(), idx),
                             vcx.mk_forall_expr(vcx.alloc_slice(&qvars[..]), &[], views_eq),
                         ));
 
@@ -267,7 +267,7 @@ impl TaskEncoder for ImTyEnc {
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
-                                    "{}_{}_mutable",
+                                    "im_{}_{}_mutable",
                                     task_key.name(),
                                     idx
                                 ),
@@ -298,7 +298,7 @@ impl TaskEncoder for ImTyEnc {
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
-                                    "{}_{}_immutable",
+                                    "im_{}_{}_immutable",
                                     task_key.name(),
                                     idx
                                 ),
