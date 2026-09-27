@@ -53,7 +53,7 @@ use crate::encoders::{
     },
 };
 
-use super::WandEncOutput;
+use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
 
 #[derive(Clone, Copy)]
 struct FromToVar<'vir> {
@@ -148,6 +148,15 @@ impl LocationLabelPrefix {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ImModeData<'vir> {
+    pub curr_im_state: vir::Expr<'vir, vir::ImState>,
+    // State version at end of previous statement
+    pub prev_im_state: vir::Expr<'vir, vir::ImState>,
+    // State version at beginning of method body
+    pub old_im_state: vir::Expr<'vir, vir::ImState>,
+}
+
 pub struct ImpureEncVisitor<'vir, 'enc, E: TaskEncoder>
 where
     'vir: 'enc,
@@ -163,7 +172,6 @@ where
 
     pub wands: WandEncOutput<'vir>,
 
-    pub mendel_mode: bool,
     pub abstract_ptrs: FxHashMap<mir::LocalDecl<'vir>, AbsPtrExpr<'vir>>,
 
     pub tmp_ctr: usize,
@@ -185,6 +193,9 @@ where
     pub current_terminator: Option<vir::TerminatorStmt<'vir>>,
 
     pub encoded_blocks: Vec<vir::CfgBlock<'vir>>, // TODO: use IndexVec ?
+
+    /// (Interior Mutability) encoding data relevant to interior mutability reasoning
+    pub im_mode_data: Option<ImModeData<'vir>>,
 }
 
 /// Represents an abstract pointer and its associated implicit capabilities,
@@ -1421,57 +1432,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.from_to_vars.set_from_to_flag_stmt(self.vcx, from, to)
     }
 
-    fn mendel_local_post_main(&mut self, before_label: &str, pcg: &Pcg<'_, 'vir>) -> EncodeResult<'vir, (), E> {
-        comment!(
-            self,
-            "exhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
-        );
-        comment!(self, "pc := pc + 1");
-        comment!(
-            self,
-            "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
-        );
-        comment!(
-            self,
-            "inhale forall l: Loc :: local(l, pc) && local(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
-        );
-        comment!(
-            self,
-            "inhale forall l: Loc :: immutable(l, pc) && immutable(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
-        );
-
-        // TODO: Remebember projections with assoc. ptrs and check for their prefixes as well
-        for p in pcg.places_with_capapability(CapabilityKind::Read) {
-            if p.is_shared_ref(self.pcg_ctxt()) {
-                let place_expr = self.encode_place_with_snap(p)?.1;
-                comment!(
-                    self,
-                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
-                    place_expr
-                );
-            }
-        }
-
-        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
-            if p.is_shared_ref(self.pcg_ctxt()) {
-                let place_expr = self.encode_place_with_snap(p)?.1;
-                comment!(
-                    self,
-                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
-                    place_expr
-                );
-            } else if p.is_mut_ref(self.pcg_ctxt()) || p.is_owned(self.pcg_ctxt()) {
-                let place_expr = self.encode_place_with_snap(p)?.1;
-                comment!(
-                    self,
-                    "if (side conditions) {{ inhale mutable capability for {:?}@inner }}",
-                    place_expr
-                );
-            }
-        }
-
-        Ok(())
-    }
 
     pub fn visit_body(&mut self, body: &mir::Body<'vir>) -> EncodeResult<'vir, (), E> {
         /// A work-queue item, min-ordered by the block's reverse-postorder
@@ -1900,6 +1860,16 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_phase_actions(location, EvalStmtPhase::PostOperands)?;
             self.pcg_phase_actions(location, EvalStmtPhase::PreMain)?;
 
+            // (Interior Mutability)
+            if self.in_im_mode() {
+                let current_fpcs = self.current_fpcs.take().unwrap();
+                let cfpcs = &current_fpcs.statements[location.statement_index];
+                let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+                self.inhale_im_place_capabilities(pcg)?;
+                self.current_fpcs = Some(current_fpcs);
+
+            }
+
             // Assignments to the locals only serving specification-only arms
             // (necessarily scaffolding stores) are not encoded, since the
             // locals are not declared.
@@ -1911,6 +1881,50 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             }
 
             let span = statement.source_info.span;
+
+            // (Interior Mutability) `curr_im_state` is now the post-state and `prev_im_state` is the pre-state
+            if self.in_im_mode() {
+                self.bump_im_state();
+
+
+                // TODO IM handling of assignments
+                match &statement.kind {
+                    mir::StatementKind::Assign(box (dest, rvalue)) => {
+
+                        match rvalue {
+                            mir::Rvalue::Use(op) => {
+                                let dest_enc = self.encode_place(*dest)?;
+                                let dest_addr = dest_enc.expr.address;
+
+                                let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
+                                let dest_tyval = self.deps.require_dep::<TyExprEnc>(dest_ty)?;
+
+                                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+                                match op {
+                                    mir::Operand::Move(source) => {
+                                      let source_enc = self.encode_place(*source)?;
+                                      let source_addr = source_enc.expr.address;
+                                      self.stmt(im_state.moved_idn.call()(
+                                          dest_tyval,
+                                          self.prev_im_state(),
+                                          source_addr,
+                                          self.curr_im_state(),
+                                          dest_addr, 
+                                      ));
+                                    }
+                                    mir::Operand::Copy(p) => {
+                                        
+                                    }
+                                    _ => {}
+                                }
+                                    
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            } 
 
             match &statement.kind {
                 mir::StatementKind::Assign(box (dest, rvalue)) => {
@@ -1976,16 +1990,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     statement.kind
                 ),
             }
+            self.pcg_phase_actions(location, EvalStmtPhase::PostMain)?;
 
-            if self.mendel_mode {
-                let current_fpcs = self.current_fpcs.take().unwrap();
-                let cfpcs = &current_fpcs.statements[location.statement_index];
-                let pcg = &cfpcs.states[EvalStmtPhase::PostMain];
-                self.mendel_local_post_main(before_label, pcg)?;
-                self.current_fpcs = Some(current_fpcs);
-            } else {
-                self.pcg_phase_actions(location, EvalStmtPhase::PostMain)?;
-            }
             Ok(())
         })
     }
@@ -2020,7 +2026,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
 
         // not sure if here is where this should go..
-        if self.mendel_mode {
+        if self.in_im_mode() {
             let current_fpcs = self.current_fpcs.take().unwrap();
             let cfpcs = &current_fpcs.statements[location.statement_index];
             let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
@@ -2378,7 +2384,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 self.vcx.mk_assume_false_stmt()
             }),
         };
-        if self.mendel_mode {
+        if self.in_im_mode() {
             let current_fpcs = self.current_fpcs.take().unwrap();
             let cfpcs = &current_fpcs.statements[location.statement_index];
             let pcg = &cfpcs.states[EvalStmtPhase::PostMain];
@@ -2462,6 +2468,144 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         } else {
             None
         })
+    }
+
+    // Interior Mutability
+
+    fn in_im_mode(&self) -> bool {
+        self.im_mode_data.is_some()
+    }
+
+    // requires: self.in_im_mode()
+    fn im_mode_data(&self) -> &ImModeData<'vir> {
+        self.im_mode_data.as_ref().unwrap()
+    }
+
+    // requires: self.in_im_mode()
+    fn curr_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
+        &self.im_mode_data().curr_im_state
+    }
+
+    // requires: self.in_im_mode()
+    fn prev_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
+        &self.im_mode_data().prev_im_state
+    }
+
+    // requires: self.in_im_mode()
+    fn old_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
+        &self.im_mode_data().old_im_state
+    }
+
+    // requires: self.in_im_mode()
+    fn bump_im_state(&mut self) -> EncodeResult<'vir, (), E> {
+        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+        let assign_prev = self.vcx.mk_pure_assign_stmt(self.prev_im_state(), im_state.next_idn.call()(self.curr_im_state()));
+        self.stmt(assign_prev);
+        let assign_curr = self.vcx.mk_pure_assign_stmt(self.curr_im_state(), im_state.next_idn.call()(self.curr_im_state()));
+        self.stmt(assign_curr);
+        Ok(())
+    }
+
+    // requires: self.in_im_mode()
+    fn inhale_im_place_capabilities(&mut self, pcg: &Pcg<'_, 'vir>)-> EncodeResult<'vir, (), E> {
+        // TODO do we need an equivalent of the root places set?
+        //
+        // TODO can we actually consider every accessible place to be separate?
+
+        // TODO I wonder if this would be made faster if we only considered leaf places
+
+        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+        let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+        
+        comment!(self, "[IM] implicit capabilites from place capabilities:");
+
+        for p in pcg.places_with_capapability(CapabilityKind::Read) {
+            // if p.prefix_place().is_some() {
+            //     continue;
+            // }
+            comment!(self, "[IM] immutable capability to place {:?}", p);
+
+            let place_enc = self.encode_place(p)?;
+            let addr_expr = place_enc.expr.address;
+
+            let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+            let tyval = self.deps.require_dep::<TyExprEnc>(ty_decomp)?;
+
+            let cap_expr = im_caps.immutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), tyval, addr_expr);
+
+            self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+        }
+
+        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
+            // if p.prefix_place().is_some() {
+            //     continue;
+            // }
+            comment!(self, "[IM] mutable capability to place {:?}", p);
+
+            let place_enc = self.encode_place(p)?;
+            let addr_expr = place_enc.expr.address;
+
+            let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+            let tyval = self.deps.require_dep::<TyExprEnc>(ty_decomp)?;
+
+            let cap_expr = im_caps.mutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), tyval, addr_expr);
+
+            self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+        }
+
+        Ok(())
+    }
+
+    fn mendel_local_post_main(&mut self, before_label: &str, pcg: &Pcg<'_, 'vir>) -> EncodeResult<'vir, (), E> {
+        comment!(
+            self,
+            "exhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
+        );
+        comment!(self, "pc := pc + 1");
+        comment!(
+            self,
+            "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
+        );
+        comment!(
+            self,
+            "inhale forall l: Loc :: local(l, pc) && local(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
+        );
+        comment!(
+            self,
+            "inhale forall l: Loc :: immutable(l, pc) && immutable(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
+        );
+
+        // TODO: Remebember projections with assoc. ptrs and check for their prefixes as well
+        for p in pcg.places_with_capapability(CapabilityKind::Read) {
+            if p.is_shared_ref(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p)?.1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
+                    place_expr
+                );
+            }
+        }
+
+        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
+            if p.is_shared_ref(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p)?.1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale shared capability for {:?}@inner }}",
+                    place_expr
+                );
+            } else if p.is_mut_ref(self.pcg_ctxt()) || p.is_owned(self.pcg_ctxt()) {
+                let place_expr = self.encode_place_with_snap(p)?.1;
+                comment!(
+                    self,
+                    "if (side conditions) {{ inhale mutable capability for {:?}@inner }}",
+                    place_expr
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 

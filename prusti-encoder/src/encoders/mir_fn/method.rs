@@ -12,6 +12,7 @@ use vir::MethodIdn;
 use crate::encoders::{
     Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc, WandEncTask,
     mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc},
+    mir_impure::ImModeData,
     pure::spec::MirSpecEncMode,
     ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
 };
@@ -91,15 +92,12 @@ impl TaskEncoder for MethodCallEnc {
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
-        Ok((
-            (),
-            MethodCallEncOutput {
-                method: method_ref,
-                ty_args,
-                inputs,
-                output,
-            },
-        ))
+        Ok(((), MethodCallEncOutput {
+            method: method_ref,
+            ty_args,
+            inputs,
+            output,
+        }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -148,7 +146,7 @@ impl TaskEncoder for MethodEnc {
         vir::with_vcx(|vcx| {
             let span = vcx.tcx().def_span(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
-            let mendel = crate::encoders::is_function_mendel(def_id);
+            let im_mode = crate::encoders::is_function_mendel(def_id);
 
             let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
                 MirLocalDefEncTask::Local {
@@ -265,9 +263,24 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
                     )
                 }
-                if mendel {
-                    start_stmts
-                        .push(vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; pc : Int }, None));
+
+                let im_mode = true; // TODO just for testing
+
+                let im_mode_data = if im_mode {
+                    let curr_im_state_decl = vir::vir_local_decl! { vcx; im_st : ImState };
+                    start_stmts.push(vcx.mk_local_decl_stmt(curr_im_state_decl, None));
+                    let curr_im_state = vcx.mk_local_ex(curr_im_state_decl);
+
+                    let prev_im_state_decl = vir::vir_local_decl! { vcx; prev_im_st : ImState };
+                    start_stmts.push(vcx.mk_local_decl_stmt(prev_im_state_decl, None));
+                    let prev_im_state = vcx.mk_local_ex(prev_im_state_decl);
+
+                    let old_im_state_decl = vir::vir_local_decl! { vcx; old_im_st : ImState };
+                    start_stmts.push(vcx.mk_local_decl_stmt(old_im_state_decl, None));
+                    let old_im_state = vcx.mk_local_ex(old_im_state_decl);
+
+                    start_stmts.push(vcx.mk_pure_assign_stmt(old_im_state, curr_im_state));
+
                     start_stmts.push(vcx.mk_comment_stmt(
                         "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)",
                     ));
@@ -282,7 +295,16 @@ impl TaskEncoder for MethodEnc {
                             None => {}
                         };
                     }
-                }
+                    let im_mode_data = ImModeData {
+                        curr_im_state,
+                        prev_im_state,
+                        old_im_state,
+                    };
+                    Some(im_mode_data)
+                } else {
+                    None
+                };
+
                 // This will be overwritten later.
                 encoded_blocks.push(vcx.mk_cfg_block(
                     &vir::CfgBlockLabelData::Start,
@@ -310,7 +332,6 @@ impl TaskEncoder for MethodEnc {
 
                     wands,
 
-                    mendel_mode: mendel,
                     abstract_ptrs: Default::default(),
 
                     tmp_ctr: 0,
@@ -328,6 +349,8 @@ impl TaskEncoder for MethodEnc {
                     current_stmts: None,
                     current_terminator: None,
                     encoded_blocks,
+
+                    im_mode_data,
                 };
                 // if we encountered an error/cycle during encoding, we don't
                 // emit a method body; encoding errors additionally surface as

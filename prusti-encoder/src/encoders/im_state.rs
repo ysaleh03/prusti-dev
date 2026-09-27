@@ -142,29 +142,25 @@ impl TaskEncoder for ImStateEnc {
 
             // General Axioms
 
-            let next_lte = vcx.mk_domain_axiom(vir::ViperIdent::new("next_lte"), vir::expr! {
-                forall s: ImState :: { [next_idn](s) } [lte_idn](s, ([next_idn](s)))
+            let one = vcx.mk_int::<1>();
+            let next_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("next_defn"), vir::expr! {
+                forall s: ImState :: { [next_idn](s) } (([next_idn](s)) as Int) == ((((s) as Int) + (one)) as Int)
             });
-            axioms.push(next_lte);
+            axioms.push(next_defn);
 
-            let lte_trans = vcx.mk_domain_axiom(vir::ViperIdent::new("lte_trans"), vir::expr!{
-                forall s0: ImState, s1: ImState, s2: ImState :: { ([lte_idn](s0, s1)), ([lte_idn](s1, s2)) }
-                (([lte_idn](s0, s1)) && ([lte_idn](s1, s2))) ==> ([lte_idn](s0, s2))
+            let lte_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("lte_defn"), vir::expr! {
+                forall s0: ImState, s1: ImState :: { ([lte_idn](s0, s1)) }
+                ([lte_idn](s0, s1)) == (((s0) as Int) < ((s1) as Int))
             });
-            axioms.push(lte_trans);
-
-            let lte_refl = vcx.mk_domain_axiom(vir::ViperIdent::new("lte_refl"), vir::expr! {
-                forall s0: ImState :: { [lte_idn](s0, s0) } [lte_idn](s0, s0)
-            });
-            axioms.push(lte_refl);
+            axioms.push(lte_defn);
 
             // Triggers here search "backwards"
             // TODO do we also need a "forward" trigger?
-            let allocated_lte = vcx.mk_domain_axiom(vir::ViperIdent::new("allocated_lte"), vir::expr!{
-                forall s0: ImState, s1: ImState, t: Type, l: Ref :: { ([lte_idn](s0, s1)), ([allocated_idn](s1, t, l)) }
-                (([allocated_idn](s0, t, l)) && ([lte_idn](s0, s1))) ==> ([allocated_idn](s1, t, l))
+            let allocated_next = vcx.mk_domain_axiom(vir::ViperIdent::new("allocated_next"), vir::expr!{
+                forall s: ImState, t: Type, l: Ref :: { ([allocated_idn](([next_idn](s)), t, l)) }
+                ([allocated_idn](s, t, l)) ==> ([allocated_idn](([next_idn](s)), t, l))
             });
-            axioms.push(allocated_lte);
+            axioms.push(allocated_next);
 
             let fresh_allocated =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("fresh_allocated"), vir::expr! {
@@ -195,13 +191,13 @@ impl TaskEncoder for ImStateEnc {
                 });
             axioms.push(fresh_modifiable);
 
-            let modifiable_lte =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("modifiable_lte"), vir::expr! {
-                    forall t: Type, s0: ImState, s1: ImState, l: Ref ::
-                    { ([modifiable_idn](s0, t, l)), ([lte_idn](s0, s1)) }
-                    (([lte_idn](s0, s1)) && ([modifiable_idn](s0, t, l))) ==> ([modifiable_idn](s1, t, l))
+            let modifiable_next =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("modifiable_next"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref ::
+                    { ([modifiable_idn](([next_idn](s)), t, l)) }
+                    ([modifiable_idn](s, t, l)) ==> ([modifiable_idn](([next_idn](s)), t, l))
                 });
-            axioms.push(modifiable_lte);
+            axioms.push(modifiable_next);
 
             // Domain
 

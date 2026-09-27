@@ -87,7 +87,6 @@ impl TaskEncoder for ImTyEnc {
             // TODO encode snapshot-heap axioms - requires ?
             // TODO encode abstract field getters
             // TODO encode moved axioms
-            // TODO encode field addr inequality axioms
             // TODO capability prop to field axioms
 
             // TODO does this need to be recursive?
@@ -159,6 +158,10 @@ impl TaskEncoder for ImTyEnc {
                         task_key,
                         ImTyRef::StructLike(StructLikeData { abs_fields: &[] }),
                     );
+
+                    // TODO encode field addr inequality axioms?
+                    // TODO moved-axioms for abstract fields
+
                     let struct_ty = self_ty.expect_structlike();
 
                     for (idx, (field_pure, field_data)) in
@@ -181,11 +184,6 @@ impl TaskEncoder for ImTyEnc {
                                 param: RustTyDecomposition::param(),
                                 concrete: self_ty,
                             }))?;
-                        // let self_caster =
-                        //     deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                        //         param: task_key,
-                        //         concrete: self_ty,
-                        //     }))?;
                         let self_lookup = self_caster
                             .cast_to_caller_ctx(
                                 im_state.get_snap_idn.call()(state, self_tyval, self_addr)
@@ -203,11 +201,6 @@ impl TaskEncoder for ImTyEnc {
 
                         let field_ty = field_data.ty().decompose(task_key.params);
                         let field_tyval = deps.require_dep::<TyExprEnc>(field_ty)?;
-                        // let field_caster =
-                        //     deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                        //         param: field_ty.ty,
-                        //         concrete: field_ty,
-                        //     }))?;
                         let field_caster = if field_ty.ty.specifics.is_param() {
                             deps.require_dep::<GArgsCastEnc<Pure>>(None)?
                         } else {
@@ -233,7 +226,12 @@ impl TaskEncoder for ImTyEnc {
                             .collect::<Vec<_>>();
 
                         axioms.push(vcx.mk_domain_axiom(
-                            vir::vir_format_identifier!(vcx, "im_{}_{}_state", task_key.name(), idx),
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "im_{}_{}_state",
+                                task_key.name(),
+                                idx
+                            ),
                             vcx.mk_forall_expr(vcx.alloc_slice(&qvars[..]), &[], views_eq),
                         ));
 
@@ -253,16 +251,10 @@ impl TaskEncoder for ImTyEnc {
                             .map(|decl| *decl)
                             .collect::<Vec<_>>();
 
-                        let self_mutable = im_caps.in_state_idn.call()(
-                            state,
-                            place_idx,
-                            im_caps.mutable_idn.call()(self_tyval, self_addr),
-                        );
-                        let field_mutable = im_caps.in_state_idn.call()(
-                            state,
-                            place_idx,
-                            im_caps.mutable_idn.call()(field_tyval, field_addr),
-                        );
+                        let self_mutable =
+                            im_caps.mutable_idn.call()(state, place_idx, self_tyval, self_addr);
+                        let field_mutable =
+                            im_caps.mutable_idn.call()(state, place_idx, field_tyval, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
@@ -284,16 +276,10 @@ impl TaskEncoder for ImTyEnc {
                             ),
                         );
 
-                        let self_immutable = im_caps.in_state_idn.call()(
-                            state,
-                            place_idx,
-                            im_caps.immutable_idn.call()(self_tyval, self_addr),
-                        );
-                        let field_immutable = im_caps.in_state_idn.call()(
-                            state,
-                            place_idx,
-                            im_caps.immutable_idn.call()(field_tyval, field_addr),
-                        );
+                        let self_immutable =
+                            im_caps.immutable_idn.call()(state, place_idx, self_tyval, self_addr);
+                        let field_immutable =
+                            im_caps.immutable_idn.call()(state, place_idx, field_tyval, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
@@ -315,20 +301,6 @@ impl TaskEncoder for ImTyEnc {
                             ),
                         );
                     }
-
-                    for field in data.fields.iter() {
-                        let field: &RustFieldData = field;
-                        let ty = deps
-                            .require_dep::<TyUsePureEnc>(field.ty().decompose(task_key.params))?;
-                        let params = deps.require_dep::<GenericParamsEnc>(task_key.params)?;
-                    }
-
-                    // let fields = data
-                    //     .fields
-                    //     .iter()
-                    //     .map(|field| self.encode_decomposition(field.ty().decompose(ty.params)))
-                    //     .collect::<EncResult<'vir, Vec<_>>>()?;
-                    // vir::with_vcx(|vcx| vcx.mk_conj(&fields))
                 }
                 TySpecifics::EnumLike(data) => {
                     deps.emit_output_ref(task_key, ImTyRef::Other);
