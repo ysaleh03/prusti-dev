@@ -1,26 +1,46 @@
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
 
-use super::ImStateEnc;
+use super::{ty::RustTyDecomposition, ImStateEnc, ImTyNameEnc, ImTyStateEnc};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImCapEncRef<'vir> {
-    pub mutable_idn:
-        vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::TyVal, vir::Ref), vir::Bool>,
-    pub immutable_idn:
-        vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::TyVal, vir::Ref), vir::Bool>,
+    pub mutable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+    pub immutable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
     // TODO figure out type-refined versions of these:
-    pub local_mutable_idn: vir::FunctionIdn<
-        'vir,
-        (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
-        vir::Bool,
-    >,
-    pub atomic_mutable_idn: vir::FunctionIdn<
-        'vir,
-        (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
-        vir::Bool,
-    >,
-    pub addr_to_idx_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref), vir::Int>,
+    // pub local_mutable_idn: vir::FunctionIdn<
+    //     'vir,
+    //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
+    //     vir::Bool,
+    // >,
+    // pub atomic_mutable_idn: vir::FunctionIdn<
+    //     'vir,
+    //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
+    //     vir::Bool,
+    // >,
+    pub addr_to_idx_idn: vir::FunctionIdn<'vir, vir::Ref, vir::Int>,
 }
+
+// TODO take Option of parent type to optionally encode local/atomic mutable
+
+// #[derive(Debug, Clone, Copy)]
+// pub struct ImCapEncRefNew<'vir> {
+//     pub mutable_idn:
+//         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+//     pub immutable_idn:
+//         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+//     // TODO figure out type-refined versions of these:
+//     // pub local_mutable_idn: vir::FunctionIdn<
+//     //     'vir,
+//     //     (vir::ImState, vir::Int, vir::Ref, vir::Ref),
+//     //     vir::Bool,
+//     // >,
+//     // pub atomic_mutable_idn: vir::FunctionIdn<
+//     //     'vir,
+//     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
+//     //     vir::Bool,
+//     // >,
+//     pub addr_to_idx_idn: vir::FunctionIdn<'vir, vir::Ref, vir::Int>,
+// }
 
 impl<'vir> OutputRefAny for ImCapEncRef<'vir> {}
 
@@ -35,7 +55,7 @@ impl TaskEncoder for ImCapEnc {
     task_encoder::encoder_cache!(ImCapEnc);
     const ENCODER_NAME: &'static str = "interior mutability state encoder";
 
-    type TaskDescription<'vir> = ();
+    type TaskDescription<'vir> = RustTyDecomposition<'vir>;
     type OutputRef<'vir> = ImCapEncRef<'vir>;
     type OutputFullLocal<'vir> = ImCapEncResult<'vir>;
     type EncodingError = ();
@@ -49,70 +69,63 @@ impl TaskEncoder for ImCapEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
         let im_state = deps.require_ref::<ImStateEnc>(())?;
+        let im_ty_state = deps.require_ref::<ImTyStateEnc>(*task_key)?;
 
         vir::with_vcx(|vcx| {
             let mut functions = Vec::new();
             let mut axioms = Vec::new();
 
+            let ty_name = deps.require_dep::<ImTyNameEnc>(*task_key)?;
+
             let mutable_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("cap_mutable"),
-                (
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_INT,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                ),
+                vir::vir_format_identifier!(vcx, "cap_mutable_{}", ty_name),
+                (vir::TYPE_IMSTATE, vir::TYPE_INT, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
             let immutable_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("cap_immutable"),
-                (
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_INT,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                ),
+                vir::vir_format_identifier!(vcx, "cap_immutable_{}", ty_name),
+                (vir::TYPE_IMSTATE, vir::TYPE_INT, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
-            let local_mutable_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("cap_local"),
-                (
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_INT,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                ),
-                vir::TYPE_BOOL,
-            );
+            // let local_mutable_idn = vir::FunctionIdn::new(
+            //     vir::ViperIdent::new("cap_local"),
+            //     (
+            //         vir::TYPE_IMSTATE,
+            //         vir::TYPE_INT,
+            //         vir::TYPE_TYVAL,
+            //         vir::TYPE_REF,
+            //         vir::TYPE_TYVAL,
+            //         vir::TYPE_REF,
+            //     ),
+            //     vir::TYPE_BOOL,
+            // );
 
-            let atomic_mutable_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("cap_atomic"),
-                (
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_INT,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                    vir::TYPE_TYVAL,
-                    vir::TYPE_REF,
-                ),
-                vir::TYPE_BOOL,
-            );
+            // let atomic_mutable_idn = vir::FunctionIdn::new(
+            //     vir::ViperIdent::new("cap_atomic"),
+            //     (
+            //         vir::TYPE_IMSTATE,
+            //         vir::TYPE_INT,
+            //         vir::TYPE_TYVAL,
+            //         vir::TYPE_REF,
+            //         vir::TYPE_TYVAL,
+            //         vir::TYPE_REF,
+            //     ),
+            //     vir::TYPE_BOOL,
+            // );
 
             let addr_to_idx_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("cap_addr_to_idx"),
-                (vir::TYPE_TYVAL, vir::TYPE_REF),
+                vir::vir_format_identifier!(vcx, "cap_addr_to_idx_{}", ty_name),
+                vir::TYPE_REF,
                 vir::TYPE_INT,
             );
 
             deps.emit_output_ref(*task_key, ImCapEncRef {
                 mutable_idn,
                 immutable_idn,
-                local_mutable_idn,
-                atomic_mutable_idn,
+                // local_mutable_idn,
+                // atomic_mutable_idn,
                 addr_to_idx_idn,
             })?;
 
@@ -121,62 +134,68 @@ impl TaskEncoder for ImCapEnc {
             functions.push(vcx.mk_domain_function(addr_to_idx_idn, false, None));
 
             let zero = vcx.mk_int::<0>();
-            let addr_to_idx_neg =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("addr_to_idx_neg"), vir::expr! {
-                    forall t: Type, l: Ref ::
-                    { [addr_to_idx_idn](t, l) }
-                    ([addr_to_idx_idn](t, l)) < (zero)
-                });
+            let addr_to_idx_neg = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_addr_to_idx_neg_{}", ty_name),
+                vir::expr! {
+                    forall l: Ref ::
+                    { [addr_to_idx_idn](l) }
+                    ([addr_to_idx_idn](l)) < (zero)
+                },
+            );
             axioms.push(addr_to_idx_neg);
 
-            let addr_to_idx_bi =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("addr_to_idx_bi"), vir::expr! {
-                    forall t0: Type, t1: Type, l0: Ref, l1: Ref ::
-                    { ([addr_to_idx_idn](t0, l0)), ([addr_to_idx_idn](t1, l1)) }
-                    (([addr_to_idx_idn](t0, l0)) == ([addr_to_idx_idn](t1, l1))) == (((t0) == (t1)) && ((l0) == (l1)))
-                });
+            let addr_to_idx_bi = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_addr_to_idx_bi_{}", ty_name),
+                vir::expr! {
+                    forall l0: Ref, l1: Ref ::
+                    { ([addr_to_idx_idn](l0)), ([addr_to_idx_idn](l1)) }
+                    (([addr_to_idx_idn](l0)) == ([addr_to_idx_idn](l1))) == ((l0) == (l1))
+                },
+            );
             axioms.push(addr_to_idx_bi);
 
             // Capabilities
 
             functions.push(vcx.mk_domain_function(mutable_idn, false, None));
             functions.push(vcx.mk_domain_function(immutable_idn, false, None));
-            functions.push(vcx.mk_domain_function(local_mutable_idn, false, None));
-            functions.push(vcx.mk_domain_function(atomic_mutable_idn, false, None));
+            // functions.push(vcx.mk_domain_function(local_mutable_idn, false, None));
+            // functions.push(vcx.mk_domain_function(atomic_mutable_idn, false, None));
 
             // Capability Implications
 
-            let mutable_immutable =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("mutable_immutable"), vir::expr! {
-                    forall t: Type, s: ImState, l: Ref, i: Int ::
-                    { ([mutable_idn](s, i, t, l)) }
-                    ([mutable_idn](s, i, t, l)) ==> ([immutable_idn](s, i, t, l))
-                });
+            let mutable_immutable = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_mutable_immutable_{}", ty_name),
+                vir::expr! {
+                    forall s: ImState, l: Ref, i: Int ::
+                    { ([mutable_idn](s, i, l)) }
+                    ([mutable_idn](s, i, l)) ==> ([immutable_idn](s, i, l))
+                },
+            );
             axioms.push(mutable_immutable);
 
-            // local-capabilities are fully available when the address specified in `local` is not
-            // modified and modifiable
-            let local_mutable_full =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_full"), vir::expr! {
-                    forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-                    { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
-                    (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
-                     (([im_state.modifiable_idn](s, t0, l0)) &&
-                      ([im_state.not_modified_idn](s, t0, l0)))) ==>
-                        ([mutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
-                });
-            axioms.push(local_mutable_full);
+            // // local-capabilities are fully available when the address specified in `local` is not
+            // // modified and modifiable
+            // let local_mutable_full =
+            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_full"), vir::expr! {
+            //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
+            //         { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
+            //         (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
+            //          (([im_state.modifiable_idn](s, t0, l0)) &&
+            //           ([im_state.not_modified_idn](s, t0, l0)))) ==>
+            //             ([mutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
+            //     });
+            // axioms.push(local_mutable_full);
 
-            // local-mutable is at least as strong as immutable when `local` is not modified
-            let local_mutable_partial =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_partial"), vir::expr! {
-                    forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-                    { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
-                    (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
-                        ([im_state.not_modified_idn](s, t0, l0))) ==>
-                        ([immutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
-                });
-            axioms.push(local_mutable_partial);
+            // // local-mutable is at least as strong as immutable when `local` is not modified
+            // let local_mutable_partial =
+            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_partial"), vir::expr! {
+            //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
+            //         { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
+            //         (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
+            //             ([im_state.not_modified_idn](s, t0, l0))) ==>
+            //             ([immutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
+            //     });
+            // axioms.push(local_mutable_partial);
 
             // local-immutable is at least as strong as immutable when `local` is not modified
             // let local_immutable_partial = vcx.mk_domain_axiom(
@@ -193,36 +212,41 @@ impl TaskEncoder for ImCapEnc {
 
             // Two-State Axioms
 
-            let immutable_stable =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("immutable_stable"), vir::expr! {
-                    forall t: Type, s: ImState, l: Ref, i: Int ::
-                    { ([immutable_idn](s, i, t, l)) }
-                    ([immutable_idn](s, i, t, l)) ==>
-                        (([im_state.get_snap_idn](s, t, l)) == ([im_state.get_snap_idn](([im_state.next_idn](s)), t, l)))
+            let immutable_stable = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_immutable_stable_{}", ty_name),
+                vir::expr! {
+                    forall s: ImState, l: Ref, i: Int ::
+                    { ([immutable_idn](s, i, l)) }
+                    ([immutable_idn](s, i, l)) ==>
+                        (([im_ty_state.get_snap_idn](s, l)) == ([im_ty_state.get_snap_idn](([im_state.next_idn](s)), l)))
                 });
             axioms.push(immutable_stable);
 
-            let mutable_moved =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("mutable_moved"), vir::expr! {
-                    forall t: Type, s: ImState, l: Ref, i: Int ::
-                    { ([mutable_idn](s, i, t, l)) }
-                    ([mutable_idn](s, i, t, l)) ==>
-                        ([im_state.moved_idn](t, s, l, ([im_state.next_idn](s)), l))
-                });
+            let mutable_moved = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_mutable_moved_{}", ty_name),
+                vir::expr! {
+                    forall s: ImState, l: Ref, i: Int ::
+                    { ([mutable_idn](s, i, l)) }
+                    ([mutable_idn](s, i, l)) ==>
+                        ([im_ty_state.moved_idn](s, l, ([im_state.next_idn](s)), l))
+                },
+            );
             axioms.push(mutable_moved);
 
-            let mutable_modifiable =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("mutable_modifiable"), vir::expr! {
-                        forall t: Type, s: ImState, l: Ref, i: Int ::
-                        { ([mutable_idn](s, i, t, l)) }
-                        ([mutable_idn](s, i, t, l)) ==>
-                            ([im_state.modifiable_idn](s, t, l))
-                });
+            let mutable_modifiable = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_mutable_modifiable_{}", ty_name),
+                vir::expr! {
+                        forall s: ImState, l: Ref, i: Int ::
+                        { ([mutable_idn](s, i, l)) }
+                        ([mutable_idn](s, i, l)) ==>
+                            ([im_ty_state.modifiable_idn](s, l))
+                },
+            );
             axioms.push(mutable_modifiable);
 
             // Domain
             let domain = vcx.mk_domain(
-                vir::ViperIdent::new("ImCap"),
+                vir::vir_format_identifier!(vcx, "im_cap_dom_{}", ty_name),
                 &[],
                 vcx.alloc_slice(&axioms[..]),
                 vcx.alloc_slice(&functions[..]),

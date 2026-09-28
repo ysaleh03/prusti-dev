@@ -41,16 +41,9 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, CompType, LocalDeclData};
 
 use crate::encoders::{
-    self, FunctionCallEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask,
-    PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask,
-    mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks},
-    mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic},
-    ty::{
-        RustTyDecomposition,
-        generics::{GArgs, GParams},
-        use_impure::TyUseImpure,
-        use_pure::{TyUsePure, TyUsePureEnc},
-    },
+    self, mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, ty::{
+        generics::{GArgs, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition
+    }, FunctionCallEnc, ImTyStateEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
 };
 
 use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
@@ -1860,15 +1853,16 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_phase_actions(location, EvalStmtPhase::PostOperands)?;
             self.pcg_phase_actions(location, EvalStmtPhase::PreMain)?;
 
-            // (Interior Mutability)
-            if self.in_im_mode() {
-                let current_fpcs = self.current_fpcs.take().unwrap();
-                let cfpcs = &current_fpcs.statements[location.statement_index];
-                let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-                self.inhale_im_place_capabilities(pcg)?;
-                self.current_fpcs = Some(current_fpcs);
-
-            }
+            // // (Interior Mutability)
+            // if self.in_im_mode() {
+            //     // TODO skip encoding a statement if none of its operands have interior mutability
+                
+            //     let current_fpcs = self.current_fpcs.take().unwrap();
+            //     let cfpcs = &current_fpcs.statements[location.statement_index];
+            //     let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+            //     self.inhale_im_place_capabilities(pcg)?;
+            //     self.current_fpcs = Some(current_fpcs);
+            // }
 
             // Assignments to the locals only serving specification-only arms
             // (necessarily scaffolding stores) are not encoded, since the
@@ -1884,36 +1878,40 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
             // (Interior Mutability) `curr_im_state` is now the post-state and `prev_im_state` is the pre-state
             if self.in_im_mode() {
-                self.bump_im_state();
-
+                // self.bump_im_state();
 
                 // TODO IM handling of assignments
                 match &statement.kind {
                     mir::StatementKind::Assign(box (dest, rvalue)) => {
+                        self.bump_im_state();
+
+                        let current_fpcs = self.current_fpcs.take().unwrap();
+                        let cfpcs = &current_fpcs.statements[location.statement_index];
+                        let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+                        self.inhale_im_place_capabilities(pcg)?;
+                        self.current_fpcs = Some(current_fpcs);
 
                         match rvalue {
                             mir::Rvalue::Use(op) => {
-                                let dest_enc = self.encode_place(*dest)?;
+                                let dest_enc = self.encode_place(Place::from(*dest))?;
                                 let dest_addr = dest_enc.expr.address;
 
                                 let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
-                                let dest_tyval = self.deps.require_dep::<TyExprEnc>(dest_ty)?;
 
                                 let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+                                let im_ty_state = self.deps.require_ref::<ImTyStateEnc>(dest_ty)?;
+
                                 match op {
-                                    mir::Operand::Move(source) => {
-                                      let source_enc = self.encode_place(*source)?;
+                                    mir::Operand::Move(source)
+                                  | mir::Operand::Copy(source) => {
+                                      let source_enc = self.encode_place(Place::from(*source))?;
                                       let source_addr = source_enc.expr.address;
-                                      self.stmt(im_state.moved_idn.call()(
-                                          dest_tyval,
+                                      self.stmt(self.vcx.mk_inhale_stmt(im_ty_state.moved_idn.call()(
                                           self.prev_im_state(),
                                           source_addr,
                                           self.curr_im_state(),
                                           dest_addr, 
-                                      ));
-                                    }
-                                    mir::Operand::Copy(p) => {
-                                        
+                                      )));
                                     }
                                     _ => {}
                                 }
@@ -2514,9 +2512,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
         // TODO I wonder if this would be made faster if we only considered leaf places
 
-        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
-        let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
-        
         comment!(self, "[IM] implicit capabilites from place capabilities:");
 
         for p in pcg.places_with_capapability(CapabilityKind::Read) {
@@ -2529,9 +2524,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let addr_expr = place_enc.expr.address;
 
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let tyval = self.deps.require_dep::<TyExprEnc>(ty_decomp)?;
-
-            let cap_expr = im_caps.immutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), tyval, addr_expr);
+            let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
+            
+            let cap_expr = ty_caps.immutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
@@ -2546,9 +2541,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let addr_expr = place_enc.expr.address;
 
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let tyval = self.deps.require_dep::<TyExprEnc>(ty_decomp)?;
-
-            let cap_expr = im_caps.mutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), tyval, addr_expr);
+            let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
+            
+            let cap_expr = ty_caps.mutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }

@@ -5,7 +5,7 @@ use task_encoder::{
 use vir::CastType;
 
 use crate::encoders::{
-    ImCapEnc, ImStateEnc, Pure, TyUsePureEnc,
+    ImCapEnc, ImStateEnc, ImTyNameEnc, ImTyStateEnc, Pure, TyUsePureEnc,
     ty::{
         RustParamData,
         pure::{TyPure, TyPureEnc},
@@ -53,6 +53,7 @@ pub struct ImTyEnc;
 impl TaskEncoder for ImTyEnc {
     task_encoder::encoder_cache!(ImTyEnc);
     const ENCODER_NAME: &'static str = "interior mutability type encoder";
+    // TODO make this decomp?
     type TaskDescription<'vir> = RustTy<'vir>;
 
     type OutputRef<'vir> = ImTyRef<'vir>;
@@ -78,7 +79,6 @@ impl TaskEncoder for ImTyEnc {
         // axioms when the *target* gets accessed/dereferenced?
         vir::with_vcx(|vcx| {
             let im_state = deps.require_ref::<ImStateEnc>(())?;
-            let im_caps = deps.require_ref::<ImCapEnc>(())?;
 
             let mut axioms = Vec::new();
             let mut functions = Vec::new();
@@ -95,7 +95,12 @@ impl TaskEncoder for ImTyEnc {
             // getting immref snap from heap
             //
 
-            let self_ty = deps.require_dep::<TyPureEnc>(task_key)?;
+            let self_ty_pure = deps.require_dep::<TyPureEnc>(task_key)?;
+
+            let self_ty = RustTyDecomposition::identity(task_key);
+            let self_name = deps.require_dep::<ImTyNameEnc>(self_ty)?;
+            let self_tyval = deps.require_dep::<TyExprEnc>(self_ty)?;
+            let self_state = deps.require_ref::<ImTyStateEnc>(self_ty)?;
 
             match &task_key.specifics {
                 TySpecifics::Param(RustParamData::Generic) => unreachable!(),
@@ -107,26 +112,27 @@ impl TaskEncoder for ImTyEnc {
                     deps.emit_output_ref(task_key, ImTyRef::Other);
                 }
                 TySpecifics::ImmRef(data) => {
-                    let snapshot = self_ty.snapshot;
-                    let immref_ty = self_ty.expect_immref();
-                    let get_immref_idn = vir::FunctionIdn::new(
-                        vir::ViperIdent::new("get_immref"),
-                        (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
-                        snapshot.downcast_ty(),
-                    );
-                    deps.emit_output_ref(task_key, ImTyRef::ImmRef(ImmRefData { get_immref_idn }));
+                    deps.emit_output_ref(task_key, ImTyRef::Other);
+                    // TODO
+                    // let snapshot = self_ty.snapshot;
+                    // let immref_ty = self_ty.expect_immref();
+                    // let get_immref_idn = vir::FunctionIdn::new(
+                    //     vir::ViperIdent::new("get_immref"),
+                    //     (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
+                    //     snapshot.downcast_ty(),
+                    // );
+                    // deps.emit_output_ref(task_key, ImTyRef::ImmRef(ImmRefData { get_immref_idn }));
 
-                    functions.push(vcx.mk_domain_function(get_immref_idn, false, None));
+                    // functions.push(vcx.mk_domain_function(get_immref_idn, false, None));
 
-                    axioms.push(vcx.mk_domain_axiom(
-                    vir::ViperIdent::new("get_immref_get_snap"),
-                    vir::expr!{
-                        forall t: Type, s: ImState, l: Ref ::
-                        { [get_immref_idn](s, t, l) }
-                        (([immref_ty.deref_access](([get_immref_idn](s, t, l)))) == (l)) &&
-                            (([immref_ty.value_access](([get_immref_idn](s, t, l)))) == ([im_state.get_snap_idn](s, t, l)))
-                    }
-                ));
+                    // axioms.push(vcx.mk_domain_axiom(
+                    // vir::ViperIdent::new("get_immref_get_snap"),
+                    // vir::expr!{
+                    //     forall t: Type, s: ImState, l: Ref ::
+                    //     { [get_immref_idn](s, t, l) }
+                    //     (([immref_ty.deref_access](([get_immref_idn](s, t, l)))) == (l)) &&
+                    //         (([immref_ty.value_access](([get_immref_idn](s, t, l)))) == ([im_state.get_snap_idn](s, t, l)))
+                    // }));
 
                     // self.encode_decomposition(data.referent.decompose(ty.params))?
                 }
@@ -162,7 +168,7 @@ impl TaskEncoder for ImTyEnc {
                     // TODO encode field addr inequality axioms?
                     // TODO moved-axioms for abstract fields
 
-                    let struct_ty = self_ty.expect_structlike();
+                    let struct_ty = self_ty_pure.expect_structlike();
 
                     for (idx, (field_pure, field_data)) in
                         struct_ty.fields.iter().zip(data.fields.iter()).enumerate()
@@ -177,19 +183,9 @@ impl TaskEncoder for ImTyEnc {
                         let state_decl = vcx.mk_local_decl("s", vir::TYPE_IMSTATE);
                         let state = vcx.mk_local_ex(state_decl);
 
-                        let self_ty = RustTyDecomposition::identity(task_key);
-                        let self_tyval = deps.require_dep::<TyExprEnc>(self_ty)?;
-                        let self_caster =
-                            deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                                param: RustTyDecomposition::param(),
-                                concrete: self_ty,
-                            }))?;
-                        let self_lookup = self_caster
-                            .cast_to_caller_ctx(
-                                im_state.get_snap_idn.call()(state, self_tyval, self_addr)
-                                    .upcast_ty(),
-                            )
-                            .downcast_ty();
+                        // Note: downcast safe because a type with fields cannot be generic
+                        let self_lookup =
+                            self_state.get_snap_idn.call()(state, self_addr).downcast_ty();
                         let field_from_self = field_pure.read.call()(self_lookup);
 
                         let field_addr = match field_pure.ref_to_field_ref {
@@ -200,25 +196,15 @@ impl TaskEncoder for ImTyEnc {
                         };
 
                         let field_ty = field_data.ty().decompose(task_key.params);
-                        let field_tyval = deps.require_dep::<TyExprEnc>(field_ty)?;
-                        let field_caster = if field_ty.ty.specifics.is_param() {
-                            deps.require_dep::<GArgsCastEnc<Pure>>(None)?
-                        } else {
-                            deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
-                                param: RustTyDecomposition::param(),
-                                concrete: field_ty,
-                            }))?
-                        };
-                        let field_lookup = field_caster.cast_to_caller_ctx(
-                            im_state.get_snap_idn.call()(state, field_tyval, field_addr)
-                                .upcast_ty(),
-                        );
+                        let field_caps = deps.require_ref::<ImCapEnc>(field_ty)?;
+                        let field_state = deps.require_ref::<ImTyStateEnc>(field_ty)?;
 
-                        let views_eq = vcx.mk_eq_expr(field_from_self, field_lookup);
+                        let field_from_addr = field_state.get_snap_idn.call()(state, field_addr);
+                        let views_eq = vcx.mk_eq_expr(field_from_self, field_from_addr);
 
                         let ty_decls = params.ty_decls().as_dyn();
                         let const_decls = params.const_decls().as_dyn();
-                        let qvars = ty_decls
+                        let mut qvars = ty_decls
                             .iter()
                             .chain(const_decls.iter())
                             .chain([self_addr_decl.as_dyn(), state_decl.as_dyn()].iter())
@@ -226,46 +212,36 @@ impl TaskEncoder for ImTyEnc {
                             .collect::<Vec<_>>();
 
                         axioms.push(vcx.mk_domain_axiom(
-                            vir::vir_format_identifier!(
-                                vcx,
-                                "im_{}_{}_state",
-                                task_key.name(),
-                                idx
+                            vir::vir_format_identifier!(vcx, "im_{}_{}_state", self_name, idx),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                vcx.alloc_slice(&[vcx.mk_trigger(&[field_from_addr])]),
+                                views_eq,
                             ),
-                            vcx.mk_forall_expr(vcx.alloc_slice(&qvars[..]), &[], views_eq),
                         ));
 
                         let place_idx_decl = vcx.mk_local_decl("p", vir::TYPE_INT);
                         let place_idx = vcx.mk_local_ex(place_idx_decl);
-                        let qvars = ty_decls
-                            .iter()
-                            .chain(const_decls.iter())
-                            .chain(
-                                [
-                                    self_addr_decl.as_dyn(),
-                                    state_decl.as_dyn(),
-                                    place_idx_decl.as_dyn(),
-                                ]
-                                .iter(),
-                            )
-                            .map(|decl| *decl)
-                            .collect::<Vec<_>>();
+
+                        qvars.push(place_idx_decl.as_dyn());
+
+                        let self_caps = deps.require_ref::<ImCapEnc>(self_ty)?;
 
                         let self_mutable =
-                            im_caps.mutable_idn.call()(state, place_idx, self_tyval, self_addr);
+                            self_caps.mutable_idn.call()(state, place_idx, self_addr);
                         let field_mutable =
-                            im_caps.mutable_idn.call()(state, place_idx, field_tyval, field_addr);
+                            field_caps.mutable_idn.call()(state, place_idx, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
                                     "im_{}_{}_mutable",
-                                    task_key.name(),
+                                    self_name,
                                     idx
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    &[],
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_mutable.as_dyn(), field_addr.as_dyn()])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_mutable,
@@ -277,20 +253,20 @@ impl TaskEncoder for ImTyEnc {
                         );
 
                         let self_immutable =
-                            im_caps.immutable_idn.call()(state, place_idx, self_tyval, self_addr);
+                            self_caps.immutable_idn.call()(state, place_idx, self_addr);
                         let field_immutable =
-                            im_caps.immutable_idn.call()(state, place_idx, field_tyval, field_addr);
+                            field_caps.immutable_idn.call()(state, place_idx, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
                                     "im_{}_{}_immutable",
-                                    task_key.name(),
+                                    self_name,
                                     idx
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    &[],
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_mutable.as_dyn(), field_addr.as_dyn()])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_immutable,
@@ -327,7 +303,7 @@ impl TaskEncoder for ImTyEnc {
             Ok((
                 ImTyEncResult {
                     domain: vcx.mk_domain(
-                        vir::vir_format_identifier!(vcx, "im_{}", task_key.name()),
+                        vir::vir_format_identifier!(vcx, "im_{}", self_name),
                         &[],
                         vcx.alloc_slice(&axioms[..]),
                         vcx.alloc_slice(&functions[..]),

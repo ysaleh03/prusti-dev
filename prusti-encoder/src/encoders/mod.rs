@@ -18,6 +18,8 @@ pub mod custom;
 pub mod addr;
 
 pub use im_state::ImStateEnc;
+pub use im_state::ImTyStateEnc;
+pub use im_state::ImTyNameEnc;
 pub use im_capabilities::ImCapEnc;
 
 pub use body::{encodes_body, impure_body, impure_body_with_facts, pure_body, spec_body};
