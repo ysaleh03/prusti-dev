@@ -227,50 +227,50 @@ impl TaskEncoder for ImTyEnc {
 
                         let self_caps = deps.require_ref::<ImCapEnc>(self_ty)?;
 
-                        let self_mutable =
-                            self_caps.mutable_idn.call()(state, place_idx, self_addr);
-                        let field_mutable =
-                            field_caps.mutable_idn.call()(state, place_idx, field_addr);
+                        let self_exclusive =
+                            self_caps.exclusive_idn.call()(state, place_idx, self_addr);
+                        let field_exclusive =
+                            field_caps.exclusive_idn.call()(state, place_idx, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
-                                    "im_{}_{}_mutable",
+                                    "im_{}_{}_exclusive",
                                     self_name,
                                     idx
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_mutable.as_dyn(), field_addr.as_dyn()])]),
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_exclusive.as_dyn(), field_addr.as_dyn()])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
-                                        self_mutable,
-                                        field_mutable,
+                                        self_exclusive,
+                                        field_exclusive,
                                     )
                                     .downcast_ty(),
                                 ),
                             ),
                         );
 
-                        let self_immutable =
-                            self_caps.immutable_idn.call()(state, place_idx, self_addr);
-                        let field_immutable =
-                            field_caps.immutable_idn.call()(state, place_idx, field_addr);
+                        let self_shared =
+                            self_caps.shared_idn.call()(state, place_idx, self_addr);
+                        let field_shared =
+                            field_caps.shared_idn.call()(state, place_idx, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
-                                    "im_{}_{}_immutable",
+                                    "im_{}_{}_shared",
                                     self_name,
                                     idx
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_mutable.as_dyn(), field_addr.as_dyn()])]),
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_exclusive.as_dyn(), field_addr.as_dyn()])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
-                                        self_immutable,
-                                        field_immutable,
+                                        self_shared,
+                                        field_shared,
                                     )
                                     .downcast_ty(),
                                 ),
@@ -279,7 +279,7 @@ impl TaskEncoder for ImTyEnc {
                     }
                 }
                 TySpecifics::EnumLike(data) => {
-                    deps.emit_output_ref(task_key, ImTyRef::Other);
+                    deps.emit_output_ref(task_key, ImTyRef::Other)?;
 
                     // let variants = data
                     //     .variants

@@ -142,7 +142,7 @@ impl LocationLabelPrefix {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ImModeData<'vir> {
+pub struct ImpureImData<'vir> {
     pub curr_im_state: vir::Expr<'vir, vir::ImState>,
     // State version at end of previous statement
     pub prev_im_state: vir::Expr<'vir, vir::ImState>,
@@ -188,7 +188,7 @@ where
     pub encoded_blocks: Vec<vir::CfgBlock<'vir>>, // TODO: use IndexVec ?
 
     /// (Interior Mutability) encoding data relevant to interior mutability reasoning
-    pub im_mode_data: Option<ImModeData<'vir>>,
+    pub im_mode_data: Option<ImpureImData<'vir>>,
 }
 
 /// Represents an abstract pointer and its associated implicit capabilities,
@@ -1837,7 +1837,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.vcx.with_span(statement.source_info.span, |_vcx| {
             self.deps().check_cycle()?;
 
-            let before_label = self.new_before_label(location);
+            // let before_label = self.new_before_label(location);
 
             comment!(self, "[MIR] {location:?}: {statement:?}");
 
@@ -1855,13 +1855,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
             // // (Interior Mutability)
             // if self.in_im_mode() {
-            //     // TODO skip encoding a statement if none of its operands have interior mutability
-                
             //     let current_fpcs = self.current_fpcs.take().unwrap();
             //     let cfpcs = &current_fpcs.statements[location.statement_index];
             //     let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
             //     self.inhale_im_place_capabilities(pcg)?;
             //     self.current_fpcs = Some(current_fpcs);
+
             // }
 
             // Assignments to the locals only serving specification-only arms
@@ -1878,19 +1877,18 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
             // (Interior Mutability) `curr_im_state` is now the post-state and `prev_im_state` is the pre-state
             if self.in_im_mode() {
-                // self.bump_im_state();
-
                 // TODO IM handling of assignments
                 match &statement.kind {
                     mir::StatementKind::Assign(box (dest, rvalue)) => {
-                        self.bump_im_state();
 
+                        // TODO only need to model state changes for relevant statements
                         let current_fpcs = self.current_fpcs.take().unwrap();
                         let cfpcs = &current_fpcs.statements[location.statement_index];
                         let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
                         self.inhale_im_place_capabilities(pcg)?;
                         self.current_fpcs = Some(current_fpcs);
 
+                        self.bump_im_state()?;
                         match rvalue {
                             mir::Rvalue::Use(op) => {
                                 let dest_enc = self.encode_place(Place::from(*dest))?;
@@ -2475,7 +2473,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     }
 
     // requires: self.in_im_mode()
-    fn im_mode_data(&self) -> &ImModeData<'vir> {
+    fn im_mode_data(&self) -> &ImpureImData<'vir> {
         self.im_mode_data.as_ref().unwrap()
     }
 
@@ -2518,7 +2516,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             // if p.prefix_place().is_some() {
             //     continue;
             // }
-            comment!(self, "[IM] immutable capability to place {:?}", p);
+            comment!(self, "[IM] shared capability to place {:?}", p);
 
             let place_enc = self.encode_place(p)?;
             let addr_expr = place_enc.expr.address;
@@ -2526,7 +2524,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
             let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
             
-            let cap_expr = ty_caps.immutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+            let cap_expr = ty_caps.shared_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
@@ -2535,7 +2533,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             // if p.prefix_place().is_some() {
             //     continue;
             // }
-            comment!(self, "[IM] mutable capability to place {:?}", p);
+            comment!(self, "[IM] exclusive capability to place {:?}", p);
 
             let place_enc = self.encode_place(p)?;
             let addr_expr = place_enc.expr.address;
@@ -2543,7 +2541,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
             let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
             
-            let cap_expr = ty_caps.mutable_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+            let cap_expr = ty_caps.exclusive_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
@@ -2567,7 +2565,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         );
         comment!(
             self,
-            "inhale forall l: Loc :: immutable(l, pc) && immutable(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
+            "inhale forall l: Loc :: shared(l, pc) && shared(l, pc - 1) ==> old[{before_label}](deref(l)) == deref(l)"
         );
 
         // TODO: Remebember projections with assoc. ptrs and check for their prefixes as well
@@ -2594,7 +2592,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 let place_expr = self.encode_place_with_snap(p)?.1;
                 comment!(
                     self,
-                    "if (side conditions) {{ inhale mutable capability for {:?}@inner }}",
+                    "if (side conditions) {{ inhale exclusive capability for {:?}@inner }}",
                     place_expr
                 );
             }

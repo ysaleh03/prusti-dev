@@ -33,6 +33,8 @@ pub enum MirPureEncError {
     // UnsupportedTerminator,
 }
 
+// TODO do we fold the interior mutability spec encoder into here?
+
 pub type ExprInput<'vir> = (DefId, &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>);
 type ExprRet<'vir> = vir::ExprGenSnap<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 type ExprRetRef<'vir> = vir::ExprGenRef<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
@@ -269,6 +271,13 @@ impl<'vir> Update<'vir> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PureImData<'vir> {
+    /// If we are encoding a function pre/post, we wont have this
+    pub old_im_state: Option<vir::Expr<'vir, vir::ImState>>,
+    pub curr_im_state: vir::Expr<'vir, vir::ImState>,
+}
+
 struct Enc<'vir: 'enc, 'enc> {
     vcx: &'vir vir::VirCtxt<'vir>,
     encoding_depth: usize,
@@ -289,6 +298,9 @@ struct Enc<'vir: 'enc, 'enc> {
     rel1_mode: bool,
     before_expiry_mode: bool,
     impure_context: bool,
+
+    /// (Interior Mutability) handles on interior mutability state version
+    im_mode_data: Option<PureImData<'vir>>
 }
 
 struct EncodedPlace<'vir> {
@@ -397,6 +409,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     ..
                 }
             ),
+            im_mode_data: None,
         }
     }
 
@@ -884,6 +897,9 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     // call to another pure function, or a call to a prusti
                     // builtin function.
                     let is_pure = crate::encoders::is_function_pure(def_id, self.gargs(arg_tys));
+
+                    // TODO we need to do something slightly different if the function is pure_unstable, i.e. passing the im_state
+                    // do we encode everything with im_state bound? or do we have a flag...
 
                     // The bodiless `ptr_metadata` intrinsic is only lowered to
                     // `UnOp::PtrMetadata` in optimized MIR; do the lowering here.

@@ -16,6 +16,9 @@ use crate::encoders::{
 
 // Function wrapper
 
+// TODO can we sneak in the pure_unstable function encoding here by adding the state as a
+// snapshot argument to the function?
+
 pub struct FunctionCallEnc;
 
 #[derive(Debug, Clone)]

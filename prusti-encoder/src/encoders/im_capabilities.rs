@@ -4,15 +4,15 @@ use super::{ty::RustTyDecomposition, ImStateEnc, ImTyNameEnc, ImTyStateEnc};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImCapEncRef<'vir> {
-    pub mutable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-    pub immutable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+    pub exclusive_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+    pub shared_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
     // TODO figure out type-refined versions of these:
-    // pub local_mutable_idn: vir::FunctionIdn<
+    // pub local_exclusive_idn: vir::FunctionIdn<
     //     'vir,
     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
     //     vir::Bool,
     // >,
-    // pub atomic_mutable_idn: vir::FunctionIdn<
+    // pub atomic_exclusive_idn: vir::FunctionIdn<
     //     'vir,
     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
     //     vir::Bool,
@@ -20,21 +20,21 @@ pub struct ImCapEncRef<'vir> {
     pub addr_to_idx_idn: vir::FunctionIdn<'vir, vir::Ref, vir::Int>,
 }
 
-// TODO take Option of parent type to optionally encode local/atomic mutable
+// TODO take Option of parent type to optionally encode local/atomic exclusive
 
 // #[derive(Debug, Clone, Copy)]
 // pub struct ImCapEncRefNew<'vir> {
-//     pub mutable_idn:
+//     pub exclusive_idn:
 //         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-//     pub immutable_idn:
+//     pub shared_idn:
 //         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
 //     // TODO figure out type-refined versions of these:
-//     // pub local_mutable_idn: vir::FunctionIdn<
+//     // pub local_exclusive_idn: vir::FunctionIdn<
 //     //     'vir,
 //     //     (vir::ImState, vir::Int, vir::Ref, vir::Ref),
 //     //     vir::Bool,
 //     // >,
-//     // pub atomic_mutable_idn: vir::FunctionIdn<
+//     // pub atomic_exclusive_idn: vir::FunctionIdn<
 //     //     'vir,
 //     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
 //     //     vir::Bool,
@@ -77,19 +77,19 @@ impl TaskEncoder for ImCapEnc {
 
             let ty_name = deps.require_dep::<ImTyNameEnc>(*task_key)?;
 
-            let mutable_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "cap_mutable_{}", ty_name),
+            let exclusive_idn = vir::FunctionIdn::new(
+                vir::vir_format_identifier!(vcx, "cap_exclusive_{}", ty_name),
                 (vir::TYPE_IMSTATE, vir::TYPE_INT, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
-            let immutable_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "cap_immutable_{}", ty_name),
+            let shared_idn = vir::FunctionIdn::new(
+                vir::vir_format_identifier!(vcx, "cap_shared_{}", ty_name),
                 (vir::TYPE_IMSTATE, vir::TYPE_INT, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
 
-            // let local_mutable_idn = vir::FunctionIdn::new(
+            // let local_exclusive_idn = vir::FunctionIdn::new(
             //     vir::ViperIdent::new("cap_local"),
             //     (
             //         vir::TYPE_IMSTATE,
@@ -102,7 +102,7 @@ impl TaskEncoder for ImCapEnc {
             //     vir::TYPE_BOOL,
             // );
 
-            // let atomic_mutable_idn = vir::FunctionIdn::new(
+            // let atomic_exclusive_idn = vir::FunctionIdn::new(
             //     vir::ViperIdent::new("cap_atomic"),
             //     (
             //         vir::TYPE_IMSTATE,
@@ -122,10 +122,10 @@ impl TaskEncoder for ImCapEnc {
             );
 
             deps.emit_output_ref(*task_key, ImCapEncRef {
-                mutable_idn,
-                immutable_idn,
-                // local_mutable_idn,
-                // atomic_mutable_idn,
+                exclusive_idn,
+                shared_idn,
+                // local_exclusive_idn,
+                // atomic_exclusive_idn,
                 addr_to_idx_idn,
             })?;
 
@@ -156,93 +156,93 @@ impl TaskEncoder for ImCapEnc {
 
             // Capabilities
 
-            functions.push(vcx.mk_domain_function(mutable_idn, false, None));
-            functions.push(vcx.mk_domain_function(immutable_idn, false, None));
-            // functions.push(vcx.mk_domain_function(local_mutable_idn, false, None));
-            // functions.push(vcx.mk_domain_function(atomic_mutable_idn, false, None));
+            functions.push(vcx.mk_domain_function(exclusive_idn, false, None));
+            functions.push(vcx.mk_domain_function(shared_idn, false, None));
+            // functions.push(vcx.mk_domain_function(local_exclusive_idn, false, None));
+            // functions.push(vcx.mk_domain_function(atomic_exclusive_idn, false, None));
 
             // Capability Implications
 
-            let mutable_immutable = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "cap_mutable_immutable_{}", ty_name),
+            let exclusive_shared = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_exclusive_shared_{}", ty_name),
                 vir::expr! {
                     forall s: ImState, l: Ref, i: Int ::
-                    { ([mutable_idn](s, i, l)) }
-                    ([mutable_idn](s, i, l)) ==> ([immutable_idn](s, i, l))
+                    { ([exclusive_idn](s, i, l)) }
+                    ([exclusive_idn](s, i, l)) ==> ([shared_idn](s, i, l))
                 },
             );
-            axioms.push(mutable_immutable);
+            axioms.push(exclusive_shared);
 
             // // local-capabilities are fully available when the address specified in `local` is not
             // // modified and modifiable
-            // let local_mutable_full =
-            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_full"), vir::expr! {
+            // let local_exclusive_full =
+            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_full"), vir::expr! {
             //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-            //         { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
-            //         (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
+            //         { ([local_exclusive_idn](s, i, t0, l0, t1, l1))  }
+            //         (([local_exclusive_idn](s, i, t0, l0, t1, l1)) &&
             //          (([im_state.modifiable_idn](s, t0, l0)) &&
             //           ([im_state.not_modified_idn](s, t0, l0)))) ==>
-            //             ([mutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
+            //             ([exclusive_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
             //     });
-            // axioms.push(local_mutable_full);
+            // axioms.push(local_exclusive_full);
 
-            // // local-mutable is at least as strong as immutable when `local` is not modified
-            // let local_mutable_partial =
-            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_mutable_partial"), vir::expr! {
+            // // local-exclusive is at least as strong as shared when `local` is not modified
+            // let local_exclusive_partial =
+            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_partial"), vir::expr! {
             //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-            //         { ([local_mutable_idn](s, i, t0, l0, t1, l1))  }
-            //         (([local_mutable_idn](s, i, t0, l0, t1, l1)) &&
+            //         { ([local_exclusive_idn](s, i, t0, l0, t1, l1))  }
+            //         (([local_exclusive_idn](s, i, t0, l0, t1, l1)) &&
             //             ([im_state.not_modified_idn](s, t0, l0))) ==>
-            //             ([immutable_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
+            //             ([shared_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
             //     });
-            // axioms.push(local_mutable_partial);
+            // axioms.push(local_exclusive_partial);
 
-            // local-immutable is at least as strong as immutable when `local` is not modified
-            // let local_immutable_partial = vcx.mk_domain_axiom(
-            //     vir::ViperIdent::new("local_immutable_partial"),
+            // local-shared is at least as strong as shared when `local` is not modified
+            // let local_shared_partial = vcx.mk_domain_axiom(
+            //     vir::ViperIdent::new("local_shared_partial"),
             //     vir::expr! {
             //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-            //         { ([in_state_idn](s, i, ([local_idn](t0, l0, ([immutable_idn](t1, l1))))))  }
-            //         (([in_state_idn](s, i, ([local_idn](t0, l0, ([immutable_idn](t1, l1)))))) &&
+            //         { ([in_state_idn](s, i, ([local_idn](t0, l0, ([shared_idn](t1, l1))))))  }
+            //         (([in_state_idn](s, i, ([local_idn](t0, l0, ([shared_idn](t1, l1)))))) &&
             //             ([im_state.not_modified_idn](s, t0, l0))) ==>
-            //             ([in_state_idn](s, ([addr_to_idx_idn](t0, l0)), ([immutable_idn](t1, l1))))
+            //             ([in_state_idn](s, ([addr_to_idx_idn](t0, l0)), ([shared_idn](t1, l1))))
             //     },
             // );
-            // axioms.push(local_immutable_partial);
+            // axioms.push(local_shared_partial);
 
             // Two-State Axioms
 
-            let immutable_stable = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "cap_immutable_stable_{}", ty_name),
+            let shared_stable = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_shared_stable_{}", ty_name),
                 vir::expr! {
                     forall s: ImState, l: Ref, i: Int ::
-                    { ([immutable_idn](s, i, l)) }
-                    ([immutable_idn](s, i, l)) ==>
+                    { ([shared_idn](s, i, l)) }
+                    ([shared_idn](s, i, l)) ==>
                         (([im_ty_state.get_snap_idn](s, l)) == ([im_ty_state.get_snap_idn](([im_state.next_idn](s)), l)))
                 });
-            axioms.push(immutable_stable);
+            axioms.push(shared_stable);
 
-            let mutable_moved = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "cap_mutable_moved_{}", ty_name),
+            let exclusive_moved = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_exclusive_moved_{}", ty_name),
                 vir::expr! {
                     forall s: ImState, l: Ref, i: Int ::
-                    { ([mutable_idn](s, i, l)) }
-                    ([mutable_idn](s, i, l)) ==>
+                    { ([exclusive_idn](s, i, l)) }
+                    ([exclusive_idn](s, i, l)) ==>
                         ([im_ty_state.moved_idn](s, l, ([im_state.next_idn](s)), l))
                 },
             );
-            axioms.push(mutable_moved);
+            axioms.push(exclusive_moved);
 
-            let mutable_modifiable = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "cap_mutable_modifiable_{}", ty_name),
+            let exclusive_modifiable = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_exclusive_modifiable_{}", ty_name),
                 vir::expr! {
                         forall s: ImState, l: Ref, i: Int ::
-                        { ([mutable_idn](s, i, l)) }
-                        ([mutable_idn](s, i, l)) ==>
+                        { ([exclusive_idn](s, i, l)) }
+                        ([exclusive_idn](s, i, l)) ==>
                             ([im_ty_state.modifiable_idn](s, l))
                 },
             );
-            axioms.push(mutable_modifiable);
+            axioms.push(exclusive_modifiable);
 
             // Domain
             let domain = vcx.mk_domain(

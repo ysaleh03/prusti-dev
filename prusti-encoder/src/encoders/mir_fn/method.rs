@@ -12,7 +12,7 @@ use vir::MethodIdn;
 use crate::encoders::{
     Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc, WandEncTask,
     mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc},
-    mir_impure::ImModeData,
+    mir_impure::ImpureImData,
     pure::spec::MirSpecEncMode,
     ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
 };
@@ -295,7 +295,7 @@ impl TaskEncoder for MethodEnc {
                             None => {}
                         };
                     }
-                    let im_mode_data = ImModeData {
+                    let im_mode_data = ImpureImData {
                         curr_im_state,
                         prev_im_state,
                         old_im_state,
