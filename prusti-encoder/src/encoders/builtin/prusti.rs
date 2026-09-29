@@ -123,22 +123,11 @@ pub enum FloatOp {
 
 /// The abstract pointer ptr_deref and capability builtins
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum AbsPtrOp {
-    Deref,
-    Read,
-    Local,
-    Write,
+pub enum AddrOp {
     Unique,
-    Immutable,
-    ReadRef,
-    WriteRef,
-    NoReadRef,
-    NoWriteRef,
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum ObjectOp {
-    New,
+    Shared,
+    LocalUnique,
+    AtomicUnique,
 }
 
 /// A `prusti_contracts` builtin, classified from the callee and grouped by
@@ -153,8 +142,8 @@ pub enum PrustiBuiltin {
     SnapEq,
     SnapNe,
     SnapClone,
-    InstEq,
-    InstNe,
+    RepEq,
+    RepNe,
     Seq(SeqOp),
     /// An operation on `Set` (`multiset: false`) or `Multiset` (`true`).
     AnySet {
@@ -165,8 +154,7 @@ pub enum PrustiBuiltin {
     Int(NumOp),
     Real(NumOp),
     Float(FloatOp, ty::FloatTy),
-    AbsPtr(AbsPtrOp),
-    ObjectID(ObjectOp),
+    Addr(AddrOp),
 }
 
 impl PrustiBuiltin {
@@ -238,8 +226,6 @@ impl PrustiBuiltin {
                     "rel_end" => Self::Spec(SpecBuiltin::ModeEnd(Mode::Rel(rel_index()))),
                     "before_expiry_start" => Self::Spec(SpecBuiltin::ModeStart(Mode::BeforeExpiry)),
                     "before_expiry_end" => Self::Spec(SpecBuiltin::ModeEnd(Mode::BeforeExpiry)),
-                    "ptr_deref" => Self::AbsPtr(AbsPtrOp::Deref),
-                    "id" => Self::ObjectID(ObjectOp::New),
                     other => Self::float_fn(other).unwrap_or_else(|| {
                         todo!("unsupported `prusti_contracts` function {other}")
                     }),
@@ -248,10 +234,6 @@ impl PrustiBuiltin {
                     "new" | "new_ref" => Self::Ghost(GhostOp::New),
                     "deref" => Self::Ghost(GhostOp::Deref),
                     other => todo!("unsupported `Ghost` function {other}"),
-                },
-                Some("ObjectID") => match item {
-                    "new" | "new_ref" => Self::ObjectID(ObjectOp::New),
-                    other => todo!("unsupported `ObjectID` function {other}"),
                 },
                 Some("Seq") => match item {
                     "new" => Self::Seq(SeqOp::Empty),
@@ -293,16 +275,11 @@ impl PrustiBuiltin {
                 },
                 Some("Int") => Self::Int(Self::num_op(item)),
                 Some("Real") => Self::Real(Self::num_op(item)),
-                Some("AbsPtr") => match item {
-                    "read" => Self::AbsPtr(AbsPtrOp::Read),
-                    "local" => Self::AbsPtr(AbsPtrOp::Local),
-                    "write" => Self::AbsPtr(AbsPtrOp::Write),
-                    "immutable" => Self::AbsPtr(AbsPtrOp::Immutable),
-                    "unique" => Self::AbsPtr(AbsPtrOp::Unique),
-                    "readRef" => Self::AbsPtr(AbsPtrOp::ReadRef),
-                    "writeRef" => Self::AbsPtr(AbsPtrOp::WriteRef),
-                    "noReadRef" => Self::AbsPtr(AbsPtrOp::NoReadRef),
-                    "noWriteRef" => Self::AbsPtr(AbsPtrOp::NoWriteRef),
+                Some("Addr") => match item {
+                    "unique" => Self::Addr(AddrOp::Unique),
+                    "shared" => Self::Addr(AddrOp::Shared),
+                    "local_unique" => Self::Addr(AddrOp::LocalUnique),
+                    "atomic_unique" => Self::Addr(AddrOp::AtomicUnique),
                     other => todo!("unsupported capability {other}"),
                 },
                 Some(other) => todo!("unsupported `prusti_contracts` function {other}::{item}"),
@@ -316,17 +293,16 @@ impl PrustiBuiltin {
     pub fn is_spec_only(&self) -> bool {
         match self {
             Self::Spec(_)
-            | Self::AbsPtr(_)
+            | Self::Addr(_)
             | Self::SnapEq
             | Self::SnapNe
-            | Self::InstEq
-            | Self::InstNe => true,
+            | Self::RepEq
+            | Self::RepNe => true,
             // `Call`/`Erased` are legitimate only inside a `ghost!` block's
             // dead arm, which is exempt from the spec-only rejection: a stray
             // executable `ghost_call` (i.e. not from a `ghost!` block) would
             // verify code whose runtime body is `unreachable!()`.
             Self::Ghost(GhostOp::Deref | GhostOp::Call | GhostOp::Erased) => true,
-            Self::ObjectID(ObjectOp::New) => true,
             Self::Seq(SeqOp::Contains) => true,
             Self::AnySet {
                 op: AnySetOp::IsSubset,
@@ -556,7 +532,6 @@ impl PrustiBuiltinEnc {
                 unreachable!("pure-only builtin in `PrustiBuiltinEnc`: {builtin:?}")
             }
             PrustiBuiltin::Ghost(op) => ctxt.encode_ghost(op)?,
-            PrustiBuiltin::ObjectID(op) => ctxt.encode_object_id(op)?,
             PrustiBuiltin::SnapEq | PrustiBuiltin::SnapNe => {
                 let bin_op = match builtin {
                     PrustiBuiltin::SnapEq => vir::BinOpKind::CmpEq,
@@ -567,13 +542,13 @@ impl PrustiBuiltinEnc {
                 ctxt.native_cmp(bin_op, lhs, rhs).upcast_ty()
             }
             PrustiBuiltin::SnapClone => ctxt.deref_operand(0)?,
-            PrustiBuiltin::InstEq | PrustiBuiltin::InstNe => {
+            PrustiBuiltin::RepEq | PrustiBuiltin::RepNe => {
                 let bin_op = match builtin {
-                    PrustiBuiltin::InstEq => vir::BinOpKind::CmpEq,
-                    PrustiBuiltin::InstNe => vir::BinOpKind::CmpNe,
+                    PrustiBuiltin::RepEq => vir::BinOpKind::CmpEq,
+                    PrustiBuiltin::RepNe => vir::BinOpKind::CmpNe,
                     _ => unreachable!(),
                 };
-                // TODO: change this to id call
+                // TODO: change this to Rep
                 let (lhs, rhs) = ctxt.deref_operands::<vir::Snap>()?;
                 ctxt.native_cmp(bin_op, lhs, rhs).upcast_ty()
             }
@@ -602,7 +577,7 @@ impl PrustiBuiltinEnc {
                     FloatOp::Abs => domain.fp_abs.call()(operand).upcast_ty(),
                 }
             }
-            PrustiBuiltin::AbsPtr(op) => ctxt.encode_abstract_ptr(op)?,
+            PrustiBuiltin::Addr(op) => ctxt.encode_addr_op(op)?,
         };
         Ok(((), PrustiBuiltinExpr(res)))
     }
@@ -656,16 +631,6 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                     self.span.into_iter().collect(),
                 )]));
             }
-        })
-    }
-
-    fn encode_object_id(&mut self, op: ObjectOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
-        Ok(match op {
-            ObjectOp::New => self
-                .e_output()?
-                .expect_structlike()
-                .field_snaps_to_snap(vec![])
-                .upcast_ty(),
         })
     }
 
@@ -1142,24 +1107,19 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         });
     }
 
-    fn encode_abstract_ptr(&mut self, op: AbsPtrOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
-        let data = self.e_input(0)?.expect_absptr();
-        let ptr = self.operands[0].downcast_ty();
-        let pc = self
-            .vcx
-            .mk_local_ex(self.vcx.mk_local_decl("pc", vir::TYPE_INT));
-        Ok(match op {
-            AbsPtrOp::Deref => data.ptr_deref.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::Read => data.read.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::Local => data.local.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::Write => data.write.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::Unique => data.unique.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::Immutable => data.immutable.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::ReadRef => data.read_ref.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::WriteRef => data.write_ref.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::NoReadRef => data.no_read_ref.call()(ptr, pc).upcast_ty(),
-            AbsPtrOp::NoWriteRef => data.no_write_ref.call()(ptr, pc).upcast_ty(),
-        })
+    fn encode_addr_op(&mut self, op: AddrOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
+        todo!()
+        // let data = self.e_input(0)?.expect_addr();
+        // let ptr = self.operands[0].downcast_ty();
+        // let pc = self
+        //     .vcx
+        //     .mk_local_ex(self.vcx.mk_local_decl("pc", vir::TYPE_INT));
+        // Ok(match op {
+        //     AddrOp::Unique => data.unique.call()(ptr, pc).upcast_ty(),
+        //     AddrOp::Shared => data.shared.call()(ptr, pc).upcast_ty(),
+        //     AddrOp::LocalUnique => data.local_unique.call()(ptr, pc).upcast_ty(),
+        //     AddrOp::AtomicUnique => data.atomic_unique.call()(ptr, pc).upcast_ty(),
+        // })
     }
 
     /// The snapshot of the `impl Value<T>` operand `i`, where `expected` is
@@ -1500,7 +1460,7 @@ impl TaskEncoder for CollectionOpsEnc {
     ) -> EncodeFullResult<'vir, Self> {
         vir::with_vcx(|vcx| {
             let seq_ty = vcx.mk_ty_seq(vir::TYPE_PSNAP);
-            let (fn_ref, output) = match task_key {
+            let (fn_ref, output) = match *task_key {
                 CollectionOp::SeqLookup => {
                     let fn_idn = FunctionIdn::new(
                         vir::ViperIdent::new("prusti_seq_lookup"),

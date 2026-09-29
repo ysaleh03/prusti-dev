@@ -54,14 +54,14 @@ pub use prusti_contracts_proc_macros::assert_on_expiry;
 /// A macro for marking a function as pure.
 pub use prusti_contracts_proc_macros::pure;
 
+/// A macro for marking a function as pure_memory.
+pub use prusti_contracts_proc_macros::pure_memory;
+
 /// A macro for marking a function as pure_unstable.
 pub use prusti_contracts_proc_macros::pure_unstable;
 
-/// A macro for marking a function as mendel.
-pub use prusti_contracts_proc_macros::mendel;
-
-/// A macro for declaring abstract pointers using mendel syntax.
-pub use prusti_contracts_proc_macros::abstract_ptr;
+/// A macro for marking a function as im_method.
+pub use prusti_contracts_proc_macros::im_method;
 
 /// A macro for declaring capabilties using mendel syntax.
 pub use prusti_contracts_proc_macros::capable;
@@ -439,72 +439,59 @@ mod private_shared {
 
     use prusti_contracts_proc_macros::{ghost_fn, pure_unstable, trusted};
 
-    /// A type to represent abstract pointers on the heap of type `T`,
-    /// usable only in mendel specifications and ghost code. Produced by
-    /// `abstract_ptr!` declarations in `#[im_spec]` traits; the
-    /// underlying value can be referred to using `abs_deref!`.
-    pub struct AbsPtr<T>(PhantomData<T>);
-
-    impl<T> Clone for AbsPtr<T> {
-        fn clone(&self) -> Self {
-            AbsPtr(PhantomData)
-        }
-    }
-    impl<T> Copy for AbsPtr<T> {}
-
-    impl<T> AbsPtr<T> {
-        pub fn read(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn write(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn unique(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn local(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn immutable(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn readRef(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn writeRef(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn noReadRef(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-        pub fn noWriteRef(ptr: AbsPtr<T>) -> bool {
-            unimplemented!()
-        }
-    }
-
-    #[ghost_fn]
-    #[trusted]
-    #[pure_unstable]
-    pub fn ptr_deref<T>(ptr: AbsPtr<T>) -> T {
-        unimplemented!()
-    }
-
-    /// A type to represent the identity of a type instance,
+    /// A type to represent abstract addresses on the heap of type `T`,
     /// usable only in mendel specifications and ghost code.
-    #[derive(Clone, Copy)]
-    pub struct ObjectID(());
+    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>);
 
-    impl ObjectID {
-        pub fn new<T>(_: impl Value<T>) -> Self {
-            ObjectID(())
+    impl<'a, T: ?Sized> Clone for Addr<'a, T> {
+        fn clone(&self) -> Self {
+            Addr(PhantomData)
         }
-        pub fn new_ref<T>(_: &T) -> Self {
-            ObjectID(())
+    }
+    impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
+
+    impl<'a, T: ?Sized> Addr<'a, T> {
+        pub fn ref_to_addr(_: &'a T) -> Self {
+            unimplemented!()
+        }
+
+        pub fn addr_to_ref(self) -> &'a T {
+            unimplemented!()
+        }
+
+        pub fn unique(l: Addr<'a, T>) -> bool {
+            unimplemented!()
+        }
+
+        pub fn shared(l: Addr<'a, T>) -> bool {
+            unimplemented!()
+        }
+
+        pub fn local_unique(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
+            unimplemented!()
+        }
+
+        pub fn atomic_unique(l: Addr<'a, T>) -> bool {
+            unimplemented!()
         }
     }
 
-    pub fn id<T>(input: &T) -> ObjectID {
-        ObjectID::new_ref(input)
+    pub struct Rep<T: ?Sized>(PhantomData<T>);
+
+    impl<T: ?Sized> Clone for Rep<T> {
+        fn clone(&self) -> Self {
+            Rep(PhantomData)
+        }
+    }
+    impl<T: ?Sized> Copy for Rep<T> {}
+
+    impl<T: ?Sized> Rep<T> {
+        pub fn new(_: impl Value<T>) -> Self {
+            Rep(PhantomData)
+        }
+        pub fn new_ref(_: &T) -> Self {
+            Rep(PhantomData)
+        }
     }
 }
 
@@ -727,25 +714,32 @@ mod private {
         }
     }
 
-    // AbsPtr
+    // Addr
 
-    /// Snapshot equality (see the note above).
-    impl<T> PartialEq for AbsPtr<T> {
+    /// Addr equality
+    impl<'a, T: ?Sized> PartialEq for Addr<'a, T> {
         fn eq(&self, _: &Self) -> bool {
             panic!()
         }
     }
-    impl<T> Eq for AbsPtr<T> {}
+    impl<'a, T: ?Sized> Eq for Addr<'a, T> {}
 
-    // ObjectID
+    // Rep
 
-    /// Snapshot equality (see the note above).
-    impl PartialEq for ObjectID {
+    /// Rep equality
+    impl<T: ?Sized> PartialEq for Rep<T> {
         fn eq(&self, _: &Self) -> bool {
             panic!()
         }
     }
-    impl Eq for ObjectID {}
+    impl<T: ?Sized> Eq for Rep<T> {}
+
+    impl<T: ?Sized> Deref for Rep<T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            panic!()
+        }
+    }
 }
 
 /// This function is used to mark the beginning of evaluation of expressions
