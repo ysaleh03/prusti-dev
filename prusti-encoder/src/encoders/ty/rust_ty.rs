@@ -231,7 +231,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
     type BuiltinData = RustBuiltinData<'tcx>;
-    type AbsPtrData = LazyRustTy<'tcx>;
+    type AddrData = LazyRustTy<'tcx>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -255,7 +255,7 @@ pub type RustImmRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::ImmRefData;
 pub type RustMutRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::MutRefData;
 pub type RustRaw<'tcx> = <RustTyDatas as TyDatas<'tcx>>::RawData;
 pub type RustBuiltin<'tcx> = <RustTyDatas as TyDatas<'tcx>>::BuiltinData;
-pub type RustAbsPtr<'tcx> = <RustTyDatas as TyDatas<'tcx>>::AbsPtrData;
+pub type RustAbsPtr<'tcx> = <RustTyDatas as TyDatas<'tcx>>::AddrData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RustTyData<'tcx> {
@@ -694,8 +694,18 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                     }];
                     TySpecifics::mk_structlike((), fields)
                 }
-                "ObjectID" => TySpecifics::mk_structlike((), vec![]),
-                "AbsPtr" => TySpecifics::mk_absptr(LazyRustTy(Self::new_param_ty(0))),
+                // `Rep<T>` is encoded as if it were `struct Rep<T>(T)`:
+                // the Rep wraps the value of `T`.
+                "Rep" => {
+                    let fields = vec![RustFieldData {
+                        name: symbol::Symbol::intern("val"),
+                        fid: abi::FieldIdx::from_usize(0),
+                        ty: LazyRustTy(Self::new_param_ty(0)),
+                        address: RustFieldAddress::Constant,
+                    }];
+                    TySpecifics::mk_structlike((), fields)
+                }
+                "Addr" => TySpecifics::mk_addr(LazyRustTy(Self::new_param_ty(0))),
                 // TODO: support other builtins (e.g. `Seq`, `Map`, `Set`, etc.)
                 s => todo!("Unimplemented builtin {s}"),
             }

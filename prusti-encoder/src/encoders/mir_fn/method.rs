@@ -92,12 +92,15 @@ impl TaskEncoder for MethodCallEnc {
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
-        Ok(((), MethodCallEncOutput {
-            method: method_ref,
-            ty_args,
-            inputs,
-            output,
-        }))
+        Ok((
+            (),
+            MethodCallEncOutput {
+                method: method_ref,
+                ty_args,
+                inputs,
+                output,
+            },
+        ))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {

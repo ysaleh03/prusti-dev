@@ -199,7 +199,7 @@ impl<'a, 'vir> InhabitedWalker<'a, 'vir> {
                     .collect::<EncResult<'vir, Vec<_>>>()?;
                 vir::with_vcx(|vcx| vcx.mk_disj(&variants))
             }
-            TySpecifics::AbsPtr(_) => todo!() // TODO inhabited predicate for these???
+            TySpecifics::Addr(_) => todo!() // TODO inhabited predicate for these???
         })
     }
 

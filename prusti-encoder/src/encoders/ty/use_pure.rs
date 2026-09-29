@@ -36,7 +36,7 @@ impl<'vir> TyDatas<'vir> for UsePureTyDatas {
     type VariantData = <PureTyDatas as TyDatas<'vir>>::VariantData;
     type EnumData = <PureTyDatas as TyDatas<'vir>>::EnumData;
     type BuiltinData = TyUsePureBuiltinData<'vir>;
-    type AbsPtrData = <PureTyDatas as TyDatas<'vir>>::AbsPtrData;
+    type AddrData = <PureTyDatas as TyDatas<'vir>>::AddrData;
 }
 
 pub type TyUsePure<'vir> = Ty<'vir, UsePureTyDatas>;
@@ -278,7 +278,7 @@ impl<'a, 'vir> TyUsePureWalker<'a, 'vir> {
                     casters,
                 })
             }
-            TySpecifics::AbsPtr(data) => TySpecifics::mk_absptr(*data.1),
+            TySpecifics::Addr(data) => TySpecifics::mk_addr(*data.1),
         };
         Ok(specifics)
     }

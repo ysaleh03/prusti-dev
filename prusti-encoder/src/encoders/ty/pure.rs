@@ -39,7 +39,7 @@ impl<'vir> TyDatas<'vir> for PureTyDatas {
     type VariantData = TyPureVariantData<'vir>;
     type EnumData = TyPureEnumData<'vir>;
     type BuiltinData = TyPureBuiltinData;
-    type AbsPtrData = TyPureAbsPtrData<'vir>;
+    type AddrData = TyPureAddrData<'vir>;
 }
 
 pub type TyPure<'vir> = Ty<'vir, PureTyDatas>;
@@ -50,7 +50,7 @@ pub type TyPureImmRef<'vir> = <PureTyDatas as TyDatas<'vir>>::ImmRefData;
 pub type TyPureMutRef<'vir> = <PureTyDatas as TyDatas<'vir>>::MutRefData;
 pub type TyPureRaw<'vir> = <PureTyDatas as TyDatas<'vir>>::RawData;
 pub type TyPureBuiltin<'vir> = <PureTyDatas as TyDatas<'vir>>::BuiltinData;
-pub type TyPureAbsPtr<'vir> = <PureTyDatas as TyDatas<'vir>>::AbsPtrData;
+pub type TyPureAddr<'vir> = <PureTyDatas as TyDatas<'vir>>::AddrData;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TyPureBuiltinData {
@@ -63,17 +63,13 @@ pub enum TyPureBuiltinData {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TyPureAbsPtrData<'vir> {
-    pub ptr_deref: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::PSnap>,
-    pub read: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub write: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub local: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub unique: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub immutable: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub read_ref: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub write_ref: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub no_read_ref: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
-    pub no_write_ref: FunctionIdn<'vir, (vir::CSnap, vir::Int), vir::Bool>,
+pub struct TyPureAddrData<'vir> {
+    pub addr_to_immref: FunctionIdn<'vir, vir::Ref, vir::CSnap>,
+    pub immref_to_addr: FunctionIdn<'vir, vir::CSnap, vir::Ref>,
+    pub unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
+    pub shared: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
+    pub local_unique: FunctionIdn<'vir, (vir::Ref, vir::Ref, vir::Int), vir::Bool>,
+    pub atomic_unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -359,9 +355,9 @@ impl TaskEncoder for TyPureEnc {
                 TySpecifics::Builtin(builtin) => {
                     TySpecifics::Builtin(super::kinds::builtin::ty_pure(builtin, &mut builder)?)
                 }
-                TySpecifics::AbsPtr(param) => {
+                TySpecifics::Addr(param) => {
                     let builder = builder.set_domain_builder();
-                    TySpecifics::AbsPtr(super::kinds::absptr::ty_pure(vcx, param, deps, builder)?)
+                    TySpecifics::Addr(super::kinds::addr::ty_pure(vcx, param, deps, builder)?)
                 }
             };
             let output = TyData::new(output_ref, specifics).alloc();

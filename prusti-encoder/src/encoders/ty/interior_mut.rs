@@ -241,7 +241,10 @@ impl TaskEncoder for ImTyEnc {
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_exclusive.as_dyn(), field_addr.as_dyn()])]),
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[
+                                        self_exclusive.as_dyn(),
+                                        field_addr.as_dyn(),
+                                    ])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_exclusive,
@@ -252,21 +255,18 @@ impl TaskEncoder for ImTyEnc {
                             ),
                         );
 
-                        let self_shared =
-                            self_caps.shared_idn.call()(state, place_idx, self_addr);
+                        let self_shared = self_caps.shared_idn.call()(state, place_idx, self_addr);
                         let field_shared =
                             field_caps.shared_idn.call()(state, place_idx, field_addr);
                         axioms.push(
                             vcx.mk_domain_axiom(
-                                vir::vir_format_identifier!(
-                                    vcx,
-                                    "im_{}_{}_shared",
-                                    self_name,
-                                    idx
-                                ),
+                                vir::vir_format_identifier!(vcx, "im_{}_{}_shared", self_name, idx),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    vcx.alloc_slice(&[vcx.mk_trigger(&[self_exclusive.as_dyn(), field_addr.as_dyn()])]),
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[
+                                        self_exclusive.as_dyn(),
+                                        field_addr.as_dyn(),
+                                    ])]),
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_shared,
@@ -298,7 +298,7 @@ impl TaskEncoder for ImTyEnc {
                     //     .collect::<EncResult<'vir, Vec<_>>>()?;
                     // vir::with_vcx(|vcx| vcx.mk_disj(&variants))
                 }
-                TySpecifics::AbsPtr(_) => todo!(), // TODO inhabited predicate for these???
+                TySpecifics::Addr(_) => todo!(), // TODO inhabited predicate for these???
             };
             Ok((
                 ImTyEncResult {

@@ -27,7 +27,7 @@ pub trait TyDatas<'vir>: Debug + Clone + Copy {
     type VariantData: Debug + Clone + 'vir = ();
 
     type BuiltinData: Debug + Clone + 'vir = ();
-    type AbsPtrData: Debug + Clone + 'vir = ();
+    type AddrData: Debug + Clone + 'vir = ();
 }
 
 pub type Ty<'vir, D> = &'vir TyData<'vir, D>;
@@ -48,7 +48,7 @@ pub enum TySpecifics<'vir, D: TyDatas<'vir>> {
     StructLike(StructData<'vir, D>),
     EnumLike(EnumData<'vir, D>),
     Builtin(D::BuiltinData),
-    AbsPtr(D::AbsPtrData),
+    Addr(D::AddrData),
 }
 
 pub struct ArrayData<'vir, D: TyDatas<'vir>> {
@@ -126,8 +126,8 @@ impl<'vir, D: TyDatas<'vir>> TySpecifics<'vir, D> {
         Self::Builtin(data)
     }
 
-    pub fn mk_absptr(data: D::AbsPtrData) -> Self {
-        Self::AbsPtr(data)
+    pub fn mk_addr(data: D::AddrData) -> Self {
+        Self::Addr(data)
     }
 
     pub fn is_param(&self) -> bool {
@@ -175,13 +175,13 @@ impl<'vir, D: TyDatas<'vir>> TyData<'vir, D> {
     }
 
     #[track_caller]
-    pub fn expect_absptr(&self) -> &D::AbsPtrData
+    pub fn expect_addr(&self) -> &D::AddrData
     where
         Self: Debug,
     {
         match &self.specifics {
-            TySpecifics::AbsPtr(data) => data,
-            _ => panic!("expected absptr (was {self:?})"),
+            TySpecifics::Addr(data) => data,
+            _ => panic!("expected addr (was {self:?})"),
         }
     }
 
@@ -362,7 +362,7 @@ impl<'vir, D1: TyDatas<'vir>, D2: TyDatas<'vir>> TyDatas<'vir> for (D1, D2) {
     type VariantData = (&'vir D1::VariantData, &'vir D2::VariantData);
     type EnumData = (&'vir D1::EnumData, &'vir D2::EnumData);
     type BuiltinData = (&'vir D1::BuiltinData, &'vir D2::BuiltinData);
-    type AbsPtrData = (&'vir D1::AbsPtrData, &'vir D2::AbsPtrData);
+    type AddrData = (&'vir D1::AddrData, &'vir D2::AddrData);
 }
 
 // Deref implementations
@@ -402,7 +402,7 @@ where
     D::EnumData: PartialEq,
     D::VariantData: PartialEq,
     D::BuiltinData: PartialEq,
-    D::AbsPtrData: PartialEq,
+    D::AddrData: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         self.data == other.data $(&& self.$field == other.$field)?
@@ -424,7 +424,7 @@ where
     D::EnumData: Eq,
     D::VariantData: Eq,
     D::BuiltinData: Eq,
-    D::AbsPtrData: Eq,
+    D::AddrData: Eq,
 {}
 
 impl<'vir, D: TyDatas<'vir>> Hash for $container<'vir, D>
@@ -442,7 +442,7 @@ where
     D::EnumData: Hash,
     D::VariantData: Hash,
     D::BuiltinData: Hash,
-    D::AbsPtrData: Hash,
+    D::AddrData: Hash,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.data.hash(state);
@@ -494,7 +494,7 @@ impl<'vir, D: TyDatas<'vir>> Debug for TySpecifics<'vir, D> {
             Self::StructLike(arg0) => f.debug_tuple("StructLike").field(arg0).finish(),
             Self::EnumLike(arg0) => f.debug_tuple("EnumLike").field(arg0).finish(),
             Self::Builtin(arg0) => f.debug_tuple("Builtin").field(arg0).finish(),
-            Self::AbsPtr(arg0) => f.debug_tuple("AbsPtr").field(arg0).finish(),
+            Self::Addr(arg0) => f.debug_tuple("Addr").field(arg0).finish(),
         }
     }
 }
@@ -512,7 +512,7 @@ impl<'vir, D: TyDatas<'vir>> Clone for TySpecifics<'vir, D> {
             Self::StructLike(arg0) => Self::StructLike(arg0.clone()),
             Self::EnumLike(arg0) => Self::EnumLike(arg0.clone()),
             Self::Builtin(arg0) => Self::Builtin(arg0.clone()),
-            Self::AbsPtr(arg0) => Self::AbsPtr(arg0.clone()),
+            Self::Addr(arg0) => Self::Addr(arg0.clone()),
         }
     }
 }
@@ -532,7 +532,7 @@ where
     D::EnumData: PartialEq,
     D::VariantData: PartialEq,
     D::BuiltinData: PartialEq,
-    D::AbsPtrData: PartialEq,
+    D::AddrData: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -546,7 +546,7 @@ where
             (Self::StructLike(l0), Self::StructLike(r0)) => l0 == r0,
             (Self::EnumLike(l0), Self::EnumLike(r0)) => l0 == r0,
             (Self::Builtin(l0), Self::Builtin(r0)) => l0 == r0,
-            (Self::AbsPtr(l0), Self::AbsPtr(r0)) => l0 == r0,
+            (Self::Addr(l0), Self::Addr(r0)) => l0 == r0,
             _ => false,
         }
     }
@@ -567,7 +567,7 @@ where
     D::EnumData: Eq,
     D::VariantData: Eq,
     D::BuiltinData: Eq,
-    D::AbsPtrData: Eq,
+    D::AddrData: Eq,
 {
 }
 
@@ -586,7 +586,7 @@ where
     D::EnumData: Hash,
     D::VariantData: Hash,
     D::BuiltinData: Hash,
-    D::AbsPtrData: Hash,
+    D::AddrData: Hash,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
@@ -610,7 +610,7 @@ impl<'vir, D: TyDatas<'vir>> TySpecifics<'vir, D> {
             (StructLike(d1), StructLike(d2)) => StructLike(d1.zip(d2)),
             (EnumLike(d1), EnumLike(d2)) => EnumLike(d1.zip(d2)),
             (Builtin(d1), Builtin(d2)) => Builtin((d1, d2)),
-            (AbsPtr(d1), AbsPtr(d2)) => AbsPtr((d1, d2)),
+            (Addr(d1), Addr(d2)) => Addr((d1, d2)),
             _ => panic!("Mismatched TySpecifics variants"),
         }
     }
