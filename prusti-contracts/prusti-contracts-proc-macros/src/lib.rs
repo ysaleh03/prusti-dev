@@ -42,13 +42,19 @@ pub fn pure(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
+pub fn pure_memory(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    tokens
+}
+
+#[cfg(not(feature = "prusti"))]
+#[proc_macro_attribute]
 pub fn pure_unstable(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     tokens
 }
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn mendel(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
+pub fn im_method(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     tokens
 }
 
@@ -209,14 +215,25 @@ pub fn pure(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
+pub fn pure_memory(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(SpecAttributeKind::PureMemory, attr.into(), tokens.into()).into()
+}
+
+#[cfg(feature = "prusti")]
+#[proc_macro_attribute]
 pub fn pure_unstable(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     rewrite_prusti_attributes(SpecAttributeKind::PureUnstable, attr.into(), tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]
 #[proc_macro_attribute]
-pub fn mendel(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    rewrite_prusti_attributes(SpecAttributeKind::Mendel, attr.into(), tokens.into()).into()
+pub fn im_method(attr: TokenStream, tokens: TokenStream) -> TokenStream {
+    rewrite_prusti_attributes(
+        SpecAttributeKind::InteriorMutable,
+        attr.into(),
+        tokens.into(),
+    )
+    .into()
 }
 
 #[cfg(feature = "prusti")]
@@ -229,17 +246,6 @@ pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     prusti_specs::im_spec(attr.into(), tokens.into()).into()
-}
-
-#[cfg(feature = "prusti")]
-#[proc_macro_attribute]
-pub fn abstract_ptr(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    rewrite_prusti_attributes(
-        SpecAttributeKind::AbstractPointer,
-        attr.into(),
-        tokens.into(),
-    )
-    .into()
 }
 
 #[cfg(feature = "prusti")]

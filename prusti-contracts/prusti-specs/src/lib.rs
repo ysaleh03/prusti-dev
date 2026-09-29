@@ -17,9 +17,10 @@ mod predicate;
 mod rewriter;
 mod span_overrider;
 mod spec_attribute_kind;
-mod mendel_spec_rewriter;
+mod im_spec_rewriter;
 pub mod specifications;
-mod model;
+mod type_model;
+mod im_model;
 mod user_provided_type_params;
 mod print_counterexample;
 
@@ -35,7 +36,7 @@ use crate::{
     specifications::preparser::{parse_prusti, parse_type_cond_spec, NestedSpec},
 };
 pub use extern_spec_rewriter::ExternSpecKind;
-pub use mendel_spec_rewriter::MendelSpecKind;
+pub use im_spec_rewriter::MendelSpecKind;
 use parse_closure_macro::ClosureWithSpec;
 pub use spec_attribute_kind::SpecAttributeKind;
 use specifications::{common::SpecificationId, untyped};
@@ -98,19 +99,19 @@ fn extract_prusti_attributes(
                     }
                     // Nothing to do for attributes without arguments.
                     SpecAttributeKind::Pure
+                    | SpecAttributeKind::PureMemory
                     | SpecAttributeKind::PureUnstable
-                    | SpecAttributeKind::Mendel
+                    | SpecAttributeKind::InteriorMutable
                     | SpecAttributeKind::Terminates
                     | SpecAttributeKind::Trusted
                     | SpecAttributeKind::Predicate
                     | SpecAttributeKind::Verified
-                    | SpecAttributeKind::AbstractPointer
                     | SpecAttributeKind::GhostFn => {
                         assert!(attr.tokens.is_empty(), "Unexpected shape of an attribute.");
                         attr.tokens
                     }
                     SpecAttributeKind::Invariant => unreachable!("type invariant on function"),
-                    SpecAttributeKind::Model => unreachable!("model on function"),
+                    SpecAttributeKind::TypeModel => unreachable!("type_model on function"),
                     SpecAttributeKind::PrintCounterexample => {
                         unreachable!("print_counterexample on function")
                     }
@@ -190,12 +191,12 @@ fn generate_spec_and_assertions(
                 generate_for_assert_on_expiry(attr_tokens, attr_span, item)
             }
             SpecAttributeKind::Pure => generate_for_pure(attr_tokens, attr_span, item),
+            SpecAttributeKind::PureMemory => generate_for_pure_memory(attr_tokens, attr_span, item),
             SpecAttributeKind::PureUnstable => {
                 generate_for_pure_unstable(attr_tokens, attr_span, item)
             }
-            SpecAttributeKind::Mendel => generate_for_mendel(attr_tokens, attr_span, item),
-            SpecAttributeKind::AbstractPointer => {
-                generate_for_abstract_ptr(attr_tokens, attr_span, item)
+            SpecAttributeKind::InteriorMutable => {
+                generate_for_im_method(attr_tokens, attr_span, item)
             }
             SpecAttributeKind::GhostFn => generate_for_ghost_fn(attr_tokens, attr_span, item),
             SpecAttributeKind::Modifies => generate_for_modifies(attr_tokens, attr_span, item),
@@ -209,7 +210,7 @@ fn generate_spec_and_assertions(
             SpecAttributeKind::Predicate => unreachable!(),
             SpecAttributeKind::Invariant => unreachable!(),
             SpecAttributeKind::RefineSpec => type_cond_specs::generate(attr_tokens, item),
-            SpecAttributeKind::Model => unreachable!(),
+            SpecAttributeKind::TypeModel => unreachable!(),
             SpecAttributeKind::PrintCounterexample => unreachable!(),
             SpecAttributeKind::Capable => unreachable!(),
         };
@@ -352,6 +353,27 @@ fn generate_for_pure(attr: TokenStream, span: Span, _item: &untyped::AnyFnItem) 
     ))
 }
 
+/// Generate spec items and attributes to typecheck and later retrieve "pure_memory" annotations.
+fn generate_for_pure_memory(
+    attr: TokenStream,
+    span: Span,
+    _item: &untyped::AnyFnItem,
+) -> GeneratedResult {
+    if !attr.is_empty() {
+        return Err(syn::Error::new(
+            attr.span(),
+            "the `#[pure_memory]` attribute does not take parameters",
+        ));
+    }
+
+    Ok((
+        vec![],
+        vec![parse_quote_spanned! {span=>
+            #[prusti::pure_memory]
+        }],
+    ))
+}
+
 /// Generate spec items and attributes to typecheck and later retrieve "pure_unstable" annotations.
 fn generate_for_pure_unstable(
     attr: TokenStream,
@@ -373,8 +395,8 @@ fn generate_for_pure_unstable(
     ))
 }
 
-/// Generate spec items and attributes to typecheck and later retrieve "mendel" annotations.
-fn generate_for_mendel(
+/// Generate spec items and attributes to typecheck and later retrieve "im_method" annotations.
+fn generate_for_im_method(
     attr: TokenStream,
     span: Span,
     _item: &untyped::AnyFnItem,
@@ -382,35 +404,14 @@ fn generate_for_mendel(
     if !attr.is_empty() {
         return Err(syn::Error::new(
             attr.span(),
-            "the `#[mendel]` attribute does not take parameters",
+            "the `#[im_method]` attribute does not take parameters",
         ));
     }
 
     Ok((
         vec![],
         vec![parse_quote_spanned! {span=>
-            #[prusti::mendel]
-        }],
-    ))
-}
-
-/// Generate spec items and attributes to typecheck and later retrieve "abstract_ptr" annotations.
-fn generate_for_abstract_ptr(
-    attr: TokenStream,
-    span: Span,
-    _item: &untyped::AnyFnItem,
-) -> GeneratedResult {
-    if !attr.is_empty() {
-        return Err(syn::Error::new(
-            attr.span(),
-            "the `#[abstract_ptr]` attribute does not take parameters",
-        ));
-    }
-
-    Ok((
-        vec![],
-        vec![parse_quote_spanned! {span=>
-            #[prusti::abstract_ptr]
+            #[prusti::im_method]
         }],
     ))
 }
@@ -1228,15 +1229,20 @@ pub fn extern_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 }
 
 pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    if syn::parse2::<syn::DeriveInput>(tokens.clone()).is_ok() {
-        rewrite_prusti_attributes_for_types(SpecAttributeKind::Model, attr, tokens)
-    } else {
-        syn::Error::new(
-            attr.span(),
-            "Only structs can be attributed with an interior mutability model",
-        )
-        .to_compile_error()
-    }
+    result_to_tokens!({
+        if !attr.is_empty() {
+            return Err(syn::Error::new(
+                attr.span(),
+                "`im_model` does not take parameters",
+            ));
+        }
+        let item: syn::ItemStruct = syn::parse2(tokens)?;
+        let items = im_model::rewrite(&item)?;
+        Ok(quote_spanned! {item.span()=>
+            #[prusti::specs_version = #SPECS_VERSION]
+            #(#items)*
+        })
+    })
 }
 
 pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
@@ -1251,36 +1257,24 @@ pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
                 segments: syn::punctuated::Punctuated::new(),
             });
         match item {
-            syn::Item::Impl(item_impl) => {
+            syn::Item::Impl(mut item_impl) => {
                 if !mod_path.segments.is_empty() {
                     return Err(syn::Error::new(
                         mod_path.span(),
                         "im_spec does not take a path argument for impls--you can qualify the involved types directly",
                     ));
                 }
-                if item_impl.trait_.is_none() {
+                if !item_impl.trait_.is_none() {
                     return Err(syn::Error::new(
                         item_impl.span(),
-                        "mendel impls must have an associated mendel trait",
+                        "im_spec cannot be attached to a trait implementation",
                     ));
                 }
-                if !item_impl.items.is_empty() {
-                    return Err(syn::Error::new(
-                        item_impl.items[0].span(),
-                        "unexpected item--mendel impls must be empty",
-                    ));
-                }
-                Ok(quote_spanned! {item_impl.span()=>
-                    #[prusti::im_spec]
-                    #item_impl
-                })
-            }
-            syn::Item::Trait(mut item_trait) => {
-                mendel_spec_rewriter::traits::rewrite_im_spec(&mut item_trait, mod_path)
+                im_spec_rewriter::impls::rewrite_im_spec(&mut item_impl, mod_path)
             }
             _ => Err(syn::Error::new(
                 Span::call_site(),
-                "Mendel specs cannot be attached to this item",
+                "im_spec cannot be attached to this item",
             )),
         }
     })
@@ -1387,7 +1381,11 @@ pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
         syn::parse2(tokens).expect("Malformed deref input, expected <root>@<name>");
     let root = deref_input.root;
     let name = deref_input.name;
-    syn::parse_quote! { ::prusti_contracts::ptr_deref(#root . #name ()) }
+    syn::parse_quote! {
+        ::prusti_contracts::ptr_deref(
+            ::prusti_contracts::Addr::ref_to_addr(&(#root)).#name()
+        )
+    }
 }
 
 pub fn predicate(tokens: TokenStream) -> TokenStream {
@@ -1449,9 +1447,9 @@ fn extract_prusti_attributes_for_types(
                     SpecAttributeKind::AssertOnExpiry => unreachable!("assert_on_expiry on type"),
                     SpecAttributeKind::RefineSpec => unreachable!("refine_spec on type"),
                     SpecAttributeKind::Pure => unreachable!("pure on type"),
+                    SpecAttributeKind::PureMemory => unreachable!("pure_memory on type"),
                     SpecAttributeKind::PureUnstable => unreachable!("pure_unstable on type"),
-                    SpecAttributeKind::Mendel => unreachable!("mendel on type"),
-                    SpecAttributeKind::AbstractPointer => unreachable!("abstract_ptr on type"),
+                    SpecAttributeKind::InteriorMutable => unreachable!("im_method on type"),
                     SpecAttributeKind::GhostFn => unreachable!("ghost_fn on type"),
                     SpecAttributeKind::Modifies => unreachable!("modifies on type"),
                     SpecAttributeKind::Reads => unreachable!("reads on type"),
@@ -1459,7 +1457,7 @@ fn extract_prusti_attributes_for_types(
                     SpecAttributeKind::Invariant => unreachable!("invariant on type"),
                     SpecAttributeKind::Predicate => unreachable!("predicate on type"),
                     SpecAttributeKind::Terminates => unreachable!("terminates on type"),
-                    SpecAttributeKind::Trusted | SpecAttributeKind::Model => {
+                    SpecAttributeKind::Trusted | SpecAttributeKind::TypeModel => {
                         assert!(attr.tokens.is_empty(), "Unexpected shape of an attribute.");
                         attr.tokens
                     }
@@ -1502,9 +1500,9 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::AfterExpiry => unreachable!(),
             SpecAttributeKind::AssertOnExpiry => unreachable!(),
             SpecAttributeKind::Pure => unreachable!(),
+            SpecAttributeKind::PureMemory => unreachable!(),
             SpecAttributeKind::PureUnstable => unreachable!(),
-            SpecAttributeKind::Mendel => unreachable!(),
-            SpecAttributeKind::AbstractPointer => unreachable!(),
+            SpecAttributeKind::InteriorMutable => unreachable!(),
             SpecAttributeKind::GhostFn => unreachable!(),
             SpecAttributeKind::Modifies => unreachable!(),
             SpecAttributeKind::Reads => unreachable!(),
@@ -1514,7 +1512,7 @@ fn generate_spec_and_assertions_for_types(
             SpecAttributeKind::RefineSpec => unreachable!(),
             SpecAttributeKind::Terminates => unreachable!(),
             SpecAttributeKind::Trusted => generate_for_trusted_for_types(attr_tokens, item),
-            SpecAttributeKind::Model => generate_for_type_model(attr_tokens, item),
+            SpecAttributeKind::TypeModel => generate_for_type_model(attr_tokens, item),
             SpecAttributeKind::PrintCounterexample => {
                 generate_for_print_counterexample(attr_tokens, item)
             }
@@ -1532,31 +1530,7 @@ fn generate_spec_and_assertions_for_types(
 fn generate_for_type_model(attr: TokenStream, item: &mut syn::DeriveInput) -> GeneratedResult {
     match syn::Item::from(item.clone()) {
         syn::Item::Struct(item_struct) => {
-            match model::rewrite(item_struct) {
-                Ok(result) => {
-                    match result.first() {
-                        Some(syn::Item::Struct(new_item)) => {
-                            *item = syn::DeriveInput::from(new_item.clone()); //the internal model replaces the original struct
-                            Ok((vec![result[1].clone(), result[2].clone()], vec![]))
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                Err(err) => Err(err),
-            }
-        }
-        _ => Err(syn::Error::new(
-            attr.span(),
-            "Only structs can be attributed with a type model",
-        )),
-    }
-}
-
-/// Generate spec items and attributes to typecheck and later retrieve "im_model" annotations.
-fn generate_for_im_model(attr: TokenStream, item: &mut syn::DeriveInput) -> GeneratedResult {
-    match syn::Item::from(item.clone()) {
-        syn::Item::Struct(item_struct) => {
-            match model::rewrite(item_struct) {
+            match type_model::rewrite(item_struct) {
                 Ok(result) => {
                     match result.first() {
                         Some(syn::Item::Struct(new_item)) => {
@@ -1611,7 +1585,7 @@ fn generate_for_print_counterexample(
 
 pub fn type_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     if syn::parse2::<syn::DeriveInput>(tokens.clone()).is_ok() {
-        rewrite_prusti_attributes_for_types(SpecAttributeKind::Model, attr, tokens)
+        rewrite_prusti_attributes_for_types(SpecAttributeKind::TypeModel, attr, tokens)
     } else {
         syn::Error::new(
             attr.span(),

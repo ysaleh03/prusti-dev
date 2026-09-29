@@ -41,8 +41,9 @@ use prusti_specs::specifications::common::SpecificationId;
 struct ProcedureSpecRefs {
     spec_id_refs: Vec<SpecIdRef>,
     pure: bool,
+    pure_memory: bool,
     pure_unstable: bool,
-    mendel: bool,
+    im_method: bool,
     abstract_predicate: bool,
     trusted: bool,
 }
@@ -53,10 +54,12 @@ impl From<&ProcedureSpecRefs> for ProcedureSpecificationKind {
             ProcedureSpecificationKind::Predicate(None)
         } else if refs.pure {
             ProcedureSpecificationKind::Pure
+        } else if refs.pure_memory {
+            ProcedureSpecificationKind::PureMemory
         } else if refs.pure_unstable {
             ProcedureSpecificationKind::PureUnstable
-        } else if refs.mendel {
-            ProcedureSpecificationKind::Mendel
+        } else if refs.im_method {
+            ProcedureSpecificationKind::InteriorMutable
         } else {
             ProcedureSpecificationKind::Impure
         }
@@ -586,19 +589,27 @@ fn get_procedure_spec_ids(def_id: DefId, attrs: &[hir::Attribute]) -> Option<Pro
     );
 
     let pure = has_prusti_attr(attrs, "pure");
+    let pure_memory = has_prusti_attr(attrs, "pure_memory");
     let pure_unstable = has_prusti_attr(attrs, "pure_unstable");
-    let mendel = has_prusti_attr(attrs, "mendel");
+    let im_method = has_prusti_attr(attrs, "im_method");
     let trusted = has_prusti_attr(attrs, "trusted")
         || (!is_predicate && config::opt_in_verification() && !has_prusti_attr(attrs, "verified"));
     let abstract_predicate = has_abstract_predicate_attr(attrs);
 
-    if abstract_predicate || pure || pure_unstable || mendel || trusted || !spec_id_refs.is_empty()
+    if abstract_predicate
+        || pure
+        || pure_memory
+        || pure_unstable
+        || im_method
+        || trusted
+        || !spec_id_refs.is_empty()
     {
         Some(ProcedureSpecRefs {
             spec_id_refs,
             pure,
+            pure_memory,
             pure_unstable,
-            mendel,
+            im_method,
             abstract_predicate,
             trusted,
         })

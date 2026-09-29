@@ -185,7 +185,7 @@ impl PrustiTokenStream {
                     (TokenTree::Punct(punct), _, _, _)
                         if punct.as_char() == '~' && punct.spacing() == Alone =>
                     {
-                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::InstEq)
+                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::RepEq)
                     }
                     (TokenTree::Punct(punct), _, _, _)
                         if punct.as_char() == '@' && punct.spacing() == Alone =>
@@ -938,7 +938,7 @@ impl PrustiToken {
             } else if operator2("~>", p1, p2) {
                 return Some(Self::CallDesc(span, false));
             } else if operator2("!~", p1, p2) {
-                PrustiBinaryOp::InstNe
+                PrustiBinaryOp::RepNe
             } else {
                 return None;
             },
@@ -957,8 +957,6 @@ impl PrustiToken {
                 PrustiBinaryOp::SnapEq
             } else if operator3("!==", p1, p2, p3) {
                 PrustiBinaryOp::SnapNe
-            } else if operator3("=~=", p1, p2, p3) {
-                PrustiBinaryOp::InstSnapEq
             } else if operator3("..=", p1, p2, p3) {
                 PrustiBinaryOp::Rust(RustOp::RangeInclusive)
             } else if operator3("<<=", p1, p2, p3) {
@@ -1002,9 +1000,8 @@ enum PrustiBinaryOp {
     And,
     SnapEq,
     SnapNe,
-    InstEq,
-    InstNe,
-    InstSnapEq,
+    RepEq,
+    RepNe,
 }
 
 impl PrustiBinaryOp {
@@ -1033,9 +1030,8 @@ impl PrustiBinaryOp {
             Self::And => (9, 10),
             Self::SnapEq => (11, 12),
             Self::SnapNe => (11, 12),
-            Self::InstEq => (13, 14),
-            Self::InstNe => (13, 14),
-            Self::InstSnapEq => (15, 16),
+            Self::RepEq => (13, 14),
+            Self::RepNe => (13, 14),
         }
     }
 
@@ -1078,20 +1074,13 @@ impl PrustiBinaryOp {
                 let joined_span = join_spans(lhs.span(), rhs.span());
                 quote_spanned! { joined_span => (::prusti_contracts::Ghost::new_ref(&#lhs) != ::prusti_contracts::Ghost::new_ref(&#rhs)) }
             }
-            Self::InstEq => {
+            Self::RepEq => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
-                quote_spanned! { joined_span => (::prusti_contracts::ObjectID::new_ref(&#lhs) == ::prusti_contracts::ObjectID::new_ref(&#rhs)) }
+                quote_spanned! { joined_span => (::prusti_contracts::Rep::new_ref(&#lhs) == ::prusti_contracts::Rep::new_ref(&#rhs)) }
             }
-            Self::InstNe => {
+            Self::RepNe => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
-                quote_spanned! { joined_span => (::prusti_contracts::ObjectID::new_ref(&#lhs) != ::prusti_contracts::ObjectID::new_ref(&#rhs)) }
-            }
-            Self::InstSnapEq => {
-                let joined_span = join_spans(lhs.span(), rhs.span());
-                quote_spanned! { joined_span =>
-                (::prusti_contracts::Ghost::new_ref(&#lhs) == ::prusti_contracts::Ghost::new_ref(&#rhs)
-                    && ::prusti_contracts::ObjectID::new_ref(&#lhs) == ::prusti_contracts::ObjectID::new_ref(&#rhs))
-                }
+                quote_spanned! { joined_span => (::prusti_contracts::Rep::new_ref(&#lhs) != ::prusti_contracts::Rep::new_ref(&#rhs)) }
             }
         }
     }

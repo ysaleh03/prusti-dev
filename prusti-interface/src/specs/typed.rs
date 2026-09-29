@@ -258,8 +258,9 @@ impl ProcedureSpecification {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TyEncodable, TyDecodable)]
 pub enum ProcedureSpecificationKind {
     Impure,
-    Mendel,
+    InteriorMutable,
     Pure,
+    PureMemory,
     PureUnstable,
     /// The specification is a predicate with the enclosed body.
     /// The body can be None to account for abstract predicates.
@@ -275,8 +276,9 @@ impl Display for ProcedureSpecificationKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcedureSpecificationKind::Impure => write!(f, "Impure"),
-            ProcedureSpecificationKind::Mendel => write!(f, "Mendel"),
+            ProcedureSpecificationKind::InteriorMutable => write!(f, "Mendel"),
             ProcedureSpecificationKind::Pure => write!(f, "Pure"),
+            ProcedureSpecificationKind::PureMemory => write!(f, "PureMemory"),
             ProcedureSpecificationKind::PureUnstable => write!(f, "PureUnstable"),
             ProcedureSpecificationKind::Predicate(_) => write!(f, "Predicate"),
         }
@@ -287,8 +289,8 @@ impl ProcedureSpecificationKind {
         matches!(self, ProcedureSpecificationKind::Impure)
     }
 
-    pub fn is_mendel(&self) -> bool {
-        matches!(self, ProcedureSpecificationKind::Mendel)
+    pub fn is_im_method(&self) -> bool {
+        matches!(self, ProcedureSpecificationKind::InteriorMutable)
     }
 }
 
@@ -742,12 +744,12 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         ))
     }
 
-    pub fn is_mendel(&self) -> Result<bool, ProcedureSpecificationKindError> {
+    pub fn is_im_method(&self) -> Result<bool, ProcedureSpecificationKindError> {
         self.validate()?;
 
         Ok(matches!(
             self.extract_with_selective_replacement(),
-            Some(ProcedureSpecificationKind::Mendel)
+            Some(ProcedureSpecificationKind::InteriorMutable)
         ))
     }
 
@@ -757,7 +759,7 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         Ok(match self.extract_with_selective_replacement() {
             Some(refined) => matches!(
                 refined,
-                ProcedureSpecificationKind::Impure | ProcedureSpecificationKind::Mendel
+                ProcedureSpecificationKind::Impure | ProcedureSpecificationKind::InteriorMutable
             ),
             _ => true,
         })
@@ -779,8 +781,9 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         if let SpecificationItem::Refined(base, refined) = self {
             match (base, refined) {
                 (Impure, Impure)
-                | (Impure, Mendel)
+                | (Impure, InteriorMutable)
                 | (Impure, Pure)
+                | (Impure, PureMemory)
                 | (Impure, PureUnstable)
                 | (Pure, Pure)
                 | (Predicate(_), Predicate(_)) => Ok(()),
