@@ -114,6 +114,8 @@ impl TaskEncoder for MirPureEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
+        // TODO at some point we need to find out if we are encoding a ImState-dependent expression
+
         deps.emit_output_ref(*task_key, ())?;
 
         let (_, kind, def_id, gargs) = *task_key;

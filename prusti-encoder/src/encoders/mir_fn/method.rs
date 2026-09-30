@@ -146,7 +146,7 @@ impl TaskEncoder for MethodEnc {
         vir::with_vcx(|vcx| {
             let span = vcx.tcx().def_span(def_id);
             let trusted = crate::encoders::is_function_trusted(def_id);
-            let im_mode = crate::encoders::is_function_mendel(def_id);
+            let im_mode = crate::encoders::is_function_im_method(def_id);
 
             let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
                 MirLocalDefEncTask::Local {

@@ -60,7 +60,7 @@ pub fn im_method(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
 
 #[cfg(not(feature = "prusti"))]
 #[proc_macro_attribute]
-pub fn im_spec(_attr: TokenStream, _tokens: TokenStream) -> TokenStream {
+pub fn im_spec(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     tokens
 }
 
