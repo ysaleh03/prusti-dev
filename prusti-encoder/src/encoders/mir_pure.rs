@@ -35,7 +35,11 @@ pub enum MirPureEncError {
 
 // TODO do we fold the interior mutability spec encoder into here?
 
-pub type ExprInput<'vir> = (DefId, &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>);
+pub type ExprInput<'vir> = (
+    DefId,
+    &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+    vir::OldLabel<'vir>,
+);
 type ExprRet<'vir> = vir::ExprGenSnap<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 type ExprRetRef<'vir> = vir::ExprGenRef<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 type ExprRetAny<'vir, T> = vir::ExprGen<'vir, ExprInput<'vir>, vir::ExprKind<'vir>, T>;
@@ -402,14 +406,16 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             rel0_mode: false,
             rel1_mode: false,
             before_expiry_mode: false,
-            // Only an impure method's pre/post gets shallow argument
-            // snapshots; a pure function's spec is handed deep ones.
+            // An impure method's specs and contained spec blocks get shallow
+            // argument snapshots (and can take a snapshot of the predicates
+            // behind `&mut`s). Pure functions currently also only get shallow
+            // snapshots but cannot get the value behind `&mut`s.
             impure_context: matches!(
                 kind,
                 PureKind::Spec {
                     mode: MirSpecEncMode::Impure,
                     ..
-                }
+                } | PureKind::SpecBlock(..)
             ),
             im_mode_data: None,
         }
@@ -1010,6 +1016,18 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             mir::Rvalue::Use(op) => self.encode_operand_snap(op, curr_ver),
             mir::Rvalue::Ref(_, kind, place) => {
                 let rvalue_snapshot_encoding = self.ty_use(rvalue_ty);
+                // Reading a mutable reference's referent needs an address
+                // holding a predicate, which pure-created mutrefs don't have.
+                if kind.mutability().is_mut() {
+                    return Err(self.unsupported_rvalue(
+                        format!(
+                            "mutable borrow of `{}` in a specification: take a shared \
+                             reference (`&`) instead",
+                            place.ty(self.body, self.vcx.tcx()).ty
+                        ),
+                        self.current_span(),
+                    ));
+                }
                 let encoded_place = self.encode_place_with_ref(curr_ver, (*place).into())?;
                 // We want to distinguish if `place` is a value that lives
                 // in pure code or not. If it lives in impure (the only way
@@ -1131,11 +1149,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         let snap = encoded_place.snap.downcast_ty();
                         let metadata = e_ty.metadata_access(snap);
                         let ref_expr = e_ty.deref_access(snap);
-                        let val_expr = if self.impure_context {
-                            // In a method's pre/post the snapshot is shallow
-                            // and doesn't contain the value behind the mutable
-                            // reference, so we need to take an extra snapshot
-                            // here.
+                        if !self.impure_context {
+                            // The value field of a mutable reference's snapshot
+                            // is never constrained to the referent (see
+                            // `p_Ref_mutable_arbitrary_value`).
+                            return Err(self.unsupported_rvalue(
+                                format!(
+                                    "dereference of the mutable reference `{}` in pure code",
+                                    place_ty.ty
+                                ),
+                                self.current_span(),
+                            ));
+                        }
+                        let val_expr = {
+                            // The snapshot is shallow and doesn't contain the
+                            // value behind the mutable reference, so we need to
+                            // take an extra snapshot here.
                             // TODO: avoid all of this by using shallow and deep snapshots
                             let ty_task = RustTyDecomposition::from_ty(place_ty.ty, self.context);
                             let inner = ty_task.ty.expect_mutref();
@@ -1154,11 +1183,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                                 .require_dep::<crate::encoders::TyUseImpureEnc>(inner_ty_task)
                                 .unwrap();
                             caster.cast_to_caller_ctx(inner_ty.ref_to_snap(ref_expr))
-                        } else {
-                            // In a pure function, the snapshot passed in as an
-                            // argument should be "deep" such that we can
-                            // read the value directly from the snapshot itself
-                            e_ty.value_access(snap)
                         };
                         EncodedPlace::new(val_expr, Some(ref_expr)).with_metadata(metadata)
                     }
@@ -1261,24 +1285,44 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         let mut encoded_place = EncodedPlace::new(expr, None);
         // TODO: factor this out (duplication with impure encoder)?
         for elem in place.projection {
+            // The snapshots of the arguments and the result are pinned to a
+            // state, so the only read of the heap is the dereference of a
+            // mutable reference in an impure context; only that is wrapped.
+            // An `old` around a pinned snapshot is a no-op, but breaks the
+            // match with the callee's wand at a call site, where the `old` is
+            // labelled. Silicon evaluates the heap-independent parts of a wand
+            // when inhaling it, where `old[lhs]` is undefined.
+            let heap_read = should_wrap
+                && self.impure_context
+                && matches!(elem, mir::ProjectionElem::Deref)
+                && matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
             encoded_place = self.encode_place_element(curr_ver, place_ty, *elem, encoded_place)?;
             place_ty = place_ty.projection_ty(self.vcx.tcx(), *elem);
+            if heap_read && self.old_mode {
+                let inner = encoded_place.snap;
+                encoded_place.snap = self.vcx.mk_lazy_expr(
+                    "old_mode_wrap",
+                    inner.ty(),
+                    Box::new(move |vcx, lctx: ExprInput<'vir>| {
+                        use vir::Reify;
+                        let reified = inner.reify(vcx, lctx);
+                        vcx.mk_old(reified, lctx.2).kind
+                    }),
+                );
+            }
+            if heap_read && self.before_expiry_mode {
+                encoded_place.snap = self.vcx.mk_old_lhs_expr(encoded_place.snap);
+            }
         }
         // Can we ever have the use of a projected place?
         assert!(place_ty.variant_index.is_none());
 
         if should_wrap {
-            if self.old_mode {
-                encoded_place.snap = self.vcx.mk_old_expr(encoded_place.snap);
-            }
             if self.rel0_mode {
                 encoded_place.snap = self.vcx.mk_rel_expr(encoded_place.snap, 0);
             }
             if self.rel1_mode {
                 encoded_place.snap = self.vcx.mk_rel_expr(encoded_place.snap, 1);
-            }
-            if self.before_expiry_mode {
-                encoded_place.snap = self.vcx.mk_old_lhs_expr(encoded_place.snap);
             }
         }
 
@@ -1358,9 +1402,15 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 parent_def_id: cl_def_id,
                 gargs: GParams::from(cl_def_id).identity_args(),
             })?
-            .expr
-            .reify(self.vcx, (cl_def_id, self.vcx.alloc(reify_args)))
-            .lift();
+            .expr;
+        let reify_args = self.vcx.alloc(reify_args);
+        let body = self.vcx.mk_lazy_expr(
+            vir::vir_format!(self.vcx, "spec closure body ({name})"),
+            body.ty(),
+            Box::new(move |vcx, lctx: ExprInput<'vir>| {
+                body.reify(vcx, (cl_def_id, reify_args, lctx.2)).kind
+            }),
+        );
         Ok((qvars, body.downcast_ty::<vir::Bool>()))
     }
 
