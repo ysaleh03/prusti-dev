@@ -1015,19 +1015,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         match rvalue {
             mir::Rvalue::Use(op) => self.encode_operand_snap(op, curr_ver),
             mir::Rvalue::Ref(_, kind, place) => {
+                // TODO only if this is a reborrow of a mutable reference, encode it!
                 let rvalue_snapshot_encoding = self.ty_use(rvalue_ty);
-                // Reading a mutable reference's referent needs an address
-                // holding a predicate, which pure-created mutrefs don't have.
-                if kind.mutability().is_mut() {
-                    return Err(self.unsupported_rvalue(
-                        format!(
-                            "mutable borrow of `{}` in a specification: take a shared \
-                             reference (`&`) instead",
-                            place.ty(self.body, self.vcx.tcx()).ty
-                        ),
-                        self.current_span(),
-                    ));
-                }
                 let encoded_place = self.encode_place_with_ref(curr_ver, (*place).into())?;
                 // We want to distinguish if `place` is a value that lives
                 // in pure code or not. If it lives in impure (the only way
@@ -1038,6 +1027,20 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 // will return `None` if this isn't a re-borrow, and if it's
                 // a re-borrow of created-in-pure reference then it will be
                 // field projections of `null` which is also `null`.
+
+                // Reading a mutable reference's referent needs an address
+                // holding a predicate, which pure-created mutrefs don't have.
+                if kind.mutability().is_mut() && encoded_place.place_ref.is_none() {
+                    return Err(self.unsupported_rvalue(
+                        format!(
+                            "mutable borrow of `{}` in a specification: take a shared \
+                             reference (`&`) instead",
+                            place.ty(self.body, self.vcx.tcx()).ty
+                        ),
+                        self.current_span(),
+                    ));
+                }
+
                 let place_ref = encoded_place
                     .place_ref
                     .unwrap_or_else(|| self.vcx.mk_null().lazy());
@@ -1051,6 +1054,9 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     let e_rvalue_ty = rvalue_snapshot_encoding.expect_immref();
                     e_rvalue_ty.prim_to_snap(place_ref, metadata, encoded_place.snap)
                 };
+
+                // TODO permit mutable refrences to places in impure code?
+                
                 Ok(snap.upcast_ty())
             }
             mir::Rvalue::BinaryOp(op, box (l, r)) => {
