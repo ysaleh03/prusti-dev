@@ -279,7 +279,7 @@ impl<'vir> Update<'vir> {
 
 #[derive(Clone, Copy, Debug)]
 struct PureImData<'vir> {
-    /// If we are encoding a function pre/post, we wont have this
+    /// If we are encoding a function pre/post, we wont have this:
     pub old_im_state: Option<vir::Expr<'vir, vir::ImState>>,
     pub curr_im_state: vir::Expr<'vir, vir::ImState>,
 }

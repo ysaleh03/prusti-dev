@@ -488,10 +488,11 @@ mod private_shared {
     impl<T: ?Sized> Copy for Rep<T> {}
 
     impl<T: ?Sized> Rep<T> {
-        pub fn new(_: impl Value<T>) -> Self {
+        pub fn new_ref(_: &mut T) -> Self {
             Rep(PhantomData)
         }
-        pub fn new_ref(_: &T) -> Self {
+
+        pub fn new_addr<'a>(_: Addr<'a, T>) -> Self {
             Rep(PhantomData)
         }
     }
@@ -736,6 +737,7 @@ mod private {
     }
     impl<T: ?Sized> Eq for Rep<T> {}
 
+    // TODO not sure if we want this?
     impl<T: ?Sized> Deref for Rep<T> {
         type Target = T;
         fn deref(&self) -> &T {

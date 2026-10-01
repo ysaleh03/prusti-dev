@@ -130,6 +130,14 @@ pub enum AddrOp {
     AtomicUnique,
 }
 
+/// Rep builtin operations
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum RepOp {
+    NewAddr,
+    NewRef,
+    Eq,
+}
+
 /// A `prusti_contracts` builtin, classified from the callee and grouped by
 /// the ghost type it belongs to. All groups except [`PrustiBuiltin::Spec`]
 /// are operand-based and encoded by [`PrustiBuiltinEnc`].
@@ -155,6 +163,7 @@ pub enum PrustiBuiltin {
     Real(NumOp),
     Float(FloatOp, ty::FloatTy),
     Addr(AddrOp),
+    Rep(RepOp),
 }
 
 impl PrustiBuiltin {
@@ -203,8 +212,11 @@ impl PrustiBuiltin {
                     .unwrap()
                     .to_target_usize(tcx) as usize
             };
+            // TODO if we want to handle rep equality differently can we return Some(Self::RepEq) here?
+
             // The methods defined on all ghost types, early return here.
             match (self_ty_name, item) {
+                (Some("Rep"), "eq") => return Some(Self::RepEq),
                 (Some(_), "eq") => return Some(Self::SnapEq),
                 (Some(_), "ne") => return Some(Self::SnapNe),
                 (Some(_), "clone") => return Some(Self::SnapClone),
@@ -282,6 +294,11 @@ impl PrustiBuiltin {
                     "atomic_unique" => Self::Addr(AddrOp::AtomicUnique),
                     other => todo!("unsupported capability {other}"),
                 },
+                Some("Rep") => match item {
+                    "new_ref" => Self::Rep(RepOp::NewRef),
+                    "new_addr" => Self::Rep(RepOp::NewAddr),
+                    other => todo!("unsupported `Rep` function {other}"),
+                }
                 Some(other) => todo!("unsupported `prusti_contracts` function {other}::{item}"),
             })
         })
@@ -294,6 +311,7 @@ impl PrustiBuiltin {
         match self {
             Self::Spec(_)
             | Self::Addr(_)
+            | Self::Rep(_)
             | Self::SnapEq
             | Self::SnapNe
             | Self::RepEq
@@ -578,6 +596,7 @@ impl PrustiBuiltinEnc {
                 }
             }
             PrustiBuiltin::Addr(op) => ctxt.encode_addr_op(op)?,
+            PrustiBuiltin::Rep(op) => todo!(),
         };
         Ok(((), PrustiBuiltinExpr(res)))
     }
