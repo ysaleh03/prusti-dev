@@ -130,8 +130,6 @@ fn extend_with_macro(makro: &syn::ImplItemMacro) -> syn::Result<(bool, syn::Attr
         }
     };
 
-    println!("{}", capability);
-
     let attr = if let Some(expr) = capable_input.side_conditions {
         let side_conditions = quote_spanned! {expr.span()=> #expr };
         parse_quote_spanned! {makro.span()=> #[capable(!#side_conditions || #capability)]}
