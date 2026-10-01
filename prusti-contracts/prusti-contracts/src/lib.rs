@@ -68,8 +68,8 @@ pub use prusti_contracts_proc_macros::im_method;
 /// A macro for declaring capabilties using mendel syntax.
 pub use prusti_contracts_proc_macros::capable;
 
-/// A macro for dereferencing an abstract pointer using mendel syntax.
-pub use prusti_contracts_proc_macros::ptr_deref;
+/// A macro for dereferencing an abstract address using mendel syntax.
+pub use prusti_contracts_proc_macros::addr_to_ref;
 
 /// A macro for declaring ghost functions using mendel syntax.
 pub use prusti_contracts_proc_macros::ghost_fn;
@@ -443,24 +443,16 @@ mod private_shared {
 
     /// A type to represent abstract addresses on the heap of type `T`,
     /// usable only in mendel specifications and ghost code.
-    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>);
+    pub struct Addr<'a, T>(PhantomData<&'a T>);
 
-    impl<'a, T: ?Sized> Clone for Addr<'a, T> {
+    impl<'a, T> Clone for Addr<'a, T> {
         fn clone(&self) -> Self {
             Addr(PhantomData)
         }
     }
-    impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
+    impl<'a, T> Copy for Addr<'a, T> {}
 
-    impl<'a, T: ?Sized> Addr<'a, T> {
-        pub fn ref_to_addr(_: &'a T) -> Self {
-            unimplemented!()
-        }
-
-        pub fn addr_to_ref(self) -> &'a T {
-            unimplemented!()
-        }
-
+    impl<'a, T> Addr<'a, T> {
         pub fn unique(l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
@@ -476,6 +468,14 @@ mod private_shared {
         pub fn atomic_unique(l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
+    }
+
+    pub fn ref_to_addr<'a, T>(_: &'a T) -> Addr<'a, T> {
+        unimplemented!()
+    }
+
+    pub fn addr_to_ref<'a, T>(_: Addr<'a, T>) -> &'a T {
+        unimplemented!()
     }
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);
@@ -720,12 +720,12 @@ mod private {
     // Addr
 
     /// Addr equality
-    impl<'a, T: ?Sized> PartialEq for Addr<'a, T> {
+    impl<'a, T> PartialEq for Addr<'a, T> {
         fn eq(&self, _: &Self) -> bool {
             panic!()
         }
     }
-    impl<'a, T: ?Sized> Eq for Addr<'a, T> {}
+    impl<'a, T> Eq for Addr<'a, T> {}
 
     // Rep
 

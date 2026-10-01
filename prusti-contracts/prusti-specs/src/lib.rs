@@ -1237,10 +1237,15 @@ pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
             ));
         }
         let item: syn::ItemStruct = syn::parse2(tokens)?;
-        let items = im_model::rewrite(&item)?;
+        let (addr_trait, addr_impl_shared, addr_impl_mut) = im_model::rewrite(&item)?;
+
         Ok(quote_spanned! {item.span()=>
             #[prusti::specs_version = #SPECS_VERSION]
-            #(#items)*
+            #addr_trait
+            #[prusti::specs_version = #SPECS_VERSION]
+            #addr_impl_shared
+            #[prusti::specs_version = #SPECS_VERSION]
+            #addr_impl_mut
         })
     })
 }
@@ -1376,14 +1381,14 @@ impl syn::parse::Parse for DerefInput {
     }
 }
 
-pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
+pub fn addr_to_ref(tokens: TokenStream) -> TokenStream {
     let deref_input: DerefInput =
         syn::parse2(tokens).expect("Malformed deref input, expected <root>@<name>");
     let root = deref_input.root;
     let name = deref_input.name;
     syn::parse_quote! {
-        ::prusti_contracts::ptr_deref(
-            ::prusti_contracts::Addr::ref_to_addr(&(#root)).#name()
+        ::prusti_contracts::addr_to_ref(
+            ::prusti_contracts::ref_to_addr(&(#root)).#name()
         )
     }
 }

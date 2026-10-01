@@ -322,8 +322,8 @@ pub fn closure(tokens: TokenStream) -> TokenStream {
 
 #[cfg(feature = "prusti")]
 #[proc_macro]
-pub fn ptr_deref(tokens: TokenStream) -> TokenStream {
-    prusti_specs::ptr_deref(tokens.into()).into()
+pub fn addr_to_ref(tokens: TokenStream) -> TokenStream {
+    prusti_specs::addr_to_ref(tokens.into()).into()
 }
 
 #[cfg(feature = "prusti")]

@@ -190,7 +190,7 @@ impl PrustiTokenStream {
                     (TokenTree::Punct(punct), _, _, _)
                         if punct.as_char() == '@' && punct.spacing() == Alone =>
                     {
-                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::AbsPtr)
+                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::Addr)
                     }
                     (token @ TokenTree::Punct(punct), _, _, _) if punct.spacing() == Joint => {
                         // make sure to fully consume any Rust operator
@@ -992,7 +992,7 @@ impl PrustiToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrustiBinaryOp {
     Rust(RustOp),
-    AbsPtr,
+    Addr,
     Iff,
     Implies,
     ImpliesReverse,
@@ -1022,7 +1022,7 @@ impl PrustiBinaryOp {
         // TODO: should <== and ==> have the same binding power? === and !==?
         match self {
             Self::Rust(_) => (0, 0),
-            Self::AbsPtr => (17, 17),
+            Self::Addr => (17, 17),
             Self::Iff => (4, 3),
             Self::Implies => (6, 5),
             Self::ImpliesReverse => (5, 6),
@@ -1062,9 +1062,9 @@ impl PrustiBinaryOp {
             }
             Self::Or => quote_spanned! { span => #lhs || #rhs },
             Self::And => quote_spanned! { span => #lhs && #rhs },
-            Self::AbsPtr => {
+            Self::Addr => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
-                quote_spanned! { joined_span => #lhs . #raw_rhs () }
+                quote_spanned! { joined_span => (::prusti_contracts::ref_to_addr(&#lhs)) . #raw_rhs () }
             }
             Self::SnapEq => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
