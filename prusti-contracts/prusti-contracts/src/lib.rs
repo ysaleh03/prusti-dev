@@ -443,16 +443,16 @@ mod private_shared {
 
     /// A type to represent abstract addresses on the heap of type `T`,
     /// usable only in mendel specifications and ghost code.
-    pub struct Addr<'a, T>(PhantomData<&'a T>);
+    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>);
 
-    impl<'a, T> Clone for Addr<'a, T> {
+    impl<'a, T: ?Sized> Clone for Addr<'a, T> {
         fn clone(&self) -> Self {
             Addr(PhantomData)
         }
     }
-    impl<'a, T> Copy for Addr<'a, T> {}
+    impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
 
-    impl<'a, T> Addr<'a, T> {
+    impl<'a, T: ?Sized> Addr<'a, T> {
         pub fn unique(l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
@@ -470,11 +470,11 @@ mod private_shared {
         }
     }
 
-    pub fn ref_to_addr<'a, T>(_: &'a T) -> Addr<'a, T> {
+    pub fn ref_to_addr<'a, T: ?Sized>(_: &'a T) -> Addr<'a, T> {
         unimplemented!()
     }
 
-    pub fn addr_to_ref<'a, T>(_: Addr<'a, T>) -> &'a T {
+    pub fn addr_to_ref<'a, T: ?Sized>(_: Addr<'a, T>) -> &'a T {
         unimplemented!()
     }
 
