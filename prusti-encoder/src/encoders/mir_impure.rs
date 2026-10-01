@@ -1900,7 +1900,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.vcx.with_span(statement.source_info.span, |_vcx| {
             self.deps().check_cycle()?;
 
-            // let before_label = self.new_before_label(location);
+            let before_label = self.new_before_label(location);
 
             comment!(self, "[MIR] {location:?}: {statement:?}");
 
@@ -2089,7 +2089,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let current_fpcs = self.current_fpcs.take().unwrap();
             let cfpcs = &current_fpcs.statements[location.statement_index];
             let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-            self.mendel_local_post_main(before_label, pcg)?;
+            // self.mendel_local_post_main(before_label, pcg)?;
             self.current_fpcs = Some(current_fpcs);
         }
 
@@ -2433,7 +2433,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let current_fpcs = self.current_fpcs.take().unwrap();
             let cfpcs = &current_fpcs.statements[location.statement_index];
             let pcg = &cfpcs.states[EvalStmtPhase::PostMain];
-            self.mendel_local_post_main(before_label, pcg)?;
+            // self.mendel_local_post_main(before_label, pcg)?;
             self.current_fpcs = Some(current_fpcs);
         }
         assert!(self.current_terminator.replace(terminator).is_none());
@@ -2561,7 +2561,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
         comment!(self, "[IM] implicit capabilites from place capabilities:");
 
-        for p in pcg.places_with_capapability(CapabilityKind::Read) {
+        for p in pcg.places_with_capability(CapabilityKind::Read) {
             // if p.prefix_place().is_some() {
             //     continue;
             // }
@@ -2578,7 +2578,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
 
-        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
+        for p in pcg.places_with_capability(CapabilityKind::Exclusive) {
             // if p.prefix_place().is_some() {
             //     continue;
             // }
@@ -2618,7 +2618,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         );
 
         // TODO: Remebember projections with assoc. ptrs and check for their prefixes as well
-        for p in pcg.places_with_capapability(CapabilityKind::Read) {
+        for p in pcg.places_with_capability(CapabilityKind::Read) {
             if p.is_shared_ref(self.pcg_ctxt()) {
                 let place_expr = self.encode_place_with_snap(p)?.1;
                 comment!(
@@ -2629,7 +2629,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             }
         }
 
-        for p in pcg.places_with_capapability(CapabilityKind::Exclusive) {
+        for p in pcg.places_with_capability(CapabilityKind::Exclusive) {
             if p.is_shared_ref(self.pcg_ctxt()) {
                 let place_expr = self.encode_place_with_snap(p)?.1;
                 comment!(
