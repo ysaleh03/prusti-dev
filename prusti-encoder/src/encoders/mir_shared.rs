@@ -243,6 +243,10 @@ pub(crate) trait PureRvalueEnc<'vir> {
                 is_pure,
                 span: Some(span).filter(|_| !is_pure),
             })?;
+        // TODO I *think* that in our case we don't want snapshots
+        // in this way...
+        // Actually what we might do is (somewhat strangely) encode
+        // mutref args as if they were shared refs
         let operands = args
             .iter()
             .map(|arg| self.encode_operand_snap(&arg.node, ctxt))

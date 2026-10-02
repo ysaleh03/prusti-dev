@@ -69,17 +69,19 @@ impl<'vir> PledgeExpr<'vir> {
         vir::with_vcx(|vcx| PledgeArgs(vcx.alloc(all_args), result_local))
     }
 
+    // TODO should these be able to access the local_refs?
+
     pub fn expr(&self, args: PledgeArgs<'vir>) -> vir::ExprBool<'vir> {
         vir::with_vcx(|vcx| {
             self.expr
-                .reify(vcx, (self.did, args.0, vir::OldLabel::None))
+                .reify(vcx, (self.did, args.0, None, vir::OldLabel::None))
         })
     }
 
     pub fn expr_at_label(&self, args: PledgeArgs<'vir>, label: &'vir str) -> vir::ExprBool<'vir> {
         vir::with_vcx(|vcx| {
             self.expr
-                .reify(vcx, (self.did, args.0, vir::OldLabel::Label(label)))
+                .reify(vcx, (self.did, args.0, None, vir::OldLabel::Label(label)))
         })
     }
 
@@ -214,6 +216,7 @@ impl TaskEncoder for MirSpecEnc {
             let (pres, pres_inherited) = crate::encoders::spec_items(&specs.pres);
             let (posts, posts_inherited) = crate::encoders::spec_items(&specs.posts);
             let (pledges, pledges_inherited) = crate::encoders::spec_items(&specs.pledges);
+
             let pre_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
@@ -256,6 +259,19 @@ impl TaskEncoder for MirSpecEnc {
             let all_args = vcx.alloc(all_args);
             let pre_args = all_args; // it should be ok to provide more keys than required
 
+            let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
+            let local_refs = match enc_mode {
+                MirSpecEncMode::Impure => Some(
+                    vcx.alloc(
+                        local_iter
+                            .map(|local| (local, local_defs[local].local_ex))
+                            .collect(),
+                    ),
+                ),
+                _ => None,
+            };
+            println!("local_refs: {:?}", local_refs);
+
             // Encode each functional precondition; if one cannot be encoded (e.g.
             // it uses an unsupported feature), report the error at *that spec's*
             // span and skip only it, keeping the permission contract and the other
@@ -269,8 +285,12 @@ impl TaskEncoder for MirSpecEnc {
                     // Reify *inside* the span scope: the nodes created by the
                     // reification pick up the ambient span, which makes error
                     // positions inside this precondition point at the spec.
+                    //
+                    // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                    // TODO we might want to make local_refs available here
+                    //
                     let expr = vcx.with_span(span, |vcx| {
-                        expr.reify(vcx, (*spec_def_id, pre_args, vir::OldLabel::None))
+                        expr.reify(vcx, (*spec_def_id, pre_args, local_refs, vir::OldLabel::None))
                     });
                     Some((expr, span))
                 })
@@ -304,7 +324,8 @@ impl TaskEncoder for MirSpecEnc {
                             )])
                         });
                         let expr = spec.expr.downcast_ty::<vir::Bool>();
-                        let expr = expr.reify(vcx, (*spec_def_id, post_args, vir::OldLabel::None));
+                        let expr =
+                            expr.reify(vcx, (*spec_def_id, post_args, local_refs, vir::OldLabel::None));
                         let expr = expr.realloc_span();
                         Some((expr, span))
                     })

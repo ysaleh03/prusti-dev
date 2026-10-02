@@ -1,6 +1,6 @@
 use crate::encoders::{
     FunctionCallEnc, Mode, PrustiBuiltin, SpecBuiltin, ViperTupleEnc,
-    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature},
+    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature, SpecBlocksEnc},
     mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic},
     pure::spec::MirSpecEncMode,
     ty::{
@@ -38,6 +38,7 @@ pub enum MirPureEncError {
 pub type ExprInput<'vir> = (
     DefId,
     &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+    Option<&'vir FxHashMap<mir::Local, vir::ExprRef<'vir>>>,
     vir::OldLabel<'vir>,
 );
 type ExprRet<'vir> = vir::ExprGenSnap<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
@@ -306,7 +307,7 @@ struct Enc<'vir: 'enc, 'enc> {
     impure_context: bool,
 
     /// (Interior Mutability) handles on interior mutability state version
-    im_mode_data: Option<PureImData<'vir>>
+    im_mode_data: Option<PureImData<'vir>>,
 }
 
 struct EncodedPlace<'vir> {
@@ -1028,12 +1029,15 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 // a re-borrow of created-in-pure reference then it will be
                 // field projections of `null` which is also `null`.
 
+                // TODO we need the mutable ref only for the WD check
+                // really what we want is the address + the deep snapshot or Ref, depends
+                
                 // Reading a mutable reference's referent needs an address
                 // holding a predicate, which pure-created mutrefs don't have.
                 if kind.mutability().is_mut() && encoded_place.place_ref.is_none() {
                     return Err(self.unsupported_rvalue(
                         format!(
-                            "mutable borrow of `{}` in a specification: take a shared \
+                            "mutable borrow of spec-only value `{}`: take a shared \
                              reference (`&`) instead",
                             place.ty(self.body, self.vcx.tcx()).ty
                         ),
@@ -1056,7 +1060,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 };
 
                 // TODO permit mutable refrences to places in impure code?
-                
+
                 Ok(snap.upcast_ty())
             }
             mir::Rvalue::BinaryOp(op, box (l, r)) => {
@@ -1126,6 +1130,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         place_ty: mir::PlaceTy<'vir>,
         elem: mir::PlaceElem<'vir>,
         encoded_place: EncodedPlace<'vir>,
+        from_mutref: bool,
     ) -> EncodeResult<'vir, EncodedPlace<'vir>, MirPureEnc> {
         let e_ty = self.ty_use(place_ty.ty);
         Ok(match elem {
@@ -1172,7 +1177,11 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             // value behind the mutable reference, so we need to
                             // take an extra snapshot here.
                             // TODO: avoid all of this by using shallow and deep snapshots
+                            //
+                            // TODO: if we are deriving things from an actual reference, use generics, otherwise use concrete snapshot?
+                            
                             let ty_task = RustTyDecomposition::from_ty(place_ty.ty, self.context);
+                            println!("place {:?} of ty {:?}", encoded_place.place_ref, place_ty);
                             let inner = ty_task.ty.expect_mutref();
                             let normalized = inner
                                 .referent
@@ -1288,7 +1297,27 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         } else {
             self.mk_local_ex(place.local, curr_ver[&place.local])
         };
-        let mut encoded_place = EncodedPlace::new(expr, None);
+
+        let place_ref = if self.impure_context {
+            Some(self.vcx.mk_lazy_expr(
+                vir::vir_format!(self.vcx, "addr of {:?}", place.local),
+                vir::TYPE_REF,
+                Box::new(move |vcx, lctx: ExprInput<'vir>| {
+                    // unwrap should always succeed if `impure_context`
+                    lctx.2
+                        .unwrap()
+                        .get(&place.local)
+                        .map_or(vcx.mk_null(), |rf| *rf)
+                        .kind
+                }),
+            ))
+        } else {
+            None
+        };
+
+        let from_mutref = matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
+
+        let mut encoded_place = EncodedPlace::new(expr, place_ref);
         // TODO: factor this out (duplication with impure encoder)?
         for elem in place.projection {
             // The snapshots of the arguments and the result are pinned to a
@@ -1299,10 +1328,12 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             // labelled. Silicon evaluates the heap-independent parts of a wand
             // when inhaling it, where `old[lhs]` is undefined.
             let heap_read = should_wrap
+                && from_mutref // TODO what to do if this isn't true?
                 && self.impure_context
                 && matches!(elem, mir::ProjectionElem::Deref)
                 && matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
-            encoded_place = self.encode_place_element(curr_ver, place_ty, *elem, encoded_place)?;
+            encoded_place =
+                self.encode_place_element(curr_ver, place_ty, *elem, encoded_place, from_mutref)?;
             place_ty = place_ty.projection_ty(self.vcx.tcx(), *elem);
             if heap_read && self.old_mode {
                 let inner = encoded_place.snap;
@@ -1312,7 +1343,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     Box::new(move |vcx, lctx: ExprInput<'vir>| {
                         use vir::Reify;
                         let reified = inner.reify(vcx, lctx);
-                        vcx.mk_old(reified, lctx.2).kind
+                        vcx.mk_old(reified, lctx.3).kind
                     }),
                 );
             }
@@ -1414,10 +1445,36 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             vir::vir_format!(self.vcx, "spec closure body ({name})"),
             body.ty(),
             Box::new(move |vcx, lctx: ExprInput<'vir>| {
-                body.reify(vcx, (cl_def_id, reify_args, lctx.2)).kind
+                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3)).kind
             }),
         );
         Ok((qvars, body.downcast_ty::<vir::Bool>()))
+    }
+
+    /// (Interior Mutability) this is a bit of a hack, but in order to support
+    /// comparisons between the rep of an abstract address's target and a
+    /// mutable reference's target, we'd like to be able to use mutable refs as
+    /// a well-definedness check for building a rep, while essentially reborrowing
+    /// into a shared reference in order to encode the constraint.
+    ///
+    /// oh, and we also need access to the old and new imstate versions in order to
+    /// encode the moved constraint.
+    ///
+    /// the issue is that mutable reference targets and owned places are represented
+    /// differently, as generic or concrete snaps.
+    ///
+    /// some options:
+    /// - if there is a nice way to tell if 
+    fn encode_rep_builtin()
+    {
+        // TODO encode operands as immref snapshots
+        //
+        // TODO there are two cases: 1) either the operands come from arguments that
+        // themselves are mutable references or 2) the operands are spec-only mutable
+        // borrows of owned arguments
+        //
+
+        
     }
 
     /// Encodes the pure-only `prusti_contracts` builtins (quantifiers, spec

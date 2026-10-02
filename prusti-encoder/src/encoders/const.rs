@@ -382,7 +382,7 @@ impl TaskEncoder for ConstEnc {
                         let args = Default::default();
                         Ok((
                             Vec::new(),
-                            expr.reify(vcx, (uneval.def, vcx.alloc(args), vir::OldLabel::None))
+                            expr.reify(vcx, (uneval.def, vcx.alloc(args), None, vir::OldLabel::None))
                                 .downcast_ty(),
                         ))
                     } else {

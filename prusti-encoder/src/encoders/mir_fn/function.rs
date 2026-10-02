@@ -220,7 +220,7 @@ impl TaskEncoder for FunctionEnc {
                     Ok(out) => {
                         let expr = out
                             .expr
-                            .reify(vcx, (def_id, spec.pre_args, vir::OldLabel::None));
+                            .reify(vcx, (def_id, spec.pre_args, None, vir::OldLabel::None));
                         assert!(
                             expr.ty() == return_type,
                             "expected {:?}, got {:?}",

@@ -1705,19 +1705,31 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             gargs: GParams::from(self.def_id).identity_args(),
             kind: PureKind::SpecBlock(spec_block),
         })?;
+        println!("spec block: {:?}", spec_block);
         use vir::Reify;
         let locals: FxHashMap<mir::Local, _> = enc_output
             .inputs
             .iter()
             .map(|local| (*local, self.local_defs[*local].impure_snap))
             .collect();
+
+        let local_refs: FxHashMap<mir::Local, vir::ExprRef<'vir>> = enc_output
+            .inputs
+            .iter()
+            .map(|local| (*local, self.local_defs[*local].local_ex))
+            .collect();
+        
+        // TODO insert statments here generic-izing locals
+        
         let expr = enc_output
             .expr
             .reify(
                 self.vcx,
-                (self.def_id, self.vcx.alloc(locals), vir::OldLabel::None),
+                (self.def_id, self.vcx.alloc(locals), Some(self.vcx.alloc(local_refs)), vir::OldLabel::None), // TODO should take local refs?
             )
             .downcast_ty();
+
+        // TODO insert statments here concretizing locals
         Ok(expr)
     }
 
