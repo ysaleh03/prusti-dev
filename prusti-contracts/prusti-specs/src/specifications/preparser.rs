@@ -1064,7 +1064,7 @@ impl PrustiBinaryOp {
             Self::And => quote_spanned! { span => #lhs && #rhs },
             Self::Addr => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
-                quote_spanned! { joined_span => (::prusti_contracts::ref_to_addr(&#lhs)) . #raw_rhs () }
+                quote_spanned! { joined_span => (#lhs) . #raw_rhs () }
             }
             Self::SnapEq => {
                 let joined_span = join_spans(lhs.span(), rhs.span());

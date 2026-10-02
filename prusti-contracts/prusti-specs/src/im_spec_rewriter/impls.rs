@@ -118,13 +118,13 @@ fn extend_with_macro(makro: &syn::ImplItemMacro) -> syn::Result<(bool, syn::Attr
             if let Some(addr1) = addr1 {
                 quote_spanned! {makro.span()=>
                 ::prusti_contracts::Addr::#capability(
-                    ::prusti_contracts::ref_to_addr(#receiver).#addr0(),
-                    ::prusti_contracts::ref_to_addr(#receiver).#addr1()
+                    self.#addr0(),
+                    self.#addr1()
                 )}
             } else {
                 quote_spanned! {makro.span()=>
                 ::prusti_contracts::Addr::#capability(
-                    ::prusti_contracts::ref_to_addr(#receiver).#addr0()
+                    self.#addr0()
                 )}
             }
         }

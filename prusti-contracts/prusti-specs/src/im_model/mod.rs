@@ -5,41 +5,24 @@
 //! Given a `#[im_model]` attributed type `T` with fields `f0: Tf0`, `f1: Tf1`,
 //! ... `fn: Tfn`, generates a function of type Addr<T> -> Addr<Tf0> for each
 //! field. The implementation is `unimplemented!()`, `#[pure]` and `#[trusted]`
-
-use crate::common::HasGenerics;
-
 use super::parse_quote_spanned;
 use syn::spanned::Spanned;
 use uuid::Uuid;
 
 /// See module level documentation
-pub fn rewrite(
-    item_struct: &syn::ItemStruct,
-) -> syn::Result<(syn::ItemTrait, syn::ItemImpl, syn::ItemImpl)> {
+pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, syn::ItemImpl)> {
     let item_ident = &item_struct.ident;
-
-    let mut impl_generics_src = item_struct.generics().clone();
     let new_lifetime = generate_lifetime(item_struct);
-    impl_generics_src
-        .params
-        .push(syn::GenericParam::Lifetime(syn::LifetimeDef::new(
-            new_lifetime.clone(),
-        )));
 
-    let (new_impl_generics, new_ty_generics, _) = impl_generics_src.split_for_impl();
-    let (_, ty_generics, where_clause) = item_struct.generics.split_for_impl();
+    let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
 
     let trait_ident = generate_trait_ident(item_struct);
-    let mut addr_trait: syn::ItemTrait = parse_quote_spanned! {item_struct.span() =>
-        trait #trait_ident #new_impl_generics #where_clause {}
+    let mut new_trait: syn::ItemTrait = parse_quote_spanned! {item_struct.span() =>
+        trait #trait_ident #impl_generics #where_clause {}
     };
 
-    let addr_impl_shared: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
-        impl #new_impl_generics #trait_ident #new_ty_generics for ::prusti_contracts::Addr<#new_lifetime, &#item_ident #ty_generics> #where_clause {}
-    };
-
-    let addr_impl_mut: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
-        impl #new_impl_generics #trait_ident #new_ty_generics for ::prusti_contracts::Addr<#new_lifetime, &mut #item_ident #ty_generics> #where_clause {}
+    let new_impl: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
+        impl #impl_generics #trait_ident #ty_generics for #item_ident #ty_generics #where_clause {}
     };
 
     let fields = match &item_struct.fields {
@@ -67,16 +50,16 @@ pub fn rewrite(
         let projection: syn::TraitItem = parse_quote_spanned! {field.span()=>
             #[pure]
             #[trusted]
-            fn #name(self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty> {
+            fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty> {
                 unimplemented!()
             }
         };
         items.push(projection)
     }
 
-    addr_trait.items = items;
+    new_trait.items = items;
 
-    Ok((addr_trait, addr_impl_shared, addr_impl_mut))
+    Ok((new_trait, new_impl))
 }
 
 fn generate_trait_ident(item_struct: &syn::ItemStruct) -> syn::Ident {
