@@ -38,8 +38,6 @@ impl<'vir> MethodCallEncOutput<'vir> {
         assert_eq!(self.inputs.len(), args.len());
         let generics = args.iter().zip(self.inputs.iter());
 
-        // TODO I beleive we *actually* want to cast all 
-
         let mut stmts: Vec<_> = generics
             .filter_map(|(arg, caster)| caster.cast_to_callee_ctx(arg))
             .collect();

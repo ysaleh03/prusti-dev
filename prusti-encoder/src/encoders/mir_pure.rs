@@ -35,6 +35,13 @@ pub enum MirPureEncError {
 
 // TODO do we fold the interior mutability spec encoder into here?
 
+pub struct ImpureExprInput<'vir> {
+    // Records the address of all non-spec locals
+    addr_map: &'vir FxHashMap<mir::Local, vir::ExprRef<'vir>>,
+    // 
+    snap_map: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+}
+
 pub type ExprInput<'vir> = (
     DefId,
     &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
@@ -1019,6 +1026,9 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 // TODO only if this is a reborrow of a mutable reference, encode it!
                 let rvalue_snapshot_encoding = self.ty_use(rvalue_ty);
                 let encoded_place = self.encode_place_with_ref(curr_ver, (*place).into())?;
+                // what to do if 
+
+
                 // We want to distinguish if `place` is a value that lives
                 // in pure code or not. If it lives in impure (the only way
                 // that this can happen is that we have a `&mut` argument)
@@ -1130,7 +1140,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         place_ty: mir::PlaceTy<'vir>,
         elem: mir::PlaceElem<'vir>,
         encoded_place: EncodedPlace<'vir>,
-        from_mutref: bool,
     ) -> EncodeResult<'vir, EncodedPlace<'vir>, MirPureEnc> {
         let e_ty = self.ty_use(place_ty.ty);
         Ok(match elem {
@@ -1172,33 +1181,30 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                                 self.current_span(),
                             ));
                         }
-                        let val_expr = {
-                            // The snapshot is shallow and doesn't contain the
-                            // value behind the mutable reference, so we need to
-                            // take an extra snapshot here.
-                            // TODO: avoid all of this by using shallow and deep snapshots
-                            //
-                            // TODO: if we are deriving things from an actual reference, use generics, otherwise use concrete snapshot?
-                            
-                            let ty_task = RustTyDecomposition::from_ty(place_ty.ty, self.context);
-                            println!("place {:?} of ty {:?}", encoded_place.place_ref, place_ty);
-                            let inner = ty_task.ty.expect_mutref();
-                            let normalized = inner
-                                .referent
-                                .decompose_compare_normalize(ty_task.ty.params, ty_task.args);
-                            let caster = self
-                                .deps
-                                .require_dep::<crate::GArgsCastEnc<crate::Pure>>(normalized)
-                                .unwrap();
-                            let inner_ty_task = inner
-                                .referent
-                                .decompose_context(ty_task.ty.params, ty_task.args);
-                            let inner_ty = self
-                                .deps
-                                .require_dep::<crate::encoders::TyUseImpureEnc>(inner_ty_task)
-                                .unwrap();
-                            caster.cast_to_caller_ctx(inner_ty.ref_to_snap(ref_expr))
-                        };
+                        let val_expr = e_ty.value_access(snap);
+                        // let val_expr = {
+                        //     // The snapshot is shallow and doesn't contain the
+                        //     // value behind the mutable reference, so we need to
+                        //     // take an extra snapshot here.
+                        //     // TODO: avoid all of this by using shallow and deep snapshots
+                        //     let ty_task = RustTyDecomposition::from_ty(place_ty.ty, self.context);
+                        //     let inner = ty_task.ty.expect_mutref();
+                        //     let normalized = inner
+                        //         .referent
+                        //         .decompose_compare_normalize(ty_task.ty.params, ty_task.args);
+                        //     let caster = self
+                        //         .deps
+                        //         .require_dep::<crate::GArgsCastEnc<crate::Pure>>(normalized)
+                        //         .unwrap();
+                        //     let inner_ty_task = inner
+                        //         .referent
+                        //         .decompose_context(ty_task.ty.params, ty_task.args);
+                        //     let inner_ty = self
+                        //         .deps
+                        //         .require_dep::<crate::encoders::TyUseImpureEnc>(inner_ty_task)
+                        //         .unwrap();
+                        //     caster.cast_to_caller_ctx(inner_ty.ref_to_snap(ref_expr))
+                        // };
                         EncodedPlace::new(val_expr, Some(ref_expr)).with_metadata(metadata)
                     }
                     TyKind::RawPtr(..) => {
@@ -1315,7 +1321,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             None
         };
 
-        let from_mutref = matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
+        // TODO can we finagle the lazy args in such a way that for mutrefs we use the s_Param
+        // method and for owned places we use the concrete???
 
         let mut encoded_place = EncodedPlace::new(expr, place_ref);
         // TODO: factor this out (duplication with impure encoder)?
@@ -1328,12 +1335,11 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             // labelled. Silicon evaluates the heap-independent parts of a wand
             // when inhaling it, where `old[lhs]` is undefined.
             let heap_read = should_wrap
-                && from_mutref // TODO what to do if this isn't true?
                 && self.impure_context
                 && matches!(elem, mir::ProjectionElem::Deref)
                 && matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
             encoded_place =
-                self.encode_place_element(curr_ver, place_ty, *elem, encoded_place, from_mutref)?;
+                self.encode_place_element(curr_ver, place_ty, *elem, encoded_place)?;
             place_ty = place_ty.projection_ty(self.vcx.tcx(), *elem);
             if heap_read && self.old_mode {
                 let inner = encoded_place.snap;
@@ -1467,6 +1473,14 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
     /// - if there is a nice way to tell if 
     fn encode_rep_builtin()
     {
+
+        // can we somehow make the rep constructor create some extranneous binding to do
+        // the WD check followed by a shared borrow?
+
+        // TODO one idea is to bypass the weirdness in the encoding of mutrefs by somehow
+        // forcing prusti to encode the &mut T-typed arguments as &T instead. Then we don't
+        // have to worry about things like getting the right address? eh?
+
         // TODO encode operands as immref snapshots
         //
         // TODO there are two cases: 1) either the operands come from arguments that

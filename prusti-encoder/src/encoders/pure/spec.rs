@@ -239,7 +239,8 @@ impl TaskEncoder for MirSpecEnc {
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
             let all_args: FxHashMap<mir::Local, _> = match enc_mode {
                 MirSpecEncMode::Impure => local_iter
-                    .map(|local| (local, local_defs[local].impure_snap))
+                    // .map(|local| (local, local_defs[local].impure_snap))
+                    .map(|local| (local, local_defs[local].spec_snap))
                     .collect(),
                 MirSpecEncMode::PureWithResult => {
                     let result_ty = local_defs[mir::RETURN_PLACE].local_snap.ty();
@@ -270,7 +271,6 @@ impl TaskEncoder for MirSpecEnc {
                 ),
                 _ => None,
             };
-            println!("local_refs: {:?}", local_refs);
 
             // Encode each functional precondition; if one cannot be encoded (e.g.
             // it uses an unsupported feature), report the error at *that spec's*
@@ -303,7 +303,8 @@ impl TaskEncoder for MirSpecEnc {
                         .map(|(local, arg)| (*local, vcx.mk_old_expr(arg)))
                         .chain([(
                             (local_defs.arg_count + 1).into(),
-                            local_defs[mir::RETURN_PLACE].impure_snap,
+                            // local_defs[mir::RETURN_PLACE].impure_snap,
+                            local_defs[mir::RETURN_PLACE].spec_snap,
                         )])
                         .collect();
                     vcx.alloc(post_args)
