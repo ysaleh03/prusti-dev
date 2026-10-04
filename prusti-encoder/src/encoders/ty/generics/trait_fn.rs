@@ -28,7 +28,7 @@ pub struct TraitFnEncOutputRef<'vir> {
     pub pre_func: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
     pub post_func:
         FunctionIdn<'vir, (vir::Snap, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
-    pub call_stub_impure: Option<MethodIdn<'vir, (vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
+    pub call_stub_impure: Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
     pub call_stub_pure_caller:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
     pub call_stub_pure_function:
@@ -139,10 +139,12 @@ impl TaskEncoder for TraitFnEnc {
             );
             // TODO: spec functions for each pledge
 
+            let im_state_ref_decl = vcx.mk_local_decl("st_ref", vir::TYPE_REF);
             let call_stub_impure = (!is_pure).then(|| {
                 MethodIdn::new(
                     vir_format_identifier!(vcx, "{trait_name}_fn_stub_{item_name}"),
                     (
+                        vir::TYPE_REF,
                         ref_args,
                         item_generics.ty_args(),
                         item_generics.const_args(),
@@ -377,6 +379,7 @@ impl TaskEncoder for TraitFnEnc {
                 methods.push(vcx.mk_method(
                     call_stub_impure.unwrap(),
                     (
+                        im_state_ref_decl,
                         args.as_slice(),
                         item_generics.ty_decls(),
                         item_generics.const_decls(),

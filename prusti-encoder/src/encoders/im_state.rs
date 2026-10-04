@@ -163,6 +163,9 @@ impl TaskEncoder for ImStateEnc {
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
         for output in Self::all_outputs_local_no_errors(program) {
             program.add_domain(output.domain);
+            program.add_predicate(output.pred);
+            program.add_function(output.get);
+            program.add_method(output.bump);
         }
     }
 }

@@ -10,11 +10,7 @@ use task_encoder::{
 use vir::MethodIdn;
 
 use crate::encoders::{
-    Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc, WandEncTask,
-    mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc},
-    mir_impure::ImpureImData,
-    pure::spec::MirSpecEncMode,
-    ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
+    mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc}, mir_impure::ImpureImData, pure::spec::MirSpecEncMode, ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc}, ImStateEnc, Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc, WandEncTask
 };
 
 // Method wrapper
@@ -32,6 +28,7 @@ pub struct MethodCallEncOutput<'vir> {
 impl<'vir> MethodCallEncOutput<'vir> {
     pub fn call(
         &self,
+        im_state_ref: vir::ExprRef<'vir>,
         mut args: Vec<vir::ExprRef<'vir>>,
         ret: vir::ExprRef<'vir>,
     ) -> Vec<vir::Stmt<'vir>> {
@@ -43,7 +40,7 @@ impl<'vir> MethodCallEncOutput<'vir> {
             .collect();
 
         args.insert(0, ret);
-        let call = (self.method.method_ref)(&args, self.ty_args.get_ty(), self.ty_args.get_const())
+        let call = (self.method.method_ref)(im_state_ref, &args, self.ty_args.get_ty(), self.ty_args.get_const())
             .alloc();
         stmts.push(call);
 
@@ -113,9 +110,11 @@ impl TaskEncoder for MethodCallEnc {
 
 pub(super) struct MethodEnc;
 
+// TODO There should (always?) be a ref-argument for the p_ImState permission
 #[derive(Debug, Clone)]
 pub(super) struct MethodEncOutputRef<'vir> {
-    method_ref: MethodIdn<'vir, (vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>,
+    // (Interior Mutability) the first `Ref` points to the p_ImState permission
+    method_ref: MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>,
 }
 
 impl<'vir> OutputRefAny for MethodEncOutputRef<'vir> {}
@@ -189,7 +188,7 @@ impl TaskEncoder for MethodEnc {
             let generics = deps.require_dep_spanned::<GenericParamsEnc>(params, span)?;
             let method_ref = MethodIdn::new(
                 method_name,
-                (ref_args, generics.ty_args(), generics.const_args()),
+                (vir::TYPE_REF, ref_args, generics.ty_args(), generics.const_args()),
             );
             deps.emit_output_ref(def_id, MethodEncOutputRef { method_ref })?;
 
@@ -231,6 +230,13 @@ impl TaskEncoder for MethodEnc {
                     EncodeFullError::EncodingError(MethodEncError::Reported, None)
                 })?;
 
+            let im_state_ref_decl = vcx.mk_local_decl("st_ref", vir::TYPE_REF);
+            let im_state_ref = vcx.mk_local_ex(im_state_ref_decl);
+            let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let im_state_owned = vcx.mk_predicate_app_expr((im_state.pred_idn)(im_state_ref)(None));
+            pres.push(im_state_owned);
+            posts.push(im_state_owned);
+            
             // Add direct resources for inputs and outputs to the pre- and
             // postconditions, respectively. "Direct" here refers to owned
             // Viper resources that must be passed in/out given the signature,
@@ -288,22 +294,12 @@ impl TaskEncoder for MethodEnc {
                     )
                 }
 
-                let im_mode = true; // TODO just for testing
-
-                let im_mode_data = if im_mode {
-                    let curr_im_state_decl = vir::vir_local_decl! { vcx; im_st : ImState };
-                    start_stmts.push(vcx.mk_local_decl_stmt(curr_im_state_decl, None));
-                    let curr_im_state = vcx.mk_local_ex(curr_im_state_decl);
+                let im_data = {
+                    let curr_im_state = im_state.get_idn.call()(im_state_ref);
 
                     let prev_im_state_decl = vir::vir_local_decl! { vcx; prev_im_st : ImState };
                     start_stmts.push(vcx.mk_local_decl_stmt(prev_im_state_decl, None));
                     let prev_im_state = vcx.mk_local_ex(prev_im_state_decl);
-
-                    let old_im_state_decl = vir::vir_local_decl! { vcx; old_im_st : ImState };
-                    start_stmts.push(vcx.mk_local_decl_stmt(old_im_state_decl, None));
-                    let old_im_state = vcx.mk_local_ex(old_im_state_decl);
-
-                    start_stmts.push(vcx.mk_pure_assign_stmt(old_im_state, curr_im_state));
 
                     start_stmts.push(vcx.mk_comment_stmt(
                         "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)",
@@ -319,14 +315,11 @@ impl TaskEncoder for MethodEnc {
                             None => {}
                         };
                     }
-                    let im_mode_data = ImpureImData {
+                    ImpureImData {
+                        im_state_ref,
                         curr_im_state,
                         prev_im_state,
-                        old_im_state,
-                    };
-                    Some(im_mode_data)
-                } else {
-                    None
+                    }
                 };
 
                 // This will be overwritten later.
@@ -374,7 +367,8 @@ impl TaskEncoder for MethodEnc {
                     current_terminator: None,
                     encoded_blocks,
 
-                    im_mode_data,
+                    im_mode: true, // TODO pull this from elsewhere
+                    im_data,
                 };
                 // if we encountered an error/cycle during encoding, we don't
                 // emit a method body; encoding errors additionally surface as
@@ -430,7 +424,7 @@ impl TaskEncoder for MethodEnc {
                 MethodEncOutput {
                     method: vcx.mk_method(
                         method_ref,
-                        (&args, generics.ty_decls(), generics.const_decls()),
+                        (im_state_ref_decl ,&args, generics.ty_decls(), generics.const_decls()),
                         &[],
                         vcx.alloc_slice(&pres),
                         vcx.alloc_slice(&posts),

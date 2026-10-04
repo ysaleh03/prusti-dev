@@ -141,11 +141,11 @@ impl LocationLabelPrefix {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ImpureImData<'vir> {
+    // Ref for p_ImState predicate
+    pub im_state_ref: vir::Expr<'vir, vir::Ref>,
     pub curr_im_state: vir::Expr<'vir, vir::ImState>,
     // State version at end of previous statement
     pub prev_im_state: vir::Expr<'vir, vir::ImState>,
-    // State version at beginning of method body
-    pub old_im_state: vir::Expr<'vir, vir::ImState>,
 }
 
 pub struct ImpureEncVisitor<'vir, 'enc, E: TaskEncoder>
@@ -186,7 +186,8 @@ where
     pub encoded_blocks: Vec<vir::CfgBlock<'vir>>, // TODO: use IndexVec ?
 
     /// (Interior Mutability) encoding data relevant to interior mutability reasoning
-    pub im_mode_data: Option<ImpureImData<'vir>>,
+    pub im_mode: bool,
+    pub im_data: ImpureImData<'vir>,
 }
 
 /// Represents an abstract pointer and its associated implicit capabilities,
@@ -2271,7 +2272,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             .map(|arg| self.encode_operand(&arg.node).unwrap())
                             .collect::<Vec<_>>();
 
-                        let call = func_out.call(method_in, dest);
+                        let call = func_out.call(self.im_state_ref(), method_in, dest);
 
                         let label_pre = self.new_label("pre");
                         vcx.handle_error(
@@ -2529,36 +2530,27 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     // Interior Mutability
 
     fn in_im_mode(&self) -> bool {
-        self.im_mode_data.is_some()
+        self.im_mode
     }
 
-    // requires: self.in_im_mode()
-    fn im_mode_data(&self) -> &ImpureImData<'vir> {
-        self.im_mode_data.as_ref().unwrap()
+    fn im_state_ref(&self) -> &vir::Expr<'vir, vir::Ref> {
+        &self.im_data.im_state_ref
     }
 
-    // requires: self.in_im_mode()
     fn curr_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
-        &self.im_mode_data().curr_im_state
+        &self.im_data.curr_im_state
     }
 
-    // requires: self.in_im_mode()
     fn prev_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
-        &self.im_mode_data().prev_im_state
-    }
-
-    // requires: self.in_im_mode()
-    fn old_im_state(&self) -> &vir::Expr<'vir, vir::ImState> {
-        &self.im_mode_data().old_im_state
+        &self.im_data.prev_im_state
     }
 
     // requires: self.in_im_mode()
     fn bump_im_state(&mut self) -> EncodeResult<'vir, (), E> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
-        let assign_prev = self.vcx.mk_pure_assign_stmt(self.prev_im_state(), im_state.next_idn.call()(self.curr_im_state()));
+        let assign_prev = self.vcx.mk_pure_assign_stmt(self.prev_im_state(), self.curr_im_state());
         self.stmt(assign_prev);
-        let assign_curr = self.vcx.mk_pure_assign_stmt(self.curr_im_state(), im_state.next_idn.call()(self.curr_im_state()));
-        self.stmt(assign_curr);
+        self.stmt(&im_state.bump_idn.call()(self.im_state_ref()).alloc());
         Ok(())
     }
 
