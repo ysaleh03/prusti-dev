@@ -135,7 +135,6 @@ pub enum AddrOp {
 pub enum RepOp {
     NewAddr,
     NewRef,
-    Eq,
 }
 
 /// A `prusti_contracts` builtin, classified from the callee and grouped by
@@ -151,7 +150,6 @@ pub enum PrustiBuiltin {
     SnapNe,
     SnapClone,
     RepEq,
-    RepNe,
     Seq(SeqOp),
     /// An operation on `Set` (`multiset: false`) or `Multiset` (`true`).
     AnySet {
@@ -212,10 +210,11 @@ impl PrustiBuiltin {
                     .unwrap()
                     .to_target_usize(tcx) as usize
             };
-            // TODO if we want to handle rep equality differently can we return Some(Self::RepEq) here?
 
             // The methods defined on all ghost types, early return here.
             match (self_ty_name, item) {
+                // (Interior Mutability) The  only operation on Reps is test equality
+                // so we can handle it in a special way.
                 (Some("Rep"), "eq") => return Some(Self::RepEq),
                 (Some(_), "eq") => return Some(Self::SnapEq),
                 (Some(_), "ne") => return Some(Self::SnapNe),
@@ -314,8 +313,8 @@ impl PrustiBuiltin {
             | Self::Rep(_)
             | Self::SnapEq
             | Self::SnapNe
-            | Self::RepEq
-            | Self::RepNe => true,
+            | Self::RepEq => true,
+            // | Self::RepNe => true,
             // `Call`/`Erased` are legitimate only inside a `ghost!` block's
             // dead arm, which is exempt from the spec-only rejection: a stray
             // executable `ghost_call` (i.e. not from a `ghost!` block) would
@@ -464,6 +463,7 @@ impl<'vir> PrustiBuiltinExpr<'vir> {
     }
 }
 
+// TODO IM perhaps we add the imstate here?
 type ExprRet<'vir, T> = vir::ExprGen<'vir, PrustiBuiltinOperands<'vir>, vir::ExprKind<'vir>, T>;
 
 type EncResult<'vir, T> = Result<T, EncodeFullError<'vir, PrustiBuiltinEnc>>;
@@ -560,10 +560,9 @@ impl PrustiBuiltinEnc {
                 ctxt.native_cmp(bin_op, lhs, rhs).upcast_ty()
             }
             PrustiBuiltin::SnapClone => ctxt.deref_operand(0)?,
-            PrustiBuiltin::RepEq | PrustiBuiltin::RepNe => {
+            PrustiBuiltin::RepEq => {
                 let bin_op = match builtin {
                     PrustiBuiltin::RepEq => vir::BinOpKind::CmpEq,
-                    PrustiBuiltin::RepNe => vir::BinOpKind::CmpNe,
                     _ => unreachable!(),
                 };
                 // TODO: change this to Rep
@@ -1124,6 +1123,10 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         self.vcx.handle_error(error_kind, move |_| {
             Some(vec![PrustiError::verification(message, span.into())])
         });
+    }
+
+    fn encode_rep_op(&mut self, op: RepOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
+        todo!()
     }
 
     fn encode_addr_op(&mut self, op: AddrOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {

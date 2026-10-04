@@ -1,9 +1,11 @@
-use std::{cell::{Cell, RefCell}, collections::HashSet};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+};
 
 use rustc_hash::FxHasher;
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
 use tracing::Instrument;
-use vir::DomainIdnCSnap;
 
 use super::{TyUsePureEnc, ty::RustTyDecomposition};
 
@@ -13,6 +15,9 @@ use super::{TyUsePureEnc, ty::RustTyDecomposition};
 pub struct ImStateEncRef<'vir> {
     pub next_idn: vir::FunctionIdn<'vir, vir::ImState, vir::ImState>,
     pub lte_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::ImState), vir::Bool>,
+    pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
+    pub get_idn: vir::FunctionIdn<'vir, vir::Ref, vir::ImState>,
+    pub bump_idn: vir::MethodIdn<'vir, vir::Ref>,
 }
 
 impl<'vir> OutputRefAny for ImStateEncRef<'vir> {}
@@ -20,9 +25,14 @@ impl<'vir> OutputRefAny for ImStateEncRef<'vir> {}
 #[derive(Debug, Clone, Copy)]
 pub struct ImStateEncResult<'vir> {
     domain: vir::Domain<'vir>,
+    pred: vir::Predicate<'vir>,
+    get: vir::Function<'vir>,
+    bump: vir::Method<'vir>,
 }
 
 pub struct ImStateEnc;
+
+// TODO should we emit impure
 
 impl TaskEncoder for ImStateEnc {
     task_encoder::encoder_cache!(ImStateEnc);
@@ -57,7 +67,23 @@ impl TaskEncoder for ImStateEnc {
                 vir::TYPE_BOOL,
             );
 
-            deps.emit_output_ref(*task_key, ImStateEncRef { next_idn, lte_idn })?;
+            let pred_idn = vir::PredicateIdn::new(vir::ViperIdent::new("p_ImState"), vir::TYPE_REF);
+
+            let get_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("st_get"),
+                vir::TYPE_REF,
+                vir::TYPE_IMSTATE,
+            );
+
+            let bump_idn = vir::MethodIdn::new(vir::ViperIdent::new("st_bump"), vir::TYPE_REF);
+
+            deps.emit_output_ref(*task_key, ImStateEncRef {
+                next_idn,
+                lte_idn,
+                pred_idn,
+                get_idn,
+                bump_idn,
+            })?;
 
             // Functions
 
@@ -90,7 +116,47 @@ impl TaskEncoder for ImStateEnc {
                 vcx.alloc_slice(&functions[..]),
                 None,
             );
-            Ok((ImStateEncResult { domain }, ()))
+
+            // ImState permission
+
+            let ref_local = vcx.mk_local_decl("rf", vir::TYPE_REF);
+            let ref_expr = vcx.mk_local_ex(ref_local);
+            let pred = vcx.mk_predicate(pred_idn, (ref_local,), None);
+
+            let ref_local = vcx.mk_local_decl("rf", vir::TYPE_REF);
+            let get = vcx.mk_function(
+                get_idn,
+                (ref_local,),
+                vcx.alloc_slice(&[vcx.mk_predicate_app_expr((pred_idn)(ref_expr)(None))]),
+                &[],
+                None,
+                None,
+            );
+
+            let bump = vcx.mk_method(
+                bump_idn,
+                (ref_local,),
+                &[],
+                vcx.alloc_slice(&[vcx.mk_predicate_app_expr((pred_idn)(ref_expr)(None))]),
+                vcx.alloc_slice(&[
+                    vcx.mk_predicate_app_expr((pred_idn)(ref_expr)(None)),
+                    vcx.mk_eq_expr(
+                        (get_idn).call()(ref_expr),
+                        next_idn.call()(get_idn.call()(ref_expr)),
+                    ),
+                ]),
+                None,
+            );
+
+            Ok((
+                ImStateEncResult {
+                    domain,
+                    pred,
+                    get,
+                    bump,
+                },
+                (),
+            ))
         })
     }
 
@@ -102,7 +168,7 @@ impl TaskEncoder for ImStateEnc {
 }
 
 thread_local! {
-   static TYPE_CTR: Cell<usize> = Cell::new(0); 
+   static TYPE_CTR: Cell<usize> = Cell::new(0);
 }
 
 pub fn inc_type_ctr() -> usize {

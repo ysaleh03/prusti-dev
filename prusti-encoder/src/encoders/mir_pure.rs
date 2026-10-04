@@ -1457,40 +1457,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         Ok((qvars, body.downcast_ty::<vir::Bool>()))
     }
 
-    /// (Interior Mutability) this is a bit of a hack, but in order to support
-    /// comparisons between the rep of an abstract address's target and a
-    /// mutable reference's target, we'd like to be able to use mutable refs as
-    /// a well-definedness check for building a rep, while essentially reborrowing
-    /// into a shared reference in order to encode the constraint.
-    ///
-    /// oh, and we also need access to the old and new imstate versions in order to
-    /// encode the moved constraint.
-    ///
-    /// the issue is that mutable reference targets and owned places are represented
-    /// differently, as generic or concrete snaps.
-    ///
-    /// some options:
-    /// - if there is a nice way to tell if 
-    fn encode_rep_builtin()
-    {
-
-        // can we somehow make the rep constructor create some extranneous binding to do
-        // the WD check followed by a shared borrow?
-
-        // TODO one idea is to bypass the weirdness in the encoding of mutrefs by somehow
-        // forcing prusti to encode the &mut T-typed arguments as &T instead. Then we don't
-        // have to worry about things like getting the right address? eh?
-
-        // TODO encode operands as immref snapshots
-        //
-        // TODO there are two cases: 1) either the operands come from arguments that
-        // themselves are mutable references or 2) the operands are spec-only mutable
-        // borrows of owned arguments
-        //
-
-        
-    }
-
     /// Encodes the pure-only `prusti_contracts` builtins (quantifiers, spec
     /// blocks, and the old/rel/before-expiry mode markers), which need this
     /// encoder's own state. The operand-based builtins are handled by the
