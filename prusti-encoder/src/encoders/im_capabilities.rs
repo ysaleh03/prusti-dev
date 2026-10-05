@@ -1,6 +1,6 @@
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
 
-use super::{ty::RustTyDecomposition, ImStateEnc, ImTyNameEnc, ImTyStateEnc};
+use super::{ty::RustTyDecomposition, ImStateEnc, ImTyEnc, ImTyNameEnc, ImTyStateEnc};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImCapEncRef<'vir> {
@@ -68,6 +68,8 @@ impl TaskEncoder for ImCapEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
+        // TODO remove
+
         let im_state = deps.require_ref::<ImStateEnc>(())?;
         let im_ty_state = deps.require_ref::<ImTyStateEnc>(*task_key)?;
 
@@ -222,16 +224,20 @@ impl TaskEncoder for ImCapEnc {
                 });
             axioms.push(shared_stable);
 
-            let exclusive_moved = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "cap_exclusive_moved_{}", ty_name),
+            let im_ty = deps.require_ref::<ImTyEnc>(*task_key)?;
+
+            let exclusive_rep_eq = vcx.mk_domain_axiom(
+                vir::vir_format_identifier!(vcx, "cap_exclusive_rep_eq_{}", ty_name),
                 vir::expr! {
                     forall s: ImState, l: Ref, i: Int ::
                     { ([exclusive_idn](s, i, l)) }
                     ([exclusive_idn](s, i, l)) ==>
-                        ([im_ty_state.moved_idn](s, l, ([im_state.next_idn](s)), l))
+                        ([im_ty.common.rep_eq_idn](
+                            ([im_ty.common.mk_rep_idn](s, l, ([im_ty_state.get_snap_idn](s, l)))),
+                            ([im_ty.common.mk_rep_idn](s, l, ([im_ty_state.get_snap_idn](([im_state.next_idn](s)), l))))))
                 },
             );
-            axioms.push(exclusive_moved);
+            axioms.push(exclusive_rep_eq);
 
             let exclusive_modifiable = vcx.mk_domain_axiom(
                 vir::vir_format_identifier!(vcx, "cap_exclusive_modifiable_{}", ty_name),

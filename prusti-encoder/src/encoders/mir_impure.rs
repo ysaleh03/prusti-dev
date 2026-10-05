@@ -43,7 +43,7 @@ use vir::{CastType, CompType, LocalDeclData};
 use crate::encoders::{
     self, mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, ty::{
         generics::{GArgs, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition
-    }, FunctionCallEnc, ImTyStateEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
+    }, FunctionCallEnc, ImTyEnc, ImTyStateEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
 };
 
 use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
@@ -1971,19 +1971,29 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
                                 let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
 
-                                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+
                                 let im_ty_state = self.deps.require_ref::<ImTyStateEnc>(dest_ty)?;
+                                let im_ty = self.deps.require_ref::<ImTyEnc>(dest_ty)?;
 
                                 match op {
                                     mir::Operand::Move(source)
                                   | mir::Operand::Copy(source) => {
                                       let source_enc = self.encode_place(Place::from(*source))?;
                                       let source_addr = source_enc.expr.address;
-                                      self.stmt(self.vcx.mk_inhale_stmt(im_ty_state.moved_idn.call()(
+
+                                      let rep_pre = im_ty.common.mk_rep_idn.call()(
                                           self.prev_im_state(),
                                           source_addr,
+                                          im_ty_state.get_snap_idn.call()(self.prev_im_state(), source_addr)
+                                      );
+                                      let rep_post = im_ty.common.mk_rep_idn.call()(
                                           self.curr_im_state(),
-                                          dest_addr, 
+                                          dest_addr,
+                                          im_ty_state.get_snap_idn.call()(self.curr_im_state(), dest_addr)
+                                      );
+
+                                      self.stmt(self.vcx.mk_inhale_stmt(im_ty.common.rep_eq_idn.call()(
+                                          rep_pre, rep_post
                                       )));
                                     }
                                     _ => {}

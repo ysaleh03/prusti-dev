@@ -142,7 +142,7 @@ impl TaskEncoder for ImStateEnc {
                     vcx.mk_predicate_app_expr((pred_idn)(ref_expr)(None)),
                     vcx.mk_eq_expr(
                         (get_idn).call()(ref_expr),
-                        next_idn.call()(get_idn.call()(ref_expr)),
+                        next_idn.call()(vcx.mk_old_expr(get_idn.call()(ref_expr))),
                     ),
                 ]),
                 None,
@@ -216,8 +216,6 @@ pub struct ImTyStateEncRef<'vir> {
     pub get_snap_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Snap>,
     pub allocated_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
     pub fresh_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-    pub moved_idn:
-        vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::ImState, vir::Ref), vir::Bool>,
     pub modifiable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
     pub not_modified_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
 }
@@ -267,17 +265,6 @@ impl TaskEncoder for ImTyStateEnc {
                 vir::TYPE_BOOL,
             );
 
-            let moved_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_moved_{}", ty_name),
-                (
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_REF,
-                    vir::TYPE_IMSTATE,
-                    vir::TYPE_REF,
-                ),
-                vir::TYPE_BOOL,
-            );
-
             let modifiable_idn = vir::FunctionIdn::new(
                 vir::vir_format_identifier!(vcx, "st_modifiable_{}", ty_name),
                 (vir::TYPE_IMSTATE, vir::TYPE_REF),
@@ -294,7 +281,6 @@ impl TaskEncoder for ImTyStateEnc {
                 get_snap_idn,
                 allocated_idn,
                 fresh_idn,
-                moved_idn,
                 modifiable_idn,
                 not_modified_idn,
             })?;
@@ -307,9 +293,6 @@ impl TaskEncoder for ImTyStateEnc {
 
             let fresh_fn = vcx.mk_domain_function(fresh_idn, false, None);
             functions.push(fresh_fn);
-
-            let moved_fn = vcx.mk_domain_function(moved_idn, false, None);
-            functions.push(moved_fn);
 
             let modifiable_fn = vcx.mk_domain_function(modifiable_idn, false, None);
             functions.push(modifiable_fn);
@@ -339,24 +322,6 @@ impl TaskEncoder for ImTyStateEnc {
                 },
             );
             axioms.push(fresh_allocated);
-
-            let moved_trans = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "moved_trans_{}", ty_name),
-                vir::expr!{
-                forall s0: ImState, s1: ImState, s2: ImState, l0: Ref, l1: Ref, l2: Ref ::
-                { ([moved_idn](s0, l0, s1, l1)), ([moved_idn](s1, l1, s2, l2)) }
-                (([moved_idn](s0, l0, s1, l1)) && ([moved_idn](s1, l1, s2, l2))) ==> ([moved_idn](s0, l0, s2, l2))
-            });
-            axioms.push(moved_trans);
-
-            let moved_eq = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "moved_eq_{}", ty_name),
-                vir::expr!{
-                forall s0: ImState, s1: ImState, l0: Ref, l1: Ref ::
-                { ([moved_idn](s0, l0, s1, l1)) }
-                ([moved_idn](s0, l0, s1, l1)) ==> (([get_snap_idn](s0, l0)) == ([get_snap_idn](s1, l1)))
-            });
-            axioms.push(moved_eq);
 
             let fresh_modifiable = vcx.mk_domain_axiom(
                 vir::vir_format_identifier!(vcx, "fresh_modifiable_{}", ty_name),

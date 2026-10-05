@@ -164,9 +164,6 @@ macro_rules! vir_type {
     ($vcx:expr; ImState) => {
         $crate::TYPE_IMSTATE
     };
-    ($vcx:expr; ImCap) => {
-        $crate::TYPE_IMCAP
-    };
     ($vcx:expr; [ $ty:expr ]) => {
         $ty
     };
