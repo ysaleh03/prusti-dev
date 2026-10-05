@@ -369,6 +369,9 @@ impl TaskEncoder for MethodEnc {
 
                     im_mode: true, // TODO pull this from elsewhere
                     im_data,
+
+                    cached_tyvals: Default::default(),
+                    tyval_decls: Default::default(),
                 };
                 // if we encountered an error/cycle during encoding, we don't
                 // emit a method body; encoding errors additionally surface as
@@ -381,6 +384,7 @@ impl TaskEncoder for MethodEnc {
                                 .decls()
                                 .map(|v| vcx.mk_local_decl_stmt(v, Some(vcx.mk_bool::<false>()))),
                         );
+                        start_stmts.extend(visitor.tyval_decls);
                         visitor.encoded_blocks[0] = vcx.mk_cfg_block(
                             &vir::CfgBlockLabelData::Start,
                             &[],

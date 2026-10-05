@@ -43,7 +43,7 @@ use vir::{CastType, CompType, LocalDeclData};
 use crate::encoders::{
     self, mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, ty::{
         generics::{GArgs, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition
-    }, FunctionCallEnc, ImTyEnc, ImTyStateEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
+    }, FunctionCallEnc, ImTyEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
 };
 
 use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
@@ -188,6 +188,9 @@ where
     /// (Interior Mutability) encoding data relevant to interior mutability reasoning
     pub im_mode: bool,
     pub im_data: ImpureImData<'vir>,
+
+    pub cached_tyvals: FxHashMap<RustTyDecomposition<'vir>, vir::ExprTyVal<'vir>>,
+    pub tyval_decls: Vec<vir::Stmt<'vir>>,
 }
 
 /// Represents an abstract pointer and its associated implicit capabilities,
@@ -1970,10 +1973,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                 let dest_addr = dest_enc.expr.address;
 
                                 let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
+                                let dest_tyval = self.get_tyval(dest_ty)?;
 
-
-                                let im_ty_state = self.deps.require_ref::<ImTyStateEnc>(dest_ty)?;
-                                let im_ty = self.deps.require_ref::<ImTyEnc>(dest_ty)?;
+                                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
 
                                 match op {
                                     mir::Operand::Move(source)
@@ -1981,19 +1983,19 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                       let source_enc = self.encode_place(Place::from(*source))?;
                                       let source_addr = source_enc.expr.address;
 
-                                      let rep_pre = im_ty.common.mk_rep_idn.call()(
+                                      let rep_pre = im_state.mk_rep_idn.call()(
                                           self.prev_im_state(),
                                           source_addr,
-                                          im_ty_state.get_snap_idn.call()(self.prev_im_state(), source_addr)
+                                          im_state.get_snap_idn.call()(dest_tyval, self.prev_im_state(), source_addr)
                                       );
-                                      let rep_post = im_ty.common.mk_rep_idn.call()(
+                                      let rep_post = im_state.mk_rep_idn.call()(
                                           self.curr_im_state(),
                                           dest_addr,
-                                          im_ty_state.get_snap_idn.call()(self.curr_im_state(), dest_addr)
+                                          im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest_addr)
                                       );
 
-                                      self.stmt(self.vcx.mk_inhale_stmt(im_ty.common.rep_eq_idn.call()(
-                                          rep_pre, rep_post
+                                      self.stmt(self.vcx.mk_inhale_stmt(im_state.rep_eq_idn.call()(
+                                          dest_tyval, rep_pre, rep_post
                                       )));
                                     }
                                     _ => {}
@@ -2574,6 +2576,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
         comment!(self, "[IM] implicit capabilites from place capabilities:");
 
+        let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+
         for p in pcg.places_with_capability(CapabilityKind::Read) {
             // if p.prefix_place().is_some() {
             //     continue;
@@ -2584,9 +2588,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let addr_expr = place_enc.expr.address;
 
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
+            let tyval = self.get_tyval(ty_decomp)?;
             
-            let cap_expr = ty_caps.shared_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+            // TODO enumerate places??
+            let cap_expr = im_caps.shared_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
@@ -2601,9 +2606,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let addr_expr = place_enc.expr.address;
 
             let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let ty_caps = self.deps.require_ref::<ImCapEnc>(ty_decomp)?;
+            let tyval = self.get_tyval(ty_decomp)?;
             
-            let cap_expr = ty_caps.exclusive_idn.call()(self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+            let cap_expr = im_caps.exclusive_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
 
             self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
         }
@@ -2661,6 +2666,22 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
 
         Ok(())
+    }
+
+    fn get_tyval(&mut self, ty: RustTyDecomposition<'vir>) -> EncodeResult<'vir, vir::ExprTyVal<'vir>, E> {
+        match self.cached_tyvals.get(&ty) {
+            Some(tyval) => Ok(*tyval),
+            None => {
+                let decl_name = format!("ty_{}_{}", ty.ty.data.name(), self.cached_tyvals.len()).to_string();
+                let tyval_decl = self.vcx.mk_local_decl(self.vcx.alloc_str(&decl_name), vir::TYPE_TYVAL);
+                let tyval = self.deps.require_dep::<TyExprEnc>(ty)?;
+                let tyval_assign = self.vcx.mk_local_decl_stmt(tyval_decl, Some(tyval));
+                self.tyval_decls.push(tyval_assign);
+                let tyval_ex = self.vcx.mk_local_ex(tyval_decl);
+                self.cached_tyvals.insert(ty, tyval_ex);
+                Ok(tyval_ex)
+            }
+        }
     }
 }
 

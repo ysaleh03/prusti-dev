@@ -18,7 +18,6 @@ pub mod custom;
 pub mod addr;
 
 pub use im_state::ImStateEnc;
-pub use im_state::ImTyStateEnc;
 pub use im_state::ImTyNameEnc;
 pub use im_capabilities::ImCapEnc;
 

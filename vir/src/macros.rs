@@ -164,6 +164,9 @@ macro_rules! vir_type {
     ($vcx:expr; ImState) => {
         $crate::TYPE_IMSTATE
     };
+    ($vcx:expr; GRep) => {
+        $crate::TYPE_GREP
+    };
     ($vcx:expr; [ $ty:expr ]) => {
         $ty
     };

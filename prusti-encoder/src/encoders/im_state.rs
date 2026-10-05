@@ -15,6 +15,16 @@ use super::{TyUsePureEnc, ty::RustTyDecomposition};
 pub struct ImStateEncRef<'vir> {
     pub next_idn: vir::FunctionIdn<'vir, vir::ImState, vir::ImState>,
     pub lte_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::ImState), vir::Bool>,
+
+    pub get_snap_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::PSnap>,
+    pub allocated_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
+    pub fresh_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
+    pub modifiable_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
+    pub not_modified_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
+
+    pub mk_rep_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::PSnap), vir::GRep>,
+    pub rep_eq_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::GRep, vir::GRep), vir::Bool>,
+
     pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
     pub get_idn: vir::FunctionIdn<'vir, vir::Ref, vir::ImState>,
     pub bump_idn: vir::MethodIdn<'vir, vir::Ref>,
@@ -56,30 +66,81 @@ impl TaskEncoder for ImStateEnc {
             let mut axioms = Vec::new();
 
             let next_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("st_next"),
+                vir::ViperIdent::new("im_next"),
                 vir::TYPE_IMSTATE,
                 vir::TYPE_IMSTATE,
             );
 
+            let get_snap_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_get_snap"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_PSNAP,
+            );
+
+            let allocated_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_allocated"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
+            let fresh_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_fresh"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
+            let modifiable_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_modifiable"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
+            let not_modified_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_not_modified"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_BOOL,
+            );
+
             let lte_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("st_lte"),
+                vir::ViperIdent::new("im_lte"),
                 (vir::TYPE_IMSTATE, vir::TYPE_IMSTATE),
                 vir::TYPE_BOOL,
             );
 
-            let pred_idn = vir::PredicateIdn::new(vir::ViperIdent::new("p_ImState"), vir::TYPE_REF);
+            let mk_rep_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_mk_rep"),
+                (vir::TYPE_IMSTATE, vir::TYPE_REF, vir::TYPE_PSNAP),
+                vir::TYPE_GREP,
+            );
+
+            let rep_eq_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_rep_eq"),
+                (vir::TYPE_TYVAL, vir::TYPE_GREP, vir::TYPE_GREP),
+                vir::TYPE_BOOL,
+            );
+
+            // Impure Ops
 
             let get_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("st_get"),
+                vir::ViperIdent::new("im_get"),
                 vir::TYPE_REF,
                 vir::TYPE_IMSTATE,
             );
 
-            let bump_idn = vir::MethodIdn::new(vir::ViperIdent::new("st_bump"), vir::TYPE_REF);
+            let pred_idn = vir::PredicateIdn::new(vir::ViperIdent::new("p_ImState"), vir::TYPE_REF);
+
+            let bump_idn = vir::MethodIdn::new(vir::ViperIdent::new("im_bump"), vir::TYPE_REF);
 
             deps.emit_output_ref(*task_key, ImStateEncRef {
                 next_idn,
                 lte_idn,
+                get_snap_idn,
+                allocated_idn,
+                fresh_idn,
+                modifiable_idn,
+                not_modified_idn,
+                mk_rep_idn,
+                rep_eq_idn,
                 pred_idn,
                 get_idn,
                 bump_idn,
@@ -87,30 +148,101 @@ impl TaskEncoder for ImStateEnc {
 
             // Functions
 
-            let next_fn = vcx.mk_domain_function(next_idn, false, None);
-            functions.push(next_fn);
-
-            let lte_fn = vcx.mk_domain_function(lte_idn, false, None);
-            functions.push(lte_fn);
+            functions.push(vcx.mk_domain_function(next_idn, false, None));
+            functions.push(vcx.mk_domain_function(lte_idn, false, None));
+            functions.push(vcx.mk_domain_function(get_snap_idn, false, None));
+            functions.push(vcx.mk_domain_function(allocated_idn, false, None));
+            functions.push(vcx.mk_domain_function(fresh_idn, false, None));
+            functions.push(vcx.mk_domain_function(modifiable_idn, false, None));
+            functions.push(vcx.mk_domain_function(not_modified_idn, false, None));
+            functions.push(vcx.mk_domain_function(mk_rep_idn, false, None));
+            functions.push(vcx.mk_domain_function(rep_eq_idn, false, None));
 
             // General Axioms
 
             let one = vcx.mk_int::<1>();
-            let next_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("next_defn"), vir::expr! {
+            let next_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("im_next_defn"), vir::expr! {
                 forall s: ImState :: { [next_idn](s) } (([next_idn](s)) as Int) == ((((s) as Int) + (one)) as Int)
             });
             axioms.push(next_defn);
 
-            let lte_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("lte_defn"), vir::expr! {
+            let lte_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("im_lte_defn"), vir::expr! {
                 forall s0: ImState, s1: ImState :: { ([lte_idn](s0, s1)) }
                 ([lte_idn](s0, s1)) == (((s0) as Int) < ((s1) as Int))
             });
             axioms.push(lte_defn);
 
+            let allocated_next = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_allocated_next"),
+                vir::expr! {
+                    forall t: Type, s: ImState, l: Ref :: { ([allocated_idn](t, ([next_idn](s)), l)) }
+                    ([allocated_idn](t, s, l)) ==> ([allocated_idn](t, ([next_idn](s)), l))
+                },
+            );
+            axioms.push(allocated_next);
+
+            let fresh_allocated = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_fresh_allocated"),
+                vir::expr! {
+                    forall t: Type, s: ImState, l: Ref :: { ([fresh_idn](t, s, l)), ([allocated_idn](t, s, l)) }
+                    (([fresh_idn](t, s, l)) && ([allocated_idn](t, s, l))) ==> (false)
+                },
+            );
+            axioms.push(fresh_allocated);
+
+            let fresh_modifiable =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_fresh_modifiable"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref ::
+                    { ([fresh_idn](t, s, l)) }
+                    ([fresh_idn](t, s, l)) ==> ([modifiable_idn](t, s, l))
+                });
+            axioms.push(fresh_modifiable);
+
+            let modifiable_next = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_modifiable_next"),
+                vir::expr! {
+                    forall t: Type, s: ImState, l: Ref ::
+                    { ([modifiable_idn](t, ([next_idn](s)), l)) }
+                    ([modifiable_idn](t, s, l)) ==> ([modifiable_idn](t, ([next_idn](s)), l))
+                },
+            );
+            axioms.push(modifiable_next);
+
+            let rep_eq_trans = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_eq_trans"),
+                vir::expr! {
+                    forall
+                        t: Type,
+                        r0: GRep,
+                        r1: GRep,
+                        r2: GRep ::
+                    { ([rep_eq_idn](t, r0, r1)), ([rep_eq_idn](t, r1, r2)) }
+                    (([rep_eq_idn](t, r0, r1)) && ([rep_eq_idn](t, r1, r2))) ==> ([rep_eq_idn](t, r0, r2))
+                },
+            );
+            axioms.push(rep_eq_trans);
+
+            let rep_eq_snap = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_snap_eq"),
+                vir::expr!{
+                forall
+                    t: Type,
+                    st0: ImState,
+                    st1: ImState,
+                    l0: Ref,
+                    l1: Ref,
+                    s0: PSnap,
+                    s1: PSnap ::
+                { ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1)))) }
+                ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1))))
+                        ==> (([get_snap_idn](t, st0, l0)) == ([get_snap_idn](t, st1, l1)))
+            });
+            axioms.push(rep_eq_snap);
+
             // Domain
 
             let domain = vcx.mk_domain(
-                vir::ViperIdent::new("st_common"),
+                vir::ViperIdent::new("im_Rep"),
                 &[],
                 vcx.alloc_slice(&axioms[..]),
                 vcx.alloc_slice(&functions[..]),
@@ -201,162 +333,5 @@ impl TaskEncoder for ImTyNameEnc {
             (),
             format!("ImTy{}__{}", inc_type_ctr(), task_key.ty.data.name()),
         ))
-    }
-}
-
-pub struct ImTyStateEnc;
-
-#[derive(Debug, Clone, Copy)]
-pub struct ImTyStateEncResult<'vir> {
-    domain: vir::Domain<'vir>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ImTyStateEncRef<'vir> {
-    pub get_snap_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Snap>,
-    pub allocated_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-    pub fresh_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-    pub modifiable_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-    pub not_modified_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref), vir::Bool>,
-}
-
-impl<'vir> OutputRefAny for ImTyStateEncRef<'vir> {}
-
-impl TaskEncoder for ImTyStateEnc {
-    task_encoder::encoder_cache!(ImTyStateEnc);
-    const ENCODER_NAME: &'static str = "interior mutability (per-type) state encoder";
-
-    type TaskDescription<'vir> = RustTyDecomposition<'vir>;
-    type OutputRef<'vir> = ImTyStateEncRef<'vir>;
-    type OutputFullLocal<'vir> = ImTyStateEncResult<'vir>;
-    type EncodingError = ();
-
-    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
-        *task
-    }
-
-    fn do_encode_full<'vir>(
-        task_key: &Self::TaskKey<'vir>,
-        deps: &mut TaskEncoderDependencies<'vir, Self>,
-    ) -> EncodeFullResult<'vir, Self> {
-        vir::with_vcx(|vcx| {
-            let mut functions = Vec::new();
-            let mut axioms = Vec::new();
-
-            let snap_ty = deps.require_dep::<TyUsePureEnc>(*task_key)?;
-
-            let ty_name = deps.require_dep::<ImTyNameEnc>(*task_key)?;
-
-            let get_snap_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_get_snap_{}", ty_name),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
-                snap_ty.snapshot,
-            );
-
-            let allocated_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_allocated_{}", ty_name),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
-            );
-
-            let fresh_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_fresh_{}", ty_name),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
-            );
-
-            let modifiable_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_modifiable_{}", ty_name),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
-            );
-
-            let not_modified_idn = vir::FunctionIdn::new(
-                vir::vir_format_identifier!(vcx, "st_not_modified_{}", ty_name),
-                (vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
-            );
-
-            deps.emit_output_ref(*task_key, ImTyStateEncRef {
-                get_snap_idn,
-                allocated_idn,
-                fresh_idn,
-                modifiable_idn,
-                not_modified_idn,
-            })?;
-
-            let get_snap_fn = vcx.mk_domain_function(get_snap_idn, false, None);
-            functions.push(get_snap_fn);
-
-            let allocated_fn = vcx.mk_domain_function(allocated_idn, false, None);
-            functions.push(allocated_fn);
-
-            let fresh_fn = vcx.mk_domain_function(fresh_idn, false, None);
-            functions.push(fresh_fn);
-
-            let modifiable_fn = vcx.mk_domain_function(modifiable_idn, false, None);
-            functions.push(modifiable_fn);
-
-            let not_modified_fn = vcx.mk_domain_function(not_modified_idn, false, None);
-            functions.push(not_modified_fn);
-
-            // Axioms
-
-            let im_state = deps.require_ref::<ImStateEnc>(())?;
-
-            // TODO do we also need a "forward" trigger?
-            let allocated_next = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "allocated_next_{}", ty_name),
-                vir::expr! {
-                    forall s: ImState, l: Ref :: { ([allocated_idn](([im_state.next_idn](s)), l)) }
-                    ([allocated_idn](s, l)) ==> ([allocated_idn](([im_state.next_idn](s)), l))
-                },
-            );
-            axioms.push(allocated_next);
-
-            let fresh_allocated = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "fresh_allocated_{}", ty_name),
-                vir::expr! {
-                    forall s: ImState, l: Ref :: { ([fresh_idn](s, l)), ([allocated_idn](s, l)) }
-                    (([fresh_idn](s, l)) && ([allocated_idn](s, l))) ==> (false)
-                },
-            );
-            axioms.push(fresh_allocated);
-
-            let fresh_modifiable = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "fresh_modifiable_{}", ty_name),
-                vir::expr! {
-                    forall s: ImState, l: Ref ::
-                    { ([fresh_idn](s, l)) }
-                    ([fresh_idn](s, l)) ==> ([modifiable_idn](s, l))
-                },
-            );
-            axioms.push(fresh_modifiable);
-
-            let modifiable_next = vcx.mk_domain_axiom(
-                vir::vir_format_identifier!(vcx, "modifiable_next_{}", ty_name),
-                vir::expr! {
-                    forall s: ImState, l: Ref ::
-                    { ([modifiable_idn](([im_state.next_idn](s)), l)) }
-                    ([modifiable_idn](s, l)) ==> ([modifiable_idn](([im_state.next_idn](s)), l))
-                },
-            );
-            axioms.push(modifiable_next);
-
-            let domain = vcx.mk_domain(
-                vir::vir_format_identifier!(vcx, "st__{}", ty_name),
-                &[],
-                vcx.alloc_slice(&axioms[..]),
-                vcx.alloc_slice(&functions[..]),
-                None,
-            );
-            Ok((ImTyStateEncResult { domain }, ()))
-        })
-    }
-
-    fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
-        for output in Self::all_outputs_local_no_errors(program) {
-            program.add_domain(output.domain);
-        }
     }
 }
