@@ -138,6 +138,9 @@ struct SpecEncCtx<'vir> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MirSpecEncMode {
+    // TODO IM add more modes for pure_unstable and pure_memory?
+    // TODO do well-definedness and/or stability? checks for impure mode
+
     /// Assumes the arguments and the result are available in local variables
     /// `_1p`, ... `_np`, and `_0p`, respectively, all of type `Ref``, i.e.,
     /// their snapshot is taken first.

@@ -127,6 +127,7 @@ pub enum FloatOp {
 /// The abstract pointer addr_to_ref and capability builtins
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum AddrOp {
+    ToImmRef,
     Unique,
     Shared,
     LocalUnique,

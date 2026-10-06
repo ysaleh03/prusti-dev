@@ -474,7 +474,13 @@ mod private_shared {
         pub fn to_ref(_: Addr<'a, T>) -> &'a T {
             unimplemented!()
         }
+
+        pub fn to_dyn(_: Addr<'a, T>) -> AddrDyn {
+            unimplemented!()
+        }
     }
+
+    pub struct AddrDyn;
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);
 
