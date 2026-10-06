@@ -339,7 +339,8 @@ impl TaskEncoder for ImTyEnc {
                     //     .collect::<EncResult<'vir, Vec<_>>>()?;
                     // vir::with_vcx(|vcx| vcx.mk_disj(&variants))
                 }
-                TySpecifics::Addr(_) => todo!(), // TODO inhabited predicate for these???
+                TySpecifics::Addr(_) => todo!(),
+                TySpecifics::Rep(_) => todo!(),
             };
             Ok((
                 ImTyEncResult {

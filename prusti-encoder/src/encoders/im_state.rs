@@ -28,6 +28,8 @@ pub struct ImStateEncRef<'vir> {
     pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
     pub get_idn: vir::FunctionIdn<'vir, vir::Ref, vir::ImState>,
     pub bump_idn: vir::MethodIdn<'vir, vir::Ref>,
+
+    pub state_ref_decl: vir::LocalDecl<'vir, vir::Ref>,
 }
 
 impl<'vir> OutputRefAny for ImStateEncRef<'vir> {}
@@ -131,6 +133,8 @@ impl TaskEncoder for ImStateEnc {
 
             let bump_idn = vir::MethodIdn::new(vir::ViperIdent::new("im_bump"), vir::TYPE_REF);
 
+            let state_ref_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_REF);
+
             deps.emit_output_ref(*task_key, ImStateEncRef {
                 next_idn,
                 lte_idn,
@@ -144,6 +148,7 @@ impl TaskEncoder for ImStateEnc {
                 pred_idn,
                 get_idn,
                 bump_idn,
+                state_ref_decl,
             })?;
 
             // Functions
@@ -242,7 +247,7 @@ impl TaskEncoder for ImStateEnc {
             // Domain
 
             let domain = vcx.mk_domain(
-                vir::ViperIdent::new("im_Rep"),
+                vir::ViperIdent::new("im_state"),
                 &[],
                 vcx.alloc_slice(&axioms[..]),
                 vcx.alloc_slice(&functions[..]),

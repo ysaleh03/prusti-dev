@@ -50,7 +50,6 @@ pub type TyPureImmRef<'vir> = <PureTyDatas as TyDatas<'vir>>::ImmRefData;
 pub type TyPureMutRef<'vir> = <PureTyDatas as TyDatas<'vir>>::MutRefData;
 pub type TyPureRaw<'vir> = <PureTyDatas as TyDatas<'vir>>::RawData;
 pub type TyPureBuiltin<'vir> = <PureTyDatas as TyDatas<'vir>>::BuiltinData;
-pub type TyPureAddr<'vir> = <PureTyDatas as TyDatas<'vir>>::AddrData;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TyPureBuiltinData {
@@ -60,6 +59,11 @@ pub enum TyPureBuiltinData {
     Multiset,
     Seq,
     Map,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TyPureRepData<'vir> {
+    x: &'vir (),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -359,6 +363,10 @@ impl TaskEncoder for TyPureEnc {
                     let builder = builder.set_domain_builder();
                     TySpecifics::Addr(super::kinds::addr::ty_pure(vcx, param, deps, builder)?)
                 }
+                TySpecifics::Rep(param) => {
+                    let builder = builder.set_domain_builder();
+                    TySpecifics::Rep(super::kinds::rep::ty_pure(vcx, param, deps, builder)?)
+                }
             };
             let output = TyData::new(output_ref, specifics).alloc();
             Ok((Some(builder.build()), output))
@@ -473,7 +481,7 @@ impl<'vir> TyPureBuilder<'vir> {
         ty: RustTy<'vir>,
     ) -> Self {
         let params = deps.require_dep::<GenericParamsEnc>(ty.params).unwrap();
-        let name = vir::ViperIdent::new(vir::vir_format!(vcx, "s_{}", ty.name()));
+        let mut name = vir::ViperIdent::new(vir::vir_format!(vcx, "s_{}", ty.name()));
         // The `Int`/`Real` builtins and Rust's `bool` are represented directly
         // by the native Viper `Int`/`Perm`/`Bool` types; nothing is emitted
         // for them.
@@ -500,6 +508,14 @@ impl<'vir> TyPureBuilder<'vir> {
                 vcx.mk_ty_map(vir::TYPE_PSNAP, vir::TYPE_PSNAP).upcast_ty()
             }
             TySpecifics::Primitive(prim) if prim.is_bool() => vir::TYPE_BOOL.upcast_ty(),
+            TySpecifics::Rep(_) => {
+                name = vir::ViperIdent::new("s_im_Rep");
+                DomainIdnSnap::new(name, 0)()
+            }
+            TySpecifics::Addr(_) => {
+                name = vir::ViperIdent::new("s_im_Addr");
+                DomainIdnSnap::new(name, 0)()
+            }
             _ => DomainIdnSnap::new(name, 0)(),
         };
         let unreachable_to_snap = FunctionIdn::new(

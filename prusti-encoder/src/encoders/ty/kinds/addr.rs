@@ -1,7 +1,7 @@
 use crate::encoders::ty::{
     LazyRustTy, RustAbsPtr,
-    impure::{PredicateBuilder, TyImpureAddr, TyImpureEnc},
-    pure::{DomainBuilder, TyPureAddr, TyPureEnc},
+    impure::{PredicateBuilder, TyImpureEnc},
+    pure::{DomainBuilder, TyPureAddrData, TyPureEnc},
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::VirCtxt;
@@ -11,7 +11,7 @@ pub(crate) fn ty_pure<'vir>(
     _data: &RustAbsPtr<'vir>,
     _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
     builder: &mut DomainBuilder<'vir>,
-) -> Result<TyPureAddr<'vir>, EncodeFullError<'vir, TyPureEnc>> {
+) -> Result<TyPureAddrData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let immref_type = todo!();
     let addr_to_immref = builder.function("s_ImmRef_to_Addr", vir::TYPE_REF, immref_type);
     let immref_to_addr = builder.function("Addr_to_s_ImmRef", immref_type, vir::TYPE_REF);
@@ -39,7 +39,7 @@ pub(crate) fn ty_pure<'vir>(
         forall s: [vir::TYPE_REF], pc: Int :: {[unique](s, pc)} ([unique](s, pc)) ==> ([unique](s, pc))
      });
 
-    Ok(TyPureAddr {
+    Ok(TyPureAddrData {
         addr_to_immref,
         immref_to_addr,
         unique,
@@ -49,11 +49,11 @@ pub(crate) fn ty_pure<'vir>(
     })
 }
 
-pub(crate) fn ty_impure<'vir>(
-    _data: &(&'vir LazyRustTy<'vir>, &'vir TyPureAddr<'vir>),
-    _deps: &mut TaskEncoderDependencies<'vir, TyImpureEnc>,
-    builder: &mut PredicateBuilder<'vir>,
-) -> Result<TyImpureAddr<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
-    super::primitive::set_primitive(builder);
-    Ok(())
-}
+// pub(crate) fn ty_impure<'vir>(
+//     _data: &(&'vir LazyRustTy<'vir>, &'vir TyPureAddrData<'vir>),
+//     _deps: &mut TaskEncoderDependencies<'vir, TyImpureEnc>,
+//     builder: &mut PredicateBuilder<'vir>,
+// ) -> Result<TyImpureAddrData<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
+//     super::primitive::set_primitive(builder);
+//     Ok(())
+// }

@@ -232,6 +232,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type VariantData = RustVariantData;
     type BuiltinData = RustBuiltinData<'tcx>;
     type AddrData = LazyRustTy<'tcx>;
+    type RepData = LazyRustTy<'tcx>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -696,16 +697,17 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 }
                 // `Rep<T>` is encoded as if it were `struct Rep<T>(T)`:
                 // the Rep wraps the value of `T`.
-                "Rep" => {
-                    let fields = vec![RustFieldData {
-                        name: symbol::Symbol::intern("val"),
-                        fid: abi::FieldIdx::from_usize(0),
-                        ty: LazyRustTy(Self::new_param_ty(0)),
-                        address: RustFieldAddress::Constant,
-                    }];
-                    TySpecifics::mk_structlike((), fields)
-                }
+                // {
+                //     let fields = vec![RustFieldData {
+                //         name: symbol::Symbol::intern("val"),
+                //         fid: abi::FieldIdx::from_usize(0),
+                //         ty: LazyRustTy(Self::new_param_ty(0)),
+                //         address: RustFieldAddress::Constant,
+                //     }];
+                //     TySpecifics::mk_structlike((), fields)
+                // }
                 "Addr" => TySpecifics::mk_addr(LazyRustTy(Self::new_param_ty(0))),
+                "Rep" => TySpecifics::mk_rep(LazyRustTy(Self::new_param_ty(0))),
                 // TODO: support other builtins (e.g. `Seq`, `Map`, `Set`, etc.)
                 s => todo!("Unimplemented builtin {s}"),
             }

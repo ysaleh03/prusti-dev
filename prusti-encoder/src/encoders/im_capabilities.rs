@@ -8,7 +8,6 @@ pub struct ImCapEncRef<'vir> {
         vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
     pub shared_idn:
         vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-    // TODO figure out type-refined versions of these:
     // pub local_exclusive_idn: vir::FunctionIdn<
     //     'vir,
     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
@@ -21,28 +20,6 @@ pub struct ImCapEncRef<'vir> {
     // >,
     pub addr_to_idx_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref), vir::Int>,
 }
-
-// TODO take Option of parent type to optionally encode local/atomic exclusive
-
-// #[derive(Debug, Clone, Copy)]
-// pub struct ImCapEncRefNew<'vir> {
-//     pub exclusive_idn:
-//         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-//     pub shared_idn:
-//         vir::FunctionIdn<'vir, (vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-//     // TODO figure out type-refined versions of these:
-//     // pub local_exclusive_idn: vir::FunctionIdn<
-//     //     'vir,
-//     //     (vir::ImState, vir::Int, vir::Ref, vir::Ref),
-//     //     vir::Bool,
-//     // >,
-//     // pub atomic_exclusive_idn: vir::FunctionIdn<
-//     //     'vir,
-//     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
-//     //     vir::Bool,
-//     // >,
-//     pub addr_to_idx_idn: vir::FunctionIdn<'vir, vir::Ref, vir::Int>,
-// }
 
 impl<'vir> OutputRefAny for ImCapEncRef<'vir> {}
 
@@ -59,7 +36,6 @@ impl TaskEncoder for ImCapEnc {
 
     type TaskDescription<'vir> = ();
     type OutputRef<'vir> = ImCapEncRef<'vir>;
-    // type OutputRef<'vir> = ();
     type OutputFullLocal<'vir> = ImCapEncResult<'vir>;
     type EncodingError = ();
 
@@ -71,10 +47,6 @@ impl TaskEncoder for ImCapEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-        // TODO remove
-
-        // let im_ty = deps.require_ref::<ImTyEnc>(*task_key)?;
-
         vir::with_vcx(|vcx| {
             let mut functions = Vec::new();
             let mut axioms = Vec::new();

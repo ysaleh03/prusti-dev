@@ -28,6 +28,7 @@ pub trait TyDatas<'vir>: Debug + Clone + Copy {
 
     type BuiltinData: Debug + Clone + 'vir = ();
     type AddrData: Debug + Clone + 'vir = ();
+    type RepData: Debug + Clone + 'vir = ();
 }
 
 pub type Ty<'vir, D> = &'vir TyData<'vir, D>;
@@ -49,6 +50,7 @@ pub enum TySpecifics<'vir, D: TyDatas<'vir>> {
     EnumLike(EnumData<'vir, D>),
     Builtin(D::BuiltinData),
     Addr(D::AddrData),
+    Rep(D::RepData),
 }
 
 pub struct ArrayData<'vir, D: TyDatas<'vir>> {
@@ -128,6 +130,10 @@ impl<'vir, D: TyDatas<'vir>> TySpecifics<'vir, D> {
 
     pub fn mk_addr(data: D::AddrData) -> Self {
         Self::Addr(data)
+    }
+
+    pub fn mk_rep(data: D::RepData) -> Self {
+        Self::Rep(data)
     }
 
     pub fn is_param(&self) -> bool {
@@ -363,6 +369,7 @@ impl<'vir, D1: TyDatas<'vir>, D2: TyDatas<'vir>> TyDatas<'vir> for (D1, D2) {
     type EnumData = (&'vir D1::EnumData, &'vir D2::EnumData);
     type BuiltinData = (&'vir D1::BuiltinData, &'vir D2::BuiltinData);
     type AddrData = (&'vir D1::AddrData, &'vir D2::AddrData);
+    type RepData = (&'vir D1::RepData, &'vir D2::RepData);
 }
 
 // Deref implementations
@@ -403,6 +410,7 @@ where
     D::VariantData: PartialEq,
     D::BuiltinData: PartialEq,
     D::AddrData: PartialEq,
+    D::RepData: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         self.data == other.data $(&& self.$field == other.$field)?
@@ -425,6 +433,7 @@ where
     D::VariantData: Eq,
     D::BuiltinData: Eq,
     D::AddrData: Eq,
+    D::RepData: Eq,
 {}
 
 impl<'vir, D: TyDatas<'vir>> Hash for $container<'vir, D>
@@ -443,6 +452,7 @@ where
     D::VariantData: Hash,
     D::BuiltinData: Hash,
     D::AddrData: Hash,
+    D::RepData: Hash,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.data.hash(state);
@@ -495,6 +505,7 @@ impl<'vir, D: TyDatas<'vir>> Debug for TySpecifics<'vir, D> {
             Self::EnumLike(arg0) => f.debug_tuple("EnumLike").field(arg0).finish(),
             Self::Builtin(arg0) => f.debug_tuple("Builtin").field(arg0).finish(),
             Self::Addr(arg0) => f.debug_tuple("Addr").field(arg0).finish(),
+            Self::Rep(arg0) => f.debug_tuple("Rep").field(arg0).finish(),
         }
     }
 }
@@ -513,6 +524,7 @@ impl<'vir, D: TyDatas<'vir>> Clone for TySpecifics<'vir, D> {
             Self::EnumLike(arg0) => Self::EnumLike(arg0.clone()),
             Self::Builtin(arg0) => Self::Builtin(arg0.clone()),
             Self::Addr(arg0) => Self::Addr(arg0.clone()),
+            Self::Rep(arg0) => Self::Rep(arg0.clone()),
         }
     }
 }
@@ -533,6 +545,7 @@ where
     D::VariantData: PartialEq,
     D::BuiltinData: PartialEq,
     D::AddrData: PartialEq,
+    D::RepData: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -547,6 +560,7 @@ where
             (Self::EnumLike(l0), Self::EnumLike(r0)) => l0 == r0,
             (Self::Builtin(l0), Self::Builtin(r0)) => l0 == r0,
             (Self::Addr(l0), Self::Addr(r0)) => l0 == r0,
+            (Self::Rep(l0), Self::Rep(r0)) => l0 == r0,
             _ => false,
         }
     }
@@ -568,6 +582,7 @@ where
     D::VariantData: Eq,
     D::BuiltinData: Eq,
     D::AddrData: Eq,
+    D::RepData: Eq,
 {
 }
 
@@ -587,6 +602,7 @@ where
     D::VariantData: Hash,
     D::BuiltinData: Hash,
     D::AddrData: Hash,
+    D::RepData: Hash,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
@@ -611,6 +627,7 @@ impl<'vir, D: TyDatas<'vir>> TySpecifics<'vir, D> {
             (EnumLike(d1), EnumLike(d2)) => EnumLike(d1.zip(d2)),
             (Builtin(d1), Builtin(d2)) => Builtin((d1, d2)),
             (Addr(d1), Addr(d2)) => Addr((d1, d2)),
+            (Rep(d1), Rep(d2)) => Rep((d1, d2)),
             _ => panic!("Mismatched TySpecifics variants"),
         }
     }

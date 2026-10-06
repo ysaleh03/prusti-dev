@@ -10,7 +10,12 @@ use task_encoder::{
 use vir::MethodIdn;
 
 use crate::encoders::{
-    mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc}, mir_impure::ImpureImData, pure::spec::MirSpecEncMode, ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc}, ImStateEnc, Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc, WandEncTask
+    ImStateEnc, Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, WandEnc,
+    WandEncTask,
+    mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc},
+    mir_impure::ImpureImData,
+    pure::spec::MirSpecEncMode,
+    ty::generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
 };
 
 // Method wrapper
@@ -40,8 +45,13 @@ impl<'vir> MethodCallEncOutput<'vir> {
             .collect();
 
         args.insert(0, ret);
-        let call = (self.method.method_ref)(im_state_ref, &args, self.ty_args.get_ty(), self.ty_args.get_const())
-            .alloc();
+        let call = (self.method.method_ref)(
+            im_state_ref,
+            &args,
+            self.ty_args.get_ty(),
+            self.ty_args.get_const(),
+        )
+        .alloc();
         stmts.push(call);
 
         let result = self.output.cast_to_caller_ctx(ret);
@@ -90,15 +100,12 @@ impl TaskEncoder for MethodCallEnc {
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
-        Ok((
-            (),
-            MethodCallEncOutput {
-                method: method_ref,
-                ty_args,
-                inputs,
-                output,
-            },
-        ))
+        Ok(((), MethodCallEncOutput {
+            method: method_ref,
+            ty_args,
+            inputs,
+            output,
+        }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -188,7 +195,12 @@ impl TaskEncoder for MethodEnc {
             let generics = deps.require_dep_spanned::<GenericParamsEnc>(params, span)?;
             let method_ref = MethodIdn::new(
                 method_name,
-                (vir::TYPE_REF, ref_args, generics.ty_args(), generics.const_args()),
+                (
+                    vir::TYPE_REF,
+                    ref_args,
+                    generics.ty_args(),
+                    generics.const_args(),
+                ),
             );
             deps.emit_output_ref(def_id, MethodEncOutputRef { method_ref })?;
 
@@ -230,13 +242,12 @@ impl TaskEncoder for MethodEnc {
                     EncodeFullError::EncodingError(MethodEncError::Reported, None)
                 })?;
 
-            let im_state_ref_decl = vcx.mk_local_decl("st_ref", vir::TYPE_REF);
-            let im_state_ref = vcx.mk_local_ex(im_state_ref_decl);
             let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let im_state_ref = vcx.mk_local_ex(im_state.state_ref_decl);
             let im_state_owned = vcx.mk_predicate_app_expr((im_state.pred_idn)(im_state_ref)(None));
             pres.push(im_state_owned);
             posts.push(im_state_owned);
-            
+
             // Add direct resources for inputs and outputs to the pre- and
             // postconditions, respectively. "Direct" here refers to owned
             // Viper resources that must be passed in/out given the signature,
@@ -428,7 +439,12 @@ impl TaskEncoder for MethodEnc {
                 MethodEncOutput {
                     method: vcx.mk_method(
                         method_ref,
-                        (im_state_ref_decl ,&args, generics.ty_decls(), generics.const_decls()),
+                        (
+                            im_state.state_ref_decl,
+                            &args,
+                            generics.ty_decls(),
+                            generics.const_decls(),
+                        ),
                         &[],
                         vcx.alloc_slice(&pres),
                         vcx.alloc_slice(&posts),

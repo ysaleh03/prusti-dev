@@ -1728,8 +1728,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .expr
             .reify(
                 self.vcx,
-                (self.def_id, self.vcx.alloc(locals), Some(self.vcx.alloc(local_refs)), vir::OldLabel::None), // TODO should take local refs?
-            )
+                (self.def_id, self.vcx.alloc(locals), Some(self.vcx.alloc(local_refs)), vir::OldLabel::None, Some(self.curr_im_state())))
             .downcast_ty();
 
         // TODO insert statments here concretizing locals
@@ -2505,12 +2504,14 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     span,
                 ));
             }
+            let curr_im_state = *self.curr_im_state();
             let expr = self
                 .encode_prusti_builtin(
                     builtin,
                     func_def_id,
                     self.gargs(caller_substs),
                     args,
+                    curr_im_state,
                     span,
                     &None,
                 )?

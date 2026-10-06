@@ -17,7 +17,7 @@ use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, HasType, Reify};
 
 use crate::encoders::{
-    MirLocalDefEncTask, MirPureEnc,
+    ImStateEnc, MirLocalDefEncTask, MirPureEnc,
     mir_pure::{ExprInput, MirPureEncOutput, PureKind},
     ty::generics::{GArgs, GParams},
 };
@@ -74,14 +74,16 @@ impl<'vir> PledgeExpr<'vir> {
     pub fn expr(&self, args: PledgeArgs<'vir>) -> vir::ExprBool<'vir> {
         vir::with_vcx(|vcx| {
             self.expr
-                .reify(vcx, (self.did, args.0, None, vir::OldLabel::None))
+                .reify(vcx, (self.did, args.0, None, vir::OldLabel::None, None)) // TODO IM needs imstate
         })
     }
 
     pub fn expr_at_label(&self, args: PledgeArgs<'vir>, label: &'vir str) -> vir::ExprBool<'vir> {
         vir::with_vcx(|vcx| {
-            self.expr
-                .reify(vcx, (self.did, args.0, None, vir::OldLabel::Label(label)))
+            self.expr.reify(
+                vcx,
+                (self.did, args.0, None, vir::OldLabel::Label(label), None),
+            ) // TODO IM needs imstate
         })
     }
 
@@ -272,6 +274,16 @@ impl TaskEncoder for MirSpecEnc {
                 _ => None,
             };
 
+            let im_state_ex = {
+                let im_state = deps.require_ref::<ImStateEnc>(())?;
+                match enc_mode {
+                    MirSpecEncMode::Impure => Some(im_state.get_idn.call()(
+                        vcx.mk_local_ex(im_state.state_ref_decl),
+                    )),
+                    _ => None,
+                }
+            };
+
             // Encode each functional precondition; if one cannot be encoded (e.g.
             // it uses an unsupported feature), report the error at *that spec's*
             // span and skip only it, keeping the permission contract and the other
@@ -290,7 +302,16 @@ impl TaskEncoder for MirSpecEnc {
                     // TODO we might want to make local_refs available here
                     //
                     let expr = vcx.with_span(span, |vcx| {
-                        expr.reify(vcx, (*spec_def_id, pre_args, local_refs, vir::OldLabel::None))
+                        expr.reify(
+                            vcx,
+                            (
+                                *spec_def_id,
+                                pre_args,
+                                local_refs,
+                                vir::OldLabel::None,
+                                im_state_ex,
+                            ), // TODO IM pure_unstable
+                        )
                     });
                     Some((expr, span))
                 })
@@ -325,8 +346,16 @@ impl TaskEncoder for MirSpecEnc {
                             )])
                         });
                         let expr = spec.expr.downcast_ty::<vir::Bool>();
-                        let expr =
-                            expr.reify(vcx, (*spec_def_id, post_args, local_refs, vir::OldLabel::None));
+                        let expr = expr.reify(
+                            vcx,
+                            (
+                                *spec_def_id,
+                                post_args,
+                                local_refs,
+                                vir::OldLabel::None,
+                                im_state_ex,
+                            ),
+                        );
                         let expr = expr.realloc_span();
                         Some((expr, span))
                     })

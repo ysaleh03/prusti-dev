@@ -227,6 +227,8 @@ pub(crate) trait PureRvalueEnc<'vir> {
         def_id: DefId,
         gargs: GArgs<'vir>,
         args: &[Spanned<mir::Operand<'vir>>],
+        // TODO make this not an option and rely on laziness instead??
+        curr_im_state: vir::ExprGen<'vir, Self::ExprCurr, Self::ExprNext, vir::ImState>,
         span: Span,
         ctxt: &Self::EncodePlaceCtxt,
     ) -> EncodeResult<'vir, Option<ExprOutput<'vir, Self>>, Self::Encoder> {
@@ -251,7 +253,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
             .iter()
             .map(|arg| self.encode_operand_snap(&arg.node, ctxt))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(expr.apply(self.vcx(), &operands)))
+        Ok(Some(expr.apply(self.vcx(), &operands, curr_im_state)))
     }
 
     fn encode_aggregate_snap(

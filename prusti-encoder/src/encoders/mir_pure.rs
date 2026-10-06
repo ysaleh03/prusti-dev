@@ -35,18 +35,21 @@ pub enum MirPureEncError {
 
 // TODO do we fold the interior mutability spec encoder into here?
 
+// TODO rather than putting the ImState here, read it from the heap - maybe in the builtin encoder?
 pub struct ImpureExprInput<'vir> {
     // Records the address of all non-spec locals
     addr_map: &'vir FxHashMap<mir::Local, vir::ExprRef<'vir>>,
-    // 
+    //
     snap_map: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
 }
 
+// TODO add expression that evaluates to an imstate
 pub type ExprInput<'vir> = (
     DefId,
     &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
     Option<&'vir FxHashMap<mir::Local, vir::ExprRef<'vir>>>,
     vir::OldLabel<'vir>,
+    Option<vir::Expr<'vir, vir::ImState>>,
 );
 type ExprRet<'vir> = vir::ExprGenSnap<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 type ExprRetRef<'vir> = vir::ExprGenRef<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
@@ -285,13 +288,6 @@ impl<'vir> Update<'vir> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct PureImData<'vir> {
-    /// If we are encoding a function pre/post, we wont have this:
-    pub old_im_state: Option<vir::Expr<'vir, vir::ImState>>,
-    pub curr_im_state: vir::Expr<'vir, vir::ImState>,
-}
-
 struct Enc<'vir: 'enc, 'enc> {
     vcx: &'vir vir::VirCtxt<'vir>,
     encoding_depth: usize,
@@ -312,9 +308,6 @@ struct Enc<'vir: 'enc, 'enc> {
     rel1_mode: bool,
     before_expiry_mode: bool,
     impure_context: bool,
-
-    /// (Interior Mutability) handles on interior mutability state version
-    im_mode_data: Option<PureImData<'vir>>,
 }
 
 struct EncodedPlace<'vir> {
@@ -425,7 +418,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     ..
                 } | PureKind::SpecBlock(..)
             ),
-            im_mode_data: None,
         }
     }
 
@@ -917,6 +909,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     // TODO we need to do something slightly different if the function is pure_unstable, i.e. passing the im_state
                     // do we encode everything with im_state bound? or do we have a flag...
 
+                    // TODO build the lazyexpr for imstate
+
                     // The bodiless `ptr_metadata` intrinsic is only lowered to
                     // `UnOp::PtrMetadata` in optimized MIR; do the lowering here.
                     let intrinsic = self.vcx.tcx().intrinsic(def_id);
@@ -924,11 +918,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
+
+                        let im_state_ex = self.vcx.mk_lazy_expr(
+                            "mir_pure_im_state",
+                            vir::TYPE_IMSTATE,
+                            Box::new(move |_vcx, lctx: ExprInput<'vir>| {
+                                assert!(lctx.4.is_some(), "current ImState not bound");
+                                lctx.4.unwrap().kind
+                            }),
+                        );
+
                         match self.encode_prusti_builtin(
                             builtin,
                             def_id,
                             self.gargs(arg_tys),
                             args,
+                            im_state_ex,
                             term.source_info.span,
                             &new_curr_ver,
                         )? {
@@ -1026,8 +1031,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 // TODO only if this is a reborrow of a mutable reference, encode it!
                 let rvalue_snapshot_encoding = self.ty_use(rvalue_ty);
                 let encoded_place = self.encode_place_with_ref(curr_ver, (*place).into())?;
-                // what to do if 
-
+                // what to do if
 
                 // We want to distinguish if `place` is a value that lives
                 // in pure code or not. If it lives in impure (the only way
@@ -1041,7 +1045,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
 
                 // TODO we need the mutable ref only for the WD check
                 // really what we want is the address + the deep snapshot or Ref, depends
-                
+
                 // Reading a mutable reference's referent needs an address
                 // holding a predicate, which pure-created mutrefs don't have.
                 if kind.mutability().is_mut() && encoded_place.place_ref.is_none() {
@@ -1165,6 +1169,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         EncodedPlace::new(val_expr, Some(ref_expr)).with_metadata(metadata)
                     }
                     TyKind::Ref(.., ty::Mutability::Mut) => {
+                        // TODO make this work with mutable refs in structs?
                         let e_ty = e_ty.expect_mutref();
                         let snap = encoded_place.snap.downcast_ty();
                         let metadata = e_ty.metadata_access(snap);
@@ -1338,8 +1343,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 && self.impure_context
                 && matches!(elem, mir::ProjectionElem::Deref)
                 && matches!(place_ty.ty.kind(), TyKind::Ref(.., ty::Mutability::Mut));
-            encoded_place =
-                self.encode_place_element(curr_ver, place_ty, *elem, encoded_place)?;
+            encoded_place = self.encode_place_element(curr_ver, place_ty, *elem, encoded_place)?;
             place_ty = place_ty.projection_ty(self.vcx.tcx(), *elem);
             if heap_read && self.old_mode {
                 let inner = encoded_place.snap;
@@ -1451,7 +1455,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             vir::vir_format!(self.vcx, "spec closure body ({name})"),
             body.ty(),
             Box::new(move |vcx, lctx: ExprInput<'vir>| {
-                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3)).kind
+                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3, None)).kind
             }),
         );
         Ok((qvars, body.downcast_ty::<vir::Bool>()))

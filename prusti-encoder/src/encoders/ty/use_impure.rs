@@ -236,6 +236,7 @@ impl<'a, 'vir> TyUseImpureWalker<'a, 'vir> {
             }
             TySpecifics::Builtin(..) => TySpecifics::mk_builtin(()),
             TySpecifics::Addr(..) => TySpecifics::mk_addr(()),
+            TySpecifics::Rep(..) => TySpecifics::mk_rep(()),
         };
         let data = TyUseImpureData {
             args: self.args_t,
@@ -435,7 +436,8 @@ impl<'vir> TyData<'vir, UseImpureTyDatas> {
             TySpecifics::Param(_)
             | TySpecifics::Primitive(_)
             | TySpecifics::Builtin(_)
-            | TySpecifics::Addr(_) => {
+            | TySpecifics::Addr(_)
+            | TySpecifics::Rep(_) => {
                 unreachable!()
             }
             TySpecifics::Opaque(_) => panic!("cannot fold opaque type"),
@@ -487,7 +489,8 @@ impl<'vir> TyData<'vir, UseImpureTyDatas> {
             TySpecifics::Param(_)
             | TySpecifics::Primitive(_)
             | TySpecifics::Builtin(_)
-            | TySpecifics::Addr(_) => {
+            | TySpecifics::Addr(_)
+            | TySpecifics::Rep(_) => {
                 unreachable!()
             }
             TySpecifics::Opaque(_) => panic!("cannot unfold opaque type"),
