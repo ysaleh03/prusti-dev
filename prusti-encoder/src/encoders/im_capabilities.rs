@@ -202,18 +202,19 @@ impl TaskEncoder for ImCapEnc {
                 });
             axioms.push(shared_stable);
 
-            let exclusive_rep_eq = vcx.mk_domain_axiom(
-                vir::ViperIdent::new("im_exclusive_rep_eq"),
-                vir::expr! {
-                    forall t: Type, s: ImState, l: Ref, i: Int ::
-                    { ([exclusive_idn](t, s, i, l)) }
+            let exclusive_rep_eq =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_exclusive_rep_eq"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int, p: PSnap ::
+                    { ([exclusive_idn](t, s, i, l)), ([im_state.rep_eq_idn](
+                            t,
+                            ([im_state.mk_rep_idn](s, l, p)),
+                            ([im_state.mk_rep_idn](([im_state.next_idn](s)), l, p)))) }
                     ([exclusive_idn](t, s, i, l)) ==>
                         ([im_state.rep_eq_idn](
                             t,
-                            ([im_state.mk_rep_idn](s, l, ([im_state.get_snap_idn](t, s, l)))),
-                            ([im_state.mk_rep_idn](s, l, ([im_state.get_snap_idn](t, ([im_state.next_idn](s)), l))))))
-                },
-            );
+                            ([im_state.mk_rep_idn](s, l, p)),
+                            ([im_state.mk_rep_idn](([im_state.next_idn](s)), l, p))))
+                });
             axioms.push(exclusive_rep_eq);
 
             let exclusive_modifiable = vcx.mk_domain_axiom(

@@ -470,12 +470,10 @@ mod private_shared {
         }
     }
 
-    pub fn ref_to_addr<'a, T: ?Sized>(_: &'a T) -> Addr<'a, T> {
-        unimplemented!()
-    }
-
-    pub fn addr_to_ref<'a, T: ?Sized>(_: Addr<'a, T>) -> &'a T {
-        unimplemented!()
+    impl<'a, T: ?Sized> Addr<'a, T> {
+        pub fn to_ref(_: Addr<'a, T>) -> &'a T {
+            unimplemented!()
+        }
     }
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);

@@ -213,6 +213,31 @@ impl TaskEncoder for ImStateEnc {
             );
             axioms.push(modifiable_next);
 
+            let rep_eq_refl = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_eq_refl"),
+                vir::expr! {
+                    forall
+                        t: Type,
+                        r: GRep ::
+                    { ([rep_eq_idn](t, r, r)) }
+                    [rep_eq_idn](t, r, r)
+                },
+            );
+            axioms.push(rep_eq_refl);
+
+            let rep_eq_sym = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_eq_sym"),
+                vir::expr! {
+                    forall
+                        t: Type,
+                        r0: GRep,
+                        r1: GRep ::
+                    { ([rep_eq_idn](t, r0, r1)) }
+                    ([rep_eq_idn](t, r0, r1)) ==> ([rep_eq_idn](t, r1, r0))
+                },
+            );
+            axioms.push(rep_eq_sym);
+
             let rep_eq_trans = vcx.mk_domain_axiom(
                 vir::ViperIdent::new("im_rep_eq_trans"),
                 vir::expr! {

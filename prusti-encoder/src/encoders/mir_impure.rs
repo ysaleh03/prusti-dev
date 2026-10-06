@@ -1930,16 +1930,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_phase_actions(location, EvalStmtPhase::PostOperands)?;
             self.pcg_phase_actions(location, EvalStmtPhase::PreMain)?;
 
-            // // (Interior Mutability)
-            // if self.in_im_mode() {
-            //     let current_fpcs = self.current_fpcs.take().unwrap();
-            //     let cfpcs = &current_fpcs.statements[location.statement_index];
-            //     let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-            //     self.inhale_im_place_capabilities(pcg)?;
-            //     self.current_fpcs = Some(current_fpcs);
-
-            // }
-
             // Assignments to the locals only serving specification-only arms
             // (necessarily scaffolding stores) are not encoded, since the
             // locals are not declared.
@@ -1952,13 +1942,11 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
             let span = statement.source_info.span;
 
-            // (Interior Mutability) `curr_im_state` is now the post-state and `prev_im_state` is the pre-state
+            // (Interior Mutability) handling of side-effectful statements (assignments)
             if self.in_im_mode() {
-                // TODO IM handling of assignments
                 match &statement.kind {
                     mir::StatementKind::Assign(box (dest, rvalue)) => {
-
-                        // TODO only need to model state changes for relevant statements
+                        // TODO only need to model changes to *tracked* state
                         let current_fpcs = self.current_fpcs.take().unwrap();
                         let cfpcs = &current_fpcs.statements[location.statement_index];
                         let pcg = &cfpcs.states[EvalStmtPhase::PreMain];

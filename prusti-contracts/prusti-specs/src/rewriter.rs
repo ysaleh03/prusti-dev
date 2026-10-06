@@ -78,7 +78,7 @@ impl AstRewriter {
         };
         let fn_arg = syn::FnArg::Typed(syn::PatType {
             attrs: Vec::new(),
-            pat: Box::new(parse_quote_spanned!(item_span=> result)),
+            pat: Box::new(parse_quote_spanned!(item_span=> mut result)),
             colon_token: syn::Token![:](item.sig().output.span()),
             ty: output_ty,
         });

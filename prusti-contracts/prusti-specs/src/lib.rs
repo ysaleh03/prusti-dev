@@ -884,8 +884,8 @@ pub fn closure(tokens: TokenStream) -> TokenStream {
         .map(|_| quote_spanned! {callsite_span=> ::core::option::Option::None.unwrap() })
         .collect::<Vec<_>>();
     let result_param = match &output {
-        syn::ReturnType::Type(_, ty) => quote_spanned! {callsite_span=> result: #ty },
-        syn::ReturnType::Default => quote_spanned! {callsite_span=> result },
+        syn::ReturnType::Type(_, ty) => quote_spanned! {callsite_span=> mut result: #ty },
+        syn::ReturnType::Default => quote_spanned! {callsite_span=> mut result },
     };
 
     // Hygienic: user code inside the closure body cannot refer to this binding.
