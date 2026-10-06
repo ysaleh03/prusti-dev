@@ -276,7 +276,7 @@ impl Display for ProcedureSpecificationKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcedureSpecificationKind::Impure => write!(f, "Impure"),
-            ProcedureSpecificationKind::InteriorMutable => write!(f, "Mendel"),
+            ProcedureSpecificationKind::InteriorMutable => write!(f, "ImMethod"),
             ProcedureSpecificationKind::Pure => write!(f, "Pure"),
             ProcedureSpecificationKind::PureMemory => write!(f, "PureMemory"),
             ProcedureSpecificationKind::PureUnstable => write!(f, "PureUnstable"),
@@ -492,26 +492,6 @@ impl SpecGraph<ProcedureSpecification> {
         }
     }
 
-    /// Attaches the `modifies` clause `mods` to this [SpecGraph].
-    ///
-    /// If this modifies has a constraint it will be attached to the corresponding
-    /// constrained spec, otherwise just to the base spec.
-    pub fn add_modifies<'tcx>(&mut self, mods: LocalDefId, env: &Environment<'tcx>) {
-        match self.get_constraint(mods, env) {
-            None => {
-                self.base_spec.modifies.push(mods.to_def_id());
-                self.specs_with_constraints
-                    .values_mut()
-                    .for_each(|s| s.modifies.push(mods.to_def_id()));
-            }
-            Some(constraint) => {
-                self.get_constrained_spec_mut(constraint)
-                    .modifies
-                    .push(mods.to_def_id());
-            }
-        }
-    }
-
     /// Attaches the `reads` clause `reads` to this [SpecGraph].
     ///
     /// If this reads has a constraint it will be attached to the corresponding
@@ -520,14 +500,31 @@ impl SpecGraph<ProcedureSpecification> {
         match self.get_constraint(reads, env) {
             None => {
                 self.base_spec.reads.push(reads.to_def_id());
-                self.specs_with_constraints
-                    .values_mut()
-                    .for_each(|s| s.reads.push(reads.to_def_id()));
             }
             Some(constraint) => {
                 self.get_constrained_spec_mut(constraint)
                     .reads
                     .push(reads.to_def_id());
+            }
+        }
+    }
+
+    /// Attaches the `modifies` clause `mods` to this [SpecGraph].
+    ///
+    /// If this postcondition has a constraint it will be attached to the corresponding
+    /// constrained spec **and** the base spec, otherwise just to the base spec.
+    pub fn add_modifies<'tcx>(&mut self, mods: LocalDefId, env: &Environment<'tcx>) {
+        match self.get_constraint(mods, env) {
+            None => {
+                self.base_spec.modifies.push(mods.to_def_id());
+                self.specs_with_constraints
+                    .values_mut()
+                    .for_each(|s| s.modifies.push(mods.to_def_id()));
+            }
+            Some(obligation) => {
+                self.get_constrained_spec_mut(obligation)
+                    .modifies
+                    .push(mods.to_def_id());
             }
         }
     }
@@ -901,8 +898,10 @@ impl Refinable for ProcedureSpecification {
             trusted: self.trusted,
             terminates: self.terminates.refine(&other.terminates),
             purity: self.purity.refine(&other.purity),
-            modifies: self.modifies.refine(&other.modifies),
-            reads: self.reads.refine(&other.reads),
+            modifies: self
+                .modifies
+                .refine(replace_empty(&EMPTYL, &other.modifies)),
+            reads: self.reads.refine(replace_empty(&EMPTYL, &other.reads)),
         }
     }
 }
