@@ -1973,6 +1973,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                       let rep_pre = im_state.mk_rep_idn.call()(
                                           self.prev_im_state(),
                                           source_addr,
+                                          // TODO not these, we want the snap and the addr
                                           im_state.get_snap_idn.call()(dest_tyval, self.prev_im_state(), source_addr)
                                       );
                                       let rep_post = im_state.mk_rep_idn.call()(

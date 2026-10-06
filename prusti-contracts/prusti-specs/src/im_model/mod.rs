@@ -6,7 +6,7 @@
 //! ... `fn: Tfn`, generates a function of type Addr<T> -> Addr<Tf0> for each
 //! field. The implementation is `unimplemented!()`, `#[pure]` and `#[trusted]`
 use super::parse_quote_spanned;
-use syn::spanned::Spanned;
+use syn::{parse_quote, spanned::Spanned};
 use uuid::Uuid;
 
 /// See module level documentation
@@ -43,12 +43,21 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
 
     let mut items = vec![];
 
+    let self_ty: syn::Type = parse_quote!(#item_ident #ty_generics);
+    items.push(parse_quote! {
+        #[pure_memory]
+        #[trusted]
+        fn this<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #self_ty> {
+            unimplemented!()
+        }
+    });
+
     for field in fields {
         let name = field.ident.as_ref().expect("field names checked");
         let field_ty = &field.ty;
 
         let projection: syn::TraitItem = parse_quote_spanned! {field.span()=>
-            #[pure]
+            #[pure_memory]
             #[trusted]
             fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty> {
                 unimplemented!()
