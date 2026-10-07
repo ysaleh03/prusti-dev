@@ -36,7 +36,6 @@ use crate::{
     specifications::preparser::{parse_prusti, parse_type_cond_spec, NestedSpec},
 };
 pub use extern_spec_rewriter::ExternSpecKind;
-pub use im_spec_rewriter::MendelSpecKind;
 use parse_closure_macro::ClosureWithSpec;
 pub use spec_attribute_kind::SpecAttributeKind;
 use specifications::{common::SpecificationId, untyped};
@@ -1237,13 +1236,22 @@ pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
             ));
         }
         let item: syn::ItemStruct = syn::parse2(tokens)?;
-        let (addr_trait, addr_impl) = im_model::rewrite(&item)?;
+        let (model_trait, model_impl) = im_model::rewrite(&item)?;
+
+        let mut rewriter = rewriter::AstRewriter::new();
+        let spec_id = rewriter.generate_spec_id();
+        let spec_id_str = spec_id.to_string();
 
         Ok(quote_spanned! {item.span()=>
+            #[prusti::im_model]
+            #[prusti::spec_id = #spec_id_str]
             #[prusti::specs_version = #SPECS_VERSION]
-            #addr_trait
+            #model_trait
+
+            #[prusti::spec_only]
+            #[prusti::spec_id = #spec_id_str]
             #[prusti::specs_version = #SPECS_VERSION]
-            #addr_impl
+            #model_impl
         })
     })
 }
@@ -1385,7 +1393,7 @@ pub fn addr_to_ref(tokens: TokenStream) -> TokenStream {
     let root = deref_input.root;
     let name = deref_input.name;
     syn::parse_quote! {
-        ::prusti_contracts::addr_to_ref((#root).#name())
+        ::prusti_contracts::Addr::to_ref((#root).#name())
     }
 }
 
