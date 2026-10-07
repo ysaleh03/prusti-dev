@@ -1,8 +1,8 @@
 //! Encoding of mendel specs for impls
 use super::common::*;
-use crate::is_predicate_macro;
+use crate::{is_predicate_macro, SPECS_VERSION};
 use proc_macro2::TokenStream;
-use quote::{quote_spanned, ToTokens};
+use quote::quote_spanned;
 use syn::{parse_quote, parse_quote_spanned, spanned::Spanned};
 
 pub fn rewrite_im_spec(
@@ -10,7 +10,6 @@ pub fn rewrite_im_spec(
     _mod_path: syn::Path,
 ) -> syn::Result<TokenStream> {
     let mut new_trait = generate_empty_trait(item_impl)?;
-
     let mut shared: syn::TraitItemConst = parse_quote! { const SHARED_CAPABILITIES: () = (); };
     let mut mutable: syn::TraitItemConst = parse_quote! { const MUTABLE_CAPABILITIES: () = (); };
 
@@ -32,7 +31,7 @@ pub fn rewrite_im_spec(
                 new_trait
                     .items
                     .push(syn::TraitItem::Method(syn::TraitItemMethod {
-                        attrs: impl_method.attrs.clone(),
+                        attrs: vec![],
                         sig: impl_method.sig.clone(),
                         default: Some(impl_method.block.clone()),
                         semi_token: None,
@@ -61,47 +60,60 @@ pub fn rewrite_im_spec(
         syn::TraitItem::Const(mutable),
     ]);
 
-    let trait_ident = &new_trait.ident;
-    let (impl_generics, ty_generics, where_clause) = item_impl.generics.split_for_impl();
-    let self_ty = &*item_impl.self_ty;
+    let new_impl = generate_trait_impl(item_impl, &new_trait)?;
 
-    let empty_impl: syn::ItemImpl = parse_quote_spanned! {item_impl.span()=>
-        impl #impl_generics #trait_ident #ty_generics for #self_ty #where_clause {}
-    };
+    let mut rewriter = crate::rewriter::AstRewriter::new();
+    let spec_id = rewriter.generate_spec_id();
+    let spec_id_str = spec_id.to_string();
 
     Ok(quote_spanned! {item_impl.span()=>
         #[prusti::im_spec]
+        #[prusti::spec_id = #spec_id_str]
         #new_trait
 
-        #[prusti::im_spec]
-        #empty_impl
+        #[prusti::spec_only]
+        #[prusti::spec_id = #spec_id_str]
+        #[prusti::specs_version = #SPECS_VERSION]
+        #new_impl
     })
 }
 
-fn generate_empty_trait(item_impl: &syn::ItemImpl) -> syn::Result<syn::ItemTrait> {
-    let ident = match &*item_impl.self_ty {
-        syn::Type::Path(type_path) => &type_path.path.segments.last().unwrap().ident,
+fn get_item_impl_ident(item_impl: &syn::ItemImpl) -> syn::Result<&syn::Ident> {
+    match &*item_impl.self_ty {
+        syn::Type::Path(type_path) => Ok(&type_path.path.segments.last().unwrap().ident),
         _ => {
             return Err(syn::Error::new(
                 item_impl.span(),
                 "`im_spec` can only be used on structs",
             ))
         }
-    };
-    let mut name = ident.to_string();
-
-    for param in item_impl.generics.params.iter() {
-        if let syn::GenericParam::Type(ty_param) = param {
-            name.push_str(ty_param.ident.to_string().as_str());
-        }
     }
+}
 
-    let uuid = uuid::Uuid::new_v4().simple();
-    let trait_ident = syn::Ident::new(format!("Prusti{name}ImModel{uuid}").as_str(), ident.span());
-    let (impl_generics, _ty_generics, where_clause) = &item_impl.generics.split_for_impl();
+fn generate_trait_impl(
+    item_impl: &syn::ItemImpl,
+    item_trait: &syn::ItemTrait,
+) -> syn::Result<syn::ItemImpl> {
+    let impl_ident = get_item_impl_ident(item_impl)?;
+    let trait_ident = &item_trait.ident;
+
+    let (impl_generics, ty_generics, where_clause) = item_impl.generics.split_for_impl();
 
     Ok(parse_quote_spanned! {item_impl.span()=>
-        trait #trait_ident #impl_generics #where_clause {}
+        impl #impl_generics #trait_ident #ty_generics for #impl_ident #ty_generics #where_clause {}
+    })
+}
+
+fn generate_empty_trait(item_impl: &syn::ItemImpl) -> syn::Result<syn::ItemTrait> {
+    let ident = get_item_impl_ident(item_impl)?;
+    // let uuid = uuid::Uuid::new_v4().simple();
+    let trait_ident = generate_im_spec_ident(ident);
+    let model_ident = generate_im_model_ident(ident);
+
+    let (impl_generics, ty_generics, where_clause) = &item_impl.generics.split_for_impl();
+
+    Ok(parse_quote_spanned! {item_impl.span()=>
+        trait #trait_ident #impl_generics : #model_ident #ty_generics #where_clause {}
     })
 }
 
