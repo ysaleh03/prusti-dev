@@ -918,13 +918,17 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
-
+                        let old_mode = self.old_mode;
                         let im_state_ex = self.vcx.mk_lazy_expr(
                             "mir_pure_im_state",
                             vir::TYPE_IMSTATE,
-                            Box::new(move |_vcx, lctx: ExprInput<'vir>| {
+                            Box::new(move |vcx, lctx: ExprInput<'vir>| {
                                 assert!(lctx.4.is_some(), "current ImState not bound");
-                                lctx.4.unwrap().kind
+                                if old_mode {
+                                    vcx.mk_old(lctx.4.unwrap(), lctx.3).kind
+                                } else {
+                                    lctx.4.unwrap().kind
+                                }
                             }),
                         );
 
@@ -1455,7 +1459,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             vir::vir_format!(self.vcx, "spec closure body ({name})"),
             body.ty(),
             Box::new(move |vcx, lctx: ExprInput<'vir>| {
-                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3, None)).kind
+                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3, None))
+                    .kind
             }),
         );
         Ok((qvars, body.downcast_ty::<vir::Bool>()))

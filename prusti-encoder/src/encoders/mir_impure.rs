@@ -2745,14 +2745,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         match self.cached_tyvals.get(&ty) {
             Some(tyval) => Ok(*tyval),
             None => {
-                let decl_name = format!("ty_{}_{}", ty.ty.data.name(), self.cached_tyvals.len()).to_string();
-                let tyval_decl = self.vcx.mk_local_decl(self.vcx.alloc_str(&decl_name), vir::TYPE_TYVAL);
+                let tyval_tmp = self.new_tmp(vir::TYPE_TYVAL);
                 let tyval = self.deps.require_dep::<TyExprEnc>(ty)?;
-                let tyval_assign = self.vcx.mk_local_decl_stmt(tyval_decl, Some(tyval));
+                let tyval_assign = self.vcx.mk_pure_assign_stmt(tyval_tmp, tyval);
                 self.tyval_decls.push(tyval_assign);
-                let tyval_ex = self.vcx.mk_local_ex(tyval_decl);
-                self.cached_tyvals.insert(ty, tyval_ex);
-                Ok(tyval_ex)
+                self.cached_tyvals.insert(ty, tyval_tmp);
+                Ok(tyval_tmp)
             }
         }
     }
