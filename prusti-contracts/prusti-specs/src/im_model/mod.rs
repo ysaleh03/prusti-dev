@@ -74,16 +74,9 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
 fn generate_trait_ident(item_struct: &syn::ItemStruct) -> syn::Ident {
     let mut name = item_struct.ident.to_string();
 
-    for param in item_struct.generics.params.iter() {
-        if let syn::GenericParam::Type(ty_param) = param {
-            name.push_str(ty_param.ident.to_string().as_str());
-        }
-    }
-
-    let uuid = Uuid::new_v4().simple();
-
+    // let uuid = Uuid::new_v4().simple();
     syn::Ident::new(
-        format!("PrustiAddr{name}ImModel{uuid}").as_str(),
+        format!("Prusti{name}ImModel").as_str(),
         item_struct.ident.span(),
     )
 }
