@@ -236,6 +236,7 @@ impl<'a, 'vir> TyUseImpureWalker<'a, 'vir> {
             }
             TySpecifics::Builtin(..) => TySpecifics::mk_builtin(()),
             TySpecifics::Addr(..) => TySpecifics::mk_addr(()),
+            TySpecifics::AddrDyn(..) => TySpecifics::mk_addr(()),
             TySpecifics::Rep(..) => TySpecifics::mk_rep(()),
         };
         let data = TyUseImpureData {
@@ -437,6 +438,7 @@ impl<'vir> TyData<'vir, UseImpureTyDatas> {
             | TySpecifics::Primitive(_)
             | TySpecifics::Builtin(_)
             | TySpecifics::Addr(_)
+            | TySpecifics::AddrDyn(_)
             | TySpecifics::Rep(_) => {
                 unreachable!()
             }
@@ -490,6 +492,7 @@ impl<'vir> TyData<'vir, UseImpureTyDatas> {
             | TySpecifics::Primitive(_)
             | TySpecifics::Builtin(_)
             | TySpecifics::Addr(_)
+            | TySpecifics::AddrDyn(_)
             | TySpecifics::Rep(_) => {
                 unreachable!()
             }

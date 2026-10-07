@@ -196,6 +196,7 @@ impl<'a, 'vir> InhabitedWalker<'a, 'vir> {
             }
             // TODO IM revisit to see if these need to be interesting
             TySpecifics::Addr(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),
+            TySpecifics::AddrDyn(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),
             TySpecifics::Rep(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),
         })
     }

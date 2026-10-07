@@ -264,7 +264,9 @@ impl TaskEncoder for MirSpecEnc {
             };
             let all_args = vcx.alloc(all_args);
             let pre_args = all_args; // it should be ok to provide more keys than required
-
+            
+            // TODO the reason why we can't borrow results correctly at the moment is that
+            // the result variable (n + 1) is not included here
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
             let local_refs = match enc_mode {
                 MirSpecEncMode::Impure => Some(

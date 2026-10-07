@@ -363,6 +363,9 @@ impl TaskEncoder for TyPureEnc {
                     let builder = builder.set_domain_builder();
                     TySpecifics::Addr(super::kinds::addr::ty_pure(vcx, param, deps, builder)?)
                 }
+                TySpecifics::AddrDyn(param) => {
+                    todo!()
+                }
                 TySpecifics::Rep(param) => {
                     let builder = builder.set_domain_builder();
                     TySpecifics::Rep(super::kinds::rep::ty_pure(vcx, param, deps, builder)?)
@@ -514,6 +517,10 @@ impl<'vir> TyPureBuilder<'vir> {
             }
             TySpecifics::Addr(_) => {
                 name = vir::ViperIdent::new("s_im_Addr");
+                DomainIdnSnap::new(name, 0)()
+            }
+            TySpecifics::AddrDyn(_) => {
+                name = vir::ViperIdent::new("s_im_AddrDyn");
                 DomainIdnSnap::new(name, 0)()
             }
             _ => DomainIdnSnap::new(name, 0)(),

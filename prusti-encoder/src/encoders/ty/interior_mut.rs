@@ -340,6 +340,7 @@ impl TaskEncoder for ImTyEnc {
                     // vir::with_vcx(|vcx| vcx.mk_disj(&variants))
                 }
                 TySpecifics::Addr(_) => todo!(),
+                TySpecifics::AddrDyn(_) => todo!(),
                 TySpecifics::Rep(_) => todo!(),
             };
             Ok((

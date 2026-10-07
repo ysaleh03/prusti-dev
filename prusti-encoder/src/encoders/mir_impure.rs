@@ -42,8 +42,8 @@ use vir::{CastType, CompType, LocalDeclData};
 
 use crate::encoders::{
     self, mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, ty::{
-        generics::{GArgs, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition
-    }, FunctionCallEnc, ImTyEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
+        generics::{GArgs, GArgsCastEnc, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition, RustTyNormalized
+    }, FunctionCallEnc, ImTyEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, Pure, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
 };
 
 use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
@@ -230,10 +230,10 @@ macro_rules! comment {
 
 /// Snapshots of the current statement's operands, captured between the
 /// `PreOperands` and `PostOperands` repacks by
-/// [ImpureEncVisitor::capture_operand_snaps] and passed (as the
+/// [ImpureEncVisitor::capture_operand_ctxt] and passed (as the
 /// [PureRvalueEnc::EncodePlaceCtxt]) only to the encoding of the statement's
 /// effect; all other operand reads (terminators, repack guides) pass `None`.
-type OperandSnaps<'vir> = Option<FxHashMap<mir::Place<'vir>, vir::ExprSnap<'vir>>>;
+type OperandCtxt<'vir> = Option<FxHashMap<mir::Place<'vir>, (vir::ExprSnap<'vir>, vir::ExprRef<'vir>)>>;
 
 struct EncodedRvalue<'vir> {
     /// A snapshot of the rvalue. This snapshot is guaranteed to be well-formed
@@ -245,6 +245,9 @@ struct EncodedRvalue<'vir> {
     /// &mut expects a snapshot of the borrowed place which can only be created
     /// when the capabilities are in the pre-assign state.
     expr: vir::ExprSnap<'vir>,
+
+    /// The address of the rvalue if it is Move(_) or Copy(_)
+    addr: Option<vir::Expr<'vir, vir::Ref>>,
 
     /// Additional statements necessary to obtain the predicate for the assigned
     /// place of this Rvalue *after* the assignment. Such folds are necessary if
@@ -275,6 +278,7 @@ impl<'vir> From<vir::ExprSnap<'vir>> for EncodedRvalue<'vir> {
     fn from(expr: vir::ExprSnap<'vir>) -> Self {
         Self {
             expr,
+            addr: None,
             post_assign_folds: None,
         }
     }
@@ -320,14 +324,28 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         &mut self,
         rvalue: &mir::Rvalue<'vir>,
         span: Span,
-        operand_snaps: &OperandSnaps<'vir>,
+        operand_snaps: &OperandCtxt<'vir>,
     ) -> Result<EncodedRvalue<'vir>, EncodeRvalueError<'vir, E>> {
         let rvalue_ty = rvalue.ty(self.local_decls, self.vcx.tcx());
         match rvalue {
-            mir::Rvalue::Use(op) => Ok(self
-                .encode_operand_snap(op, operand_snaps)
-                .map_err(EncodeRvalueError::from)?
-                .into()),
+            mir::Rvalue::Use(op) => {
+
+                let im_state = self.deps.require_dep::<ImStateEnc>(())?;
+                let snap = self
+                    .encode_operand_snap(op, operand_snaps)
+                    .map_err(EncodeRvalueError::from)?;
+                let addr = op.place().and_then(|place| {
+                    let operand_snaps = operand_snaps.as_ref()?;
+                    let (_, addr) = operand_snaps.get(&place)?;
+                    Some(*addr)
+                });
+
+                Ok(EncodedRvalue {
+                    expr: snap,
+                    addr,
+                    post_assign_folds: None
+                })
+            }
             mir::Rvalue::Cast(cast_kind, operand, ty) => {
                 assert_eq!(*ty, rvalue_ty);
                 let (stmt, cast) = self
@@ -456,6 +474,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     let place_ref = place_expr.expr.expect_predicate();
                     EncodedRvalue {
                         expr: inner.prim_to_snap_assign(place_ref, metadata).upcast_ty(),
+                        addr: None, // TODO IM is this right?
                         post_assign_folds: Some(Box::new(move |lhs_place| {
                             p_rvalue_ty.fold(None, lhs_place, None, None, None)
                         })),
@@ -1173,13 +1192,13 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
     }
 
-    /// Read `statement`'s operands into an [OperandSnaps] map; see the call
+    /// Read `statement`'s operands into an [OperandCtxt] map; see the call
     /// site in [Self::visit_statement].
-    fn capture_operand_snaps(
+    fn capture_operand_ctxt(
         &mut self,
         statement: &mir::Statement<'vir>,
         location: mir::Location,
-    ) -> EncodeResult<'vir, OperandSnaps<'vir>, E> {
+    ) -> EncodeResult<'vir, OperandCtxt<'vir>, E> {
         use mir::visit::Visitor;
         struct OperandCollector<'vir>(Vec<mir::Operand<'vir>>);
         impl<'vir> Visitor<'vir> for OperandCollector<'vir> {
@@ -1191,16 +1210,21 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
         let mut collector = OperandCollector(Vec::new());
         collector.visit_statement(statement, location);
-        let mut snaps = FxHashMap::default();
+        let mut pairs = FxHashMap::default();
         for operand in &collector.0 {
             let place = operand.place().unwrap();
-            if snaps.contains_key(&place) {
+            if pairs.contains_key(&place) {
                 continue;
             }
             let snap = self.capture_operand_snap(operand)?;
-            snaps.insert(place, snap);
+
+            let addr = self.encode_place(Place::from(place))?.expr.address;
+            let tmp = self.new_tmp(vir::TYPE_REF);
+            self.stmt(self.vcx.mk_pure_assign_stmt(tmp, addr));
+
+            pairs.insert(place, (snap, addr));
         }
-        Ok(Some(snaps))
+        Ok(Some(pairs))
     }
 
     pub(crate) fn encode_place(
@@ -1925,7 +1949,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             // operand's place may alias the destination, whose predicate the
             // `PreMain` weaken exhales before the effect is encoded (`x /= y`
             // lowers to `x = Div(copy x, move y)`).
-            let captured = self.capture_operand_snaps(statement, location)?;
+            let captured = self.capture_operand_ctxt(statement, location)?;
+
+            // TODO if this is an interior_mut case that we want to handle then we need to get addresses? and snaps
 
             self.pcg_phase_actions(location, EvalStmtPhase::PostOperands)?;
             self.pcg_phase_actions(location, EvalStmtPhase::PreMain)?;
@@ -1943,59 +1969,67 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let span = statement.source_info.span;
 
             // (Interior Mutability) handling of side-effectful statements (assignments)
-            if self.in_im_mode() {
-                match &statement.kind {
-                    mir::StatementKind::Assign(box (dest, rvalue)) => {
-                        // TODO only need to model changes to *tracked* state
-                        let current_fpcs = self.current_fpcs.take().unwrap();
-                        let cfpcs = &current_fpcs.statements[location.statement_index];
-                        let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-                        self.inhale_im_place_capabilities(pcg)?;
-                        self.current_fpcs = Some(current_fpcs);
+            // if self.in_im_mode() {
+            //     match &statement.kind {
+            //         mir::StatementKind::Assign(box (dest, rvalue)) => {
+            //             // TODO only need to model changes to *tracked* state
+            //             let current_fpcs = self.current_fpcs.take().unwrap();
+            //             let cfpcs = &current_fpcs.statements[location.statement_index];
+            //             let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+            //             self.inhale_im_place_capabilities(pcg)?;
+            //             self.current_fpcs = Some(current_fpcs);
 
-                        self.bump_im_state()?;
-                        match rvalue {
-                            mir::Rvalue::Use(op) => {
-                                let dest_enc = self.encode_place(Place::from(*dest))?;
-                                let dest_addr = dest_enc.expr.address;
+            //             // TODO how do we handle Ref?? Do we construct the rep for the mutable ref?
 
-                                let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
-                                let dest_tyval = self.get_tyval(dest_ty)?;
+            //             self.bump_im_state()?;
+            //             match rvalue {
+            //                 mir::Rvalue::Use(op) => {
+            //                     let dest_enc = self.encode_place(Place::from(*dest))?;
+            //                     let dest_addr = dest_enc.expr.address;
 
-                                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+            //                     let dest_ty = RustTyDecomposition::from_ty(dest_enc.ty.ty, self.def_id);
+            //                     let dest_tyval = self.get_tyval(dest_ty)?;
 
-                                match op {
-                                    mir::Operand::Move(source)
-                                  | mir::Operand::Copy(source) => {
-                                      let source_enc = self.encode_place(Place::from(*source))?;
-                                      let source_addr = source_enc.expr.address;
+            //                     let im_state = self.deps.require_ref::<ImStateEnc>(())?;
 
-                                      let rep_pre = im_state.mk_rep_idn.call()(
-                                          self.prev_im_state(),
-                                          source_addr,
-                                          // TODO not these, we want the snap and the addr
-                                          im_state.get_snap_idn.call()(dest_tyval, self.prev_im_state(), source_addr)
-                                      );
-                                      let rep_post = im_state.mk_rep_idn.call()(
-                                          self.curr_im_state(),
-                                          dest_addr,
-                                          im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest_addr)
-                                      );
+            //                     // TODO do we want to store mutrefs in the mendel heap as deep or shallow?
 
-                                      self.stmt(self.vcx.mk_inhale_stmt(im_state.rep_eq_idn.call()(
-                                          dest_tyval, rep_pre, rep_post
-                                      )));
-                                    }
-                                    _ => {}
-                                }
+            //                     // TODO Ref case:
+            //                     // If we create a reference,
+            //                     // 1. we want to consider it a shallow operation
+            //                     // 1. it's enough to constrain the snapshot of the target to be the mutref or immref snapshot
+            //                     match op {
+            //                         mir::Operand::Move(source)
+            //                       | mir::Operand::Copy(source) => {
+            //                           let source_enc = self.encode_place(Place::from(*source))?;
+            //                           let source_addr = source_enc.expr.address;
+
+            //                           let rep_pre = im_state.mk_rep_idn.call()(
+            //                               self.prev_im_state(),
+            //                               source_addr,
+            //                               // TODO not these, we want the snap and the addr
+            //                               im_state.get_snap_idn.call()(dest_tyval, self.prev_im_state(), source_addr)
+            //                           );
+            //                           let rep_post = im_state.mk_rep_idn.call()(
+            //                               self.curr_im_state(),
+            //                               dest_addr,
+            //                               im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest_addr)
+            //                           );
+
+            //                           self.stmt(self.vcx.mk_inhale_stmt(im_state.rep_eq_idn.call()(
+            //                               dest_tyval, rep_pre, rep_post
+            //                           )));
+            //                         }
+            //                         _ => {}
+            //                     }
                                     
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
-            } 
+            //                 }
+            //                 _ => {}
+            //             }
+            //         }
+            //         _ => {}
+            //     }
+            // } 
 
             match &statement.kind {
                 mir::StatementKind::Assign(box (dest, rvalue)) => {
@@ -2008,6 +2042,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     // The snapshot of the value that we are assigning.
                     let rval_enc = self.encode_rvalue(rvalue, span, &captured);
 
+                    // TODO if this (optionally) gave us a rep then we could encode the equality
+                    // TODO also encode the snapshot equality?
+
                     match rval_enc {
                         Ok(rval_enc) => {
                             let dest_ty = dest.ty(self.local_decls, self.vcx.tcx());
@@ -2016,6 +2053,52 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             let method_assign_app =
                                 dest_ty_out.apply_method_assign(self.vcx, proj_enc, rval_enc.expr);
                             self.stmt(method_assign_app);
+
+                            // (Interior Mutability)
+                            self.bump_im_state()?;
+
+                            let current_fpcs = self.current_fpcs.take().unwrap();
+                            let cfpcs = &current_fpcs.statements[location.statement_index];
+                            let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+                            self.inhale_im_place_capabilities(pcg)?;
+                            self.current_fpcs = Some(current_fpcs);
+
+                            let dest_decomp = RustTyDecomposition::from_ty(dest_ty.ty, self.def_id);
+                            let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
+                                Some(
+                                    RustTyNormalized {
+                                        param: RustTyDecomposition::param(),
+                                        concrete: dest_decomp
+                                    }
+                            ))?;
+
+                            let dest_tyval = self.get_tyval(dest_decomp)?;
+                            let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+
+                            let generic_snap = caster.cast_to_callee_ctx(rval_enc.expr).downcast_ty();
+                            self.stmt(self.vcx.mk_inhale_stmt(
+                                self.vcx.mk_eq_expr(
+                                    im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), proj_enc),
+                                    generic_snap)));
+
+                            // Optionally generate rep equality constraint
+                            if let Some(addr) = rval_enc.addr {
+                              let rep_pre = im_state.mk_rep_idn.call()(
+                                  self.prev_im_state(),
+                                  addr,
+                                  generic_snap,
+                              );
+                              let rep_post = im_state.mk_rep_idn.call()(
+                                  self.curr_im_state(),
+                                  proj_enc,
+                                  generic_snap,
+                              );
+
+                              self.stmt(self.vcx.mk_inhale_stmt(im_state.rep_eq_idn.call()(
+                                  dest_tyval, rep_pre, rep_post
+                              )));
+                            }
+
                             self.stmts(rval_enc.post_fold_stmts(proj_enc));
                         }
                         Err(_) => {
@@ -2677,7 +2760,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
 impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for ImpureEncVisitor<'vir, 'enc, E> {
     type Encoder = E;
-    type EncodePlaceCtxt = OperandSnaps<'vir>;
+    type EncodePlaceCtxt = OperandCtxt<'vir>;
     const PURE: bool = false;
     type ExprCurr = ();
     type ExprNext = !;
@@ -2710,7 +2793,7 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for ImpureEncVisitor<'vir, 
         operand_snaps: &Self::EncodePlaceCtxt,
     ) -> EncodeResult<'vir, vir::ExprSnap<'vir>, E> {
         // While a statement's effect is encoded, every place operand must
-        // have been captured by [Self::capture_operand_snaps]. In particular,
+        // have been captured by [Self::capture_operand_ctxt]. In particular,
         // `Move` operands were already consumed at capture time (snapshot
         // temporary plus predicate exhale) and must not be consumed again.
         if let Some(operand_snaps) = operand_snaps
@@ -2718,8 +2801,8 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for ImpureEncVisitor<'vir, 
         {
             let snap = operand_snaps.get(&place).unwrap_or_else(|| {
                 panic!("operand {operand:?} was not captured for the current statement")
-            });
-            return Ok(*snap);
+            }).0;
+            return Ok(snap);
         }
         match operand {
             mir::Operand::Move(_) => self.capture_operand_snap(operand),

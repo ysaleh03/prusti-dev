@@ -480,6 +480,8 @@ mod private_shared {
         }
     }
 
+    // TODO AddrDyn might be a bad name for this. This is an Addr where the
+    // type of the referent is stored internally as a value.
     pub struct AddrDyn;
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);

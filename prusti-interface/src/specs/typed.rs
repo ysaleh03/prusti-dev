@@ -310,6 +310,7 @@ pub struct TypeSpecification {
     pub invariant: SpecificationItem<Vec<DefId>>,
     pub trusted: SpecificationItem<bool>,
     pub model: Option<(String, LocalDefId)>,
+    // pub im_model: Option<FxHashMap<String, LocalDefId>>,
     pub counterexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
@@ -320,6 +321,7 @@ impl TypeSpecification {
             invariant: SpecificationItem::Empty,
             trusted: SpecificationItem::Inherent(false),
             model: None,
+            // TODO im_model
             counterexample_print: vec![],
         }
     }

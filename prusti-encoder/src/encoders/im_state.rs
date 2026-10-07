@@ -203,39 +203,33 @@ impl TaskEncoder for ImStateEnc {
                 });
             axioms.push(fresh_modifiable);
 
-            let modifiable_next = vcx.mk_domain_axiom(
-                vir::ViperIdent::new("im_modifiable_next"),
-                vir::expr! {
+            let modifiable_next =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_modifiable_next"), vir::expr! {
                     forall t: Type, s: ImState, l: Ref ::
                     { ([modifiable_idn](t, ([next_idn](s)), l)) }
                     ([modifiable_idn](t, s, l)) ==> ([modifiable_idn](t, ([next_idn](s)), l))
-                },
-            );
+                });
             axioms.push(modifiable_next);
 
-            let rep_eq_refl = vcx.mk_domain_axiom(
-                vir::ViperIdent::new("im_rep_eq_refl"),
-                vir::expr! {
+            let rep_eq_refl =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_eq_refl"), vir::expr! {
                     forall
                         t: Type,
                         r: GRep ::
                     { ([rep_eq_idn](t, r, r)) }
                     [rep_eq_idn](t, r, r)
-                },
-            );
+                });
             axioms.push(rep_eq_refl);
 
-            let rep_eq_sym = vcx.mk_domain_axiom(
-                vir::ViperIdent::new("im_rep_eq_sym"),
-                vir::expr! {
+            let rep_eq_sym =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_eq_sym"), vir::expr! {
                     forall
                         t: Type,
                         r0: GRep,
                         r1: GRep ::
                     { ([rep_eq_idn](t, r0, r1)) }
                     ([rep_eq_idn](t, r0, r1)) ==> ([rep_eq_idn](t, r1, r0))
-                },
-            );
+                });
             axioms.push(rep_eq_sym);
 
             let rep_eq_trans = vcx.mk_domain_axiom(
@@ -252,21 +246,20 @@ impl TaskEncoder for ImStateEnc {
             );
             axioms.push(rep_eq_trans);
 
-            let rep_eq_snap = vcx.mk_domain_axiom(
-                vir::ViperIdent::new("im_rep_snap_eq"),
-                vir::expr!{
-                forall
-                    t: Type,
-                    st0: ImState,
-                    st1: ImState,
-                    l0: Ref,
-                    l1: Ref,
-                    s0: PSnap,
-                    s1: PSnap ::
-                { ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1)))) }
-                ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1))))
-                        ==> (([get_snap_idn](t, st0, l0)) == ([get_snap_idn](t, st1, l1)))
-            });
+            let rep_eq_snap =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_snap_eq"), vir::expr! {
+                    forall
+                        t: Type,
+                        st0: ImState,
+                        st1: ImState,
+                        l0: Ref,
+                        l1: Ref,
+                        s0: PSnap,
+                        s1: PSnap ::
+                    { ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1)))) }
+                    ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1))))
+                            ==> ((s0) == (s1))
+                });
             axioms.push(rep_eq_snap);
 
             // Domain

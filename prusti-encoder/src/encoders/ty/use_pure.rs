@@ -279,6 +279,7 @@ impl<'a, 'vir> TyUsePureWalker<'a, 'vir> {
                 })
             }
             TySpecifics::Addr(data) => TySpecifics::mk_addr(*data.1),
+            TySpecifics::AddrDyn(data) => todo!(),
             TySpecifics::Rep(data) => TySpecifics::Rep(()),
         };
         Ok(specifics)

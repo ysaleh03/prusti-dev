@@ -131,6 +131,7 @@ impl TaskEncoder for IndirectPredicatesEnc {
                 | TySpecifics::Opaque(_)
                 | TySpecifics::ArrayLike(_)
                 | TySpecifics::Addr(_)
+                | TySpecifics::AddrDyn(_)
                 | TySpecifics::Rep(_) => (),
                 TySpecifics::MutRef((data, ref_domain)) => {
                     let inner_ty = data.referent.decompose_context(ty.ty.params, ty.args);

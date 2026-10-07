@@ -216,6 +216,9 @@ impl TaskEncoder for TyImpureEnc {
                 TySpecifics::Addr(addr) => {
                     TySpecifics::Addr(())
                 }
+                TySpecifics::AddrDyn(addr) => {
+                    TySpecifics::Addr(())
+                }
                 TySpecifics::Rep(rep) => {
                     TySpecifics::Rep(())
                 }
