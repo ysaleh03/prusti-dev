@@ -72,7 +72,7 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
 }
 
 fn generate_trait_ident(item_struct: &syn::ItemStruct) -> syn::Ident {
-    let mut name = item_struct.ident.to_string();
+    let name = item_struct.ident.to_string();
 
     // let uuid = Uuid::new_v4().simple();
     syn::Ident::new(

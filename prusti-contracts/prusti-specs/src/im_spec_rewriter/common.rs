@@ -19,8 +19,3 @@ pub(crate) fn generate_im_spec_ident(ident: &syn::Ident) -> syn::Ident {
     let name = ident.to_string();
     syn::Ident::new(format!("Prusti{name}ImSpec").as_str(), ident.span())
 }
-
-pub(crate) fn generate_im_type_ident(ident: &syn::Ident) -> syn::Ident {
-    let name = ident.to_string();
-    syn::Ident::new(format!("Prusti{name}ImType").as_str(), ident.span())
-}
