@@ -68,12 +68,16 @@ pub struct TyPureRepData<'vir> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TyPureAddrData<'vir> {
-    pub addr_to_immref: FunctionIdn<'vir, vir::Ref, vir::CSnap>,
-    pub immref_to_addr: FunctionIdn<'vir, vir::CSnap, vir::Ref>,
-    pub unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
-    pub shared: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
-    pub local_unique: FunctionIdn<'vir, (vir::Ref, vir::Ref, vir::Int), vir::Bool>,
-    pub atomic_unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
+    pub mk_addr: FunctionIdn<'vir, (vir::Ref, vir::TyVal), vir::CSnap>,
+    pub addr_access: AdtDestructor<'vir, vir::CSnap, vir::Ref>,
+    pub type_access: AdtDestructor<'vir, vir::CSnap, vir::TyVal>,
+
+    // pub addr_to_immref: FunctionIdn<'vir, vir::Ref, vir::CSnap>,
+    // pub immref_to_addr: FunctionIdn<'vir, vir::CSnap, vir::Ref>,
+    // pub unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
+    // pub shared: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
+    // pub local_unique: FunctionIdn<'vir, (vir::Ref, vir::Ref, vir::Int), vir::Bool>,
+    // pub atomic_unique: FunctionIdn<'vir, (vir::Ref, vir::Int), vir::Bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -360,11 +364,11 @@ impl TaskEncoder for TyPureEnc {
                     TySpecifics::Builtin(super::kinds::builtin::ty_pure(builtin, &mut builder)?)
                 }
                 TySpecifics::Addr(param) => {
-                    let builder = builder.set_domain_builder();
+                    let builder = builder.set_adt_builder();
                     TySpecifics::Addr(super::kinds::addr::ty_pure(vcx, param, deps, builder)?)
                 }
                 TySpecifics::AddrDyn(param) => {
-                    todo!()
+                    todo!() // TODO do we encode AddrDyn as Addr?
                 }
                 TySpecifics::Rep(param) => {
                     let builder = builder.set_domain_builder();

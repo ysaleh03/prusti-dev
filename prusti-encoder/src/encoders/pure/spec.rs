@@ -139,7 +139,8 @@ struct SpecEncCtx<'vir> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MirSpecEncMode {
     // TODO IM add more modes for pure_unstable and pure_memory?
-    // TODO do well-definedness and/or stability? checks for impure mode
+    // TODO do well-definedness and/or stability? we would do these in the impure encoding...
+
     /// Assumes the arguments and the result are available in local variables
     /// `_1p`, ... `_np`, and `_0p`, respectively, all of type `Ref``, i.e.,
     /// their snapshot is taken first.
@@ -154,6 +155,9 @@ pub enum MirSpecEncMode {
     /// `_1s`, ... `_ns`, and `_0s`, respectively, all of snapshot types.
     PureWithoutResult,
 }
+
+// TODO we need to handle pure_memory and pure_unstable, where the addresses of
+// reference-typed arguments are available
 
 impl TaskEncoder for MirSpecEnc {
     task_encoder::encoder_cache!(MirSpecEnc);

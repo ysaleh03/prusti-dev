@@ -120,6 +120,8 @@ impl TaskEncoder for ImTyEnc {
                     })?;
                 }
                 TySpecifics::ImmRef(data) => {
+                    // TODO sharing an immref implies sharing its target
+                    
                     deps.emit_output_ref(*task_key, ImTyEncRef {
                         specifics: ImTySpecifics::Other,
                     })?;
@@ -147,6 +149,9 @@ impl TaskEncoder for ImTyEnc {
                     // self.encode_decomposition(data.referent.decompose(ty.params))?
                 }
                 TySpecifics::MutRef(data) => {
+                    // TODO owning an mutref implies owning its target
+
+                    // TODO sharing an mutref implies sharing its target
                     deps.emit_output_ref(*task_key, ImTyEncRef {
                         specifics: ImTySpecifics::Other,
                     })?;

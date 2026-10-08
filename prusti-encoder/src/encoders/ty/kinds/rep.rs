@@ -1,5 +1,5 @@
 use crate::encoders::ty::{
-    LazyRustTy, RustAbsPtr,
+    LazyRustTy,
     impure::{PredicateBuilder, TyImpureEnc},
     pure::{DomainBuilder, PureTyDatas, TyPureEnc, TyPureRepData},
 };
@@ -8,10 +8,11 @@ use vir::VirCtxt;
 
 pub(crate) fn ty_pure<'vir>(
     _vcx: &'vir VirCtxt<'vir>,
-    _data: &RustAbsPtr<'vir>,
+    _data: &LazyRustTy<'vir>,
     _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
     builder: &mut DomainBuilder<'vir>,
 ) -> Result<(), EncodeFullError<'vir, TyPureEnc>> {
+    // TODO do we want to put the mk_rep & rep_eq functions in here instead?
     Ok(())
 }
 

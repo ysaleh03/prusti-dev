@@ -25,6 +25,7 @@ impl<'vir> TyDatas<'vir> for ImpureTyDatas {
     type StructData = TyImpureStructData<'vir>;
     type VariantData = TyImpureVariantData<'vir>;
     type EnumData = TyImpureEnumData<'vir>;
+    type AddrData = TyImpureAddrData;
 }
 
 pub type TyImpure<'vir> = Ty<'vir, ImpureTyDatas>;
@@ -35,6 +36,7 @@ pub type TyImpureImmRef<'vir> = <ImpureTyDatas as TyDatas<'vir>>::ImmRefData;
 pub type TyImpureMutRef<'vir> = <ImpureTyDatas as TyDatas<'vir>>::MutRefData;
 pub type TyImpureRaw<'vir> = <ImpureTyDatas as TyDatas<'vir>>::RawData;
 pub type TyImpureBuiltin<'vir> = <ImpureTyDatas as TyDatas<'vir>>::BuiltinData;
+pub type TyImpureAddr<'vir> = <ImpureTyDatas as TyDatas<'vir>>::AddrData;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TyImpureImmRefData {}
@@ -94,6 +96,9 @@ pub struct TyImpureEnumData<'vir> {
 pub struct TyImpureVariantData<'vir> {
     pub predicate: PredicateIdn<'vir, (vir::Ref, vir::ManyTyVal, vir::ManyCSnap)>,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct TyImpureAddrData {}
 
 /// You probably never want to use this, use `TyUseImpureEnc` instead.
 pub(super) type TyImpureEnc = super::TyEnc<Impure>;
@@ -214,14 +219,10 @@ impl TaskEncoder for TyImpureEnc {
                     super::kinds::builtin::ty_impure(builtin, deps, &mut builder)?,
                 ),
                 TySpecifics::Addr(addr) => {
-                    TySpecifics::Addr(())
+                    TySpecifics::mk_addr(super::kinds::addr::ty_impure(addr, deps, &mut builder)?)
                 }
-                TySpecifics::AddrDyn(addr) => {
-                    TySpecifics::Addr(())
-                }
-                TySpecifics::Rep(rep) => {
-                    TySpecifics::Rep(())
-                }
+                TySpecifics::AddrDyn(addr) => todo!(),
+                TySpecifics::Rep(rep) => TySpecifics::Rep(()),
             };
             let output = TyData::new(data, specifics).alloc();
 

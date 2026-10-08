@@ -35,15 +35,6 @@ pub enum MirPureEncError {
 
 // TODO do we fold the interior mutability spec encoder into here?
 
-// TODO rather than putting the ImState here, read it from the heap - maybe in the builtin encoder?
-pub struct ImpureExprInput<'vir> {
-    // Records the address of all non-spec locals
-    addr_map: &'vir FxHashMap<mir::Local, vir::ExprRef<'vir>>,
-    //
-    snap_map: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
-}
-
-// TODO add expression that evaluates to an imstate
 pub type ExprInput<'vir> = (
     DefId,
     &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,

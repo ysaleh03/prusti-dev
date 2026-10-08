@@ -220,7 +220,7 @@ impl TaskEncoder for FunctionEnc {
                     Ok(out) => {
                         let expr = out
                             .expr
-                            .reify(vcx, (def_id, spec.pre_args, None, vir::OldLabel::None, None)); // TODO IM pure_unstable
+                            .reify(vcx, (def_id, spec.pre_args, None, vir::OldLabel::None, None)); // TODO pass im_state if this is a pure_unstable function
                         assert!(
                             expr.ty() == return_type,
                             "expected {:?}, got {:?}",

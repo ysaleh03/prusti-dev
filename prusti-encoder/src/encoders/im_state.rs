@@ -14,6 +14,7 @@ use super::{TyUsePureEnc, ty::RustTyDecomposition};
 #[derive(Debug, Clone, Copy)]
 pub struct ImStateEncRef<'vir> {
     pub next_idn: vir::FunctionIdn<'vir, vir::ImState, vir::ImState>,
+    pub havocked_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::ImState), vir::Bool>,
     pub lte_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::ImState), vir::Bool>,
 
     pub get_snap_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::PSnap>,
@@ -25,8 +26,8 @@ pub struct ImStateEncRef<'vir> {
     pub mk_rep_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::PSnap), vir::GRep>,
     pub rep_eq_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::GRep, vir::GRep), vir::Bool>,
 
-    pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
     pub get_idn: vir::FunctionIdn<'vir, vir::Ref, vir::ImState>,
+    pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
     pub bump_idn: vir::MethodIdn<'vir, vir::Ref>,
 
     pub state_ref_decl: vir::LocalDecl<'vir, vir::Ref>,
@@ -37,8 +38,8 @@ impl<'vir> OutputRefAny for ImStateEncRef<'vir> {}
 #[derive(Debug, Clone, Copy)]
 pub struct ImStateEncResult<'vir> {
     domain: vir::Domain<'vir>,
-    pred: vir::Predicate<'vir>,
     get: vir::Function<'vir>,
+    pred: vir::Predicate<'vir>,
     bump: vir::Method<'vir>,
 }
 
@@ -64,13 +65,19 @@ impl TaskEncoder for ImStateEnc {
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
         vir::with_vcx(|vcx| {
-            let mut functions = Vec::new();
+            let mut domain_functions = Vec::new();
             let mut axioms = Vec::new();
 
             let next_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_next"),
                 vir::TYPE_IMSTATE,
                 vir::TYPE_IMSTATE,
+            );
+
+            let havocked_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_havocked"),
+                (vir::TYPE_IMSTATE, vir::TYPE_IMSTATE),
+                vir::TYPE_BOOL,
             );
 
             let get_snap_idn = vir::FunctionIdn::new(
@@ -138,6 +145,7 @@ impl TaskEncoder for ImStateEnc {
             deps.emit_output_ref(*task_key, ImStateEncRef {
                 next_idn,
                 lte_idn,
+                havocked_idn,
                 get_snap_idn,
                 allocated_idn,
                 fresh_idn,
@@ -145,23 +153,24 @@ impl TaskEncoder for ImStateEnc {
                 not_modified_idn,
                 mk_rep_idn,
                 rep_eq_idn,
-                pred_idn,
                 get_idn,
+                pred_idn,
                 bump_idn,
                 state_ref_decl,
             })?;
 
-            // Functions
+            // Domain Functions
 
-            functions.push(vcx.mk_domain_function(next_idn, false, None));
-            functions.push(vcx.mk_domain_function(lte_idn, false, None));
-            functions.push(vcx.mk_domain_function(get_snap_idn, false, None));
-            functions.push(vcx.mk_domain_function(allocated_idn, false, None));
-            functions.push(vcx.mk_domain_function(fresh_idn, false, None));
-            functions.push(vcx.mk_domain_function(modifiable_idn, false, None));
-            functions.push(vcx.mk_domain_function(not_modified_idn, false, None));
-            functions.push(vcx.mk_domain_function(mk_rep_idn, false, None));
-            functions.push(vcx.mk_domain_function(rep_eq_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(next_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(lte_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(havocked_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(get_snap_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(allocated_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(fresh_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(modifiable_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(not_modified_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(mk_rep_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(rep_eq_idn, false, None));
 
             // General Axioms
 
@@ -268,7 +277,7 @@ impl TaskEncoder for ImStateEnc {
                 vir::ViperIdent::new("im_state"),
                 &[],
                 vcx.alloc_slice(&axioms[..]),
-                vcx.alloc_slice(&functions[..]),
+                vcx.alloc_slice(&domain_functions[..]),
                 None,
             );
 
@@ -299,6 +308,11 @@ impl TaskEncoder for ImStateEnc {
                         (get_idn).call()(ref_expr),
                         next_idn.call()(vcx.mk_old_expr(get_idn.call()(ref_expr))),
                     ),
+                    // TODO do we always want to consider the next state to be havocked from the current one?
+                    havocked_idn.call()(
+                        vcx.mk_old_expr(get_idn.call()(ref_expr)),
+                        get_idn.call()(ref_expr),
+                    ),
                 ]),
                 None,
             );
@@ -319,8 +333,8 @@ impl TaskEncoder for ImStateEnc {
         for output in Self::all_outputs_local_no_errors(program) {
             program.add_domain(output.domain);
             program.add_predicate(output.pred);
-            program.add_function(output.get);
             program.add_method(output.bump);
+            program.add_function(output.get);
         }
     }
 }
