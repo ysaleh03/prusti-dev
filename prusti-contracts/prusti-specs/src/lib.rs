@@ -1351,15 +1351,6 @@ pub fn capable(outer_attr_tokens: TokenStream, tokens: TokenStream) -> TokenStre
         generated_attributes.extend(new_attributes);
     }
 
-    let foo = 
-    quote_spanned! {item.span()=>
-        #(#generated_spec_items)*
-        #(#generated_attributes)*
-        #[prusti::specs_version = #SPECS_VERSION]
-        #item
-    };
-    println!("{}", foo.clone().to_token_stream());
-
     quote_spanned! {item.span()=>
         #(#generated_spec_items)*
         #(#generated_attributes)*
@@ -1377,7 +1368,6 @@ struct CapabilityAnnotation {
 
 impl syn::parse::Parse for CapabilityAnnotation {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        println!("{}", input);
         let capability = input.parse()?;
         input.parse::<syn::Token![,]>()?;
 
@@ -1402,11 +1392,7 @@ impl syn::parse::Parse for CapabilityAnnotation {
     }
 }
 
-fn generate_for_capable(
-    attr: TokenStream,
-    span: Span,
-    item: &syn::ItemConst,
-) -> GeneratedResult {
+fn generate_for_capable(attr: TokenStream, span: Span, item: &syn::ItemConst) -> GeneratedResult {
     let annotation: CapabilityAnnotation = syn::parse2(attr)?;
 
     let CapabilityAnnotation {
@@ -1420,7 +1406,8 @@ fn generate_for_capable(
     let spec_id = rewriter.generate_spec_id();
     let spec_id_str = spec_id.to_string();
 
-    let spec_items = rewriter.process_capability(spec_id, capability, side_condition, addr, ty, item)?;
+    let spec_items =
+        rewriter.process_capability(spec_id, capability, side_condition, addr, ty, item)?;
 
     Ok((
         vec![spec_items.0, spec_items.1],
@@ -1430,41 +1417,13 @@ fn generate_for_capable(
     ))
 }
 
-// fn generate_for_capable(attr: TokenStream, span: Span, item: &syn::ItemConst) -> GeneratedResult {
-//     let mut rewriter = rewriter::AstRewriter::new();
-//     let spec_id = rewriter.generate_spec_id();
-//     let spec_id_str = spec_id.to_string();
-//     let spec_item = rewriter.process_capability(spec_id, attr, item)?;
-//     Ok((
-//         vec![spec_item],
-//         vec![parse_quote_spanned! {span=>
-//             #[prusti::pre_spec_id_ref = #spec_id_str]
-//         }],
-//     ))
-// }
-
-struct DerefInput {
-    root: syn::Expr,
-    _at: syn::Token![@],
-    name: syn::Expr,
-}
-
-impl syn::parse::Parse for DerefInput {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let root = input.parse()?;
-        let _at = input.parse()?;
-        let name = input.parse()?;
-        Ok(DerefInput { root, _at, name })
-    }
-}
-
 pub fn addr_to_ref(tokens: TokenStream) -> TokenStream {
-    let deref_input: DerefInput =
-        syn::parse2(tokens).expect("Malformed deref input, expected <root>@<name>");
-    let root = deref_input.root;
-    let name = deref_input.name;
+    let addr = parse_prusti(tokens)
+        .map(|p| syn::parse2::<syn::Expr>(p))
+        .flatten()
+        .expect("Malformed address expression");
     syn::parse_quote! {
-        ::prusti_contracts::Addr::to_ref((#root).#name())
+        ::prusti_contracts::Addr::to_ref(#addr)
     }
 }
 
