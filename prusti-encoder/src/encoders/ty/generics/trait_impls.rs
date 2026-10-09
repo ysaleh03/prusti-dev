@@ -160,7 +160,8 @@ impl TaskEncoder for TraitImplEnc {
                                         }
                                         Some(vec![err])
                                     });
-                                    vcx.mk_exhale_stmt(pre)
+                                    // TODO IM is this right?
+                                    vcx.mk_exhale_stmt(pre.total)
                                 }))
                                 .collect::<Vec<_>>()),
                             vcx.alloc(vir::TerminatorStmtData::Exit),
@@ -223,7 +224,8 @@ impl TaskEncoder for TraitImplEnc {
                             );
                             Some(vec![err])
                         });
-                        stmts.push(vcx.mk_exhale_stmt(post));
+                        // TODO is this right?
+                        stmts.push(vcx.mk_exhale_stmt(post.total));
                     });
                 }
                 if trait_item_has_body && trait_item_is_pure {

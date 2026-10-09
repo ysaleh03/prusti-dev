@@ -258,6 +258,14 @@ impl TaskEncoder for MethodEnc {
                 args.push(vir::vir_local_decl! { vcx; [name_p] : Ref });
                 if arg_idx != mir::RETURN_PLACE {
                     pres.push(arg_defs[arg_idx].impure_pred);
+                    // (Interior Mutability) add an inhale-exhale expression
+                    // for each initial capability
+                    pres.push(
+                        vcx.mk_inhale_exhale_expr(
+                            arg_defs[arg_idx].impure_cap,
+                            vcx.mk_bool::<true>(),
+                        ),
+                    )
                 }
             }
             posts.push(arg_defs[mir::RETURN_PLACE].impure_pred);
@@ -304,6 +312,20 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
                     )
                 }
+
+                // TODO IM what we want to do is encode the pre-condition of the method as a inhale-exhale pair
+                // where the exhale (2nd) element includes exlcusive capability to each argument and the inhale
+                // (1st) element uses the total version of each function
+
+                // TODO what about post-conditions? I assume we don't want to emit capabilities into the callee
+                // TODO does this work with the generic encoding/casts?
+                // I think so - since the imstate stores s_Params, if we learn an equality between two s_Params we
+                // should also know that the concrete cast of both is equal
+
+                // TODO each pre would actually be a pair of the stability-check and non-stability check version (we could do this in the spec encoder)
+                // then we would have a inhale-exhale pair [initial-caps, true]
+
+                // let init_capabilities = todo!();
 
                 let im_data = {
                     let curr_im_state = im_state.get_idn.call()(im_state_ref);
@@ -432,8 +454,18 @@ impl TaskEncoder for MethodEnc {
             };
 
             // Add functional specification as the last pre- and postconditions.
-            pres.extend(spec.pre_exprs());
-            posts.extend(spec.post_exprs());
+            // (Interior Mutability) each function pre-condition is encoded as an inhale-exhale
+            // expression where the partial ImState operations are checked on inhale
+            pres.extend(
+                spec.pres
+                    .iter()
+                    .map(|(cond, _)| vcx.mk_inhale_exhale_expr(cond.partial, cond.total)),
+            );
+            posts.extend(
+                spec.posts
+                    .iter()
+                    .map(|(cond, _)| vcx.mk_inhale_exhale_expr(cond.partial, cond.total)),
+            );
 
             Ok((
                 MethodEncOutput {

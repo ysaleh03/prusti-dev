@@ -103,12 +103,19 @@ pub struct EncodedPledge<'vir> {
     pub expiry_postcondition: PledgeExpr<'vir>,
 }
 
+#[derive(Clone, Copy)]
+pub struct MirSpecCond<'vir> {
+    pub total: vir::ExprBool<'vir>,
+    // (Interior Mutability) if stability checks are on, the encoding that contains them
+    pub partial: vir::ExprBool<'vir>,
+}
+
 #[derive(Clone)]
 pub struct MirSpecEncOutput<'vir> {
     /// Each precondition paired with the source span of its spec item.
-    pub pres: Vec<(vir::ExprBool<'vir>, Span)>,
+    pub pres: Vec<(MirSpecCond<'vir>, Span)>,
     /// Each postcondition paired with the source span of its spec item.
-    pub posts: Vec<(vir::ExprBool<'vir>, Span)>,
+    pub posts: Vec<(MirSpecCond<'vir>, Span)>,
     pub pledges: Vec<EncodedPledge<'vir>>,
     pub pre_args: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
     #[allow(dead_code)]
@@ -118,12 +125,22 @@ pub struct MirSpecEncOutput<'vir> {
 impl<'vir> MirSpecEncOutput<'vir> {
     /// The precondition expressions, discarding their spans.
     pub fn pre_exprs(&self) -> impl Iterator<Item = vir::ExprBool<'vir>> + '_ {
-        self.pres.iter().map(|(pre, _)| *pre)
+        self.pres.iter().map(|(pre, _)| pre.total)
+    }
+
+    /// The precondition expressions with stability checks, discarding their spans.
+    pub fn partial_pre_exprs(&self) -> impl Iterator<Item = vir::ExprBool<'vir>> + '_ {
+        self.pres.iter().map(|(pre, _)| pre.partial)
     }
 
     /// The postcondition expressions, discarding their spans.
     pub fn post_exprs(&self) -> impl Iterator<Item = vir::ExprBool<'vir>> + '_ {
-        self.posts.iter().map(|(post, _)| *post)
+        self.posts.iter().map(|(post, _)| post.total)
+    }
+
+    /// The partial postcondition expressions, discarding their spans.
+    pub fn partial_post_exprs(&self) -> impl Iterator<Item = vir::ExprBool<'vir>> + '_ {
+        self.posts.iter().map(|(post, _)| post.partial)
     }
 }
 
@@ -232,22 +249,45 @@ impl TaskEncoder for MirSpecEnc {
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pres_inherited),
+                do_stability_checks: false,
+            };
+            let partial_pre_ctx = SpecEncCtx {
+                extern_spec: specs.extern_spec,
+                enc_mode,
+                context_def_id,
+                substs: substs_for(pres_inherited),
                 do_stability_checks,
             };
+
             let post_ctx = SpecEncCtx {
+                extern_spec: specs.extern_spec,
+                enc_mode,
+                context_def_id,
+                substs: substs_for(posts_inherited),
+                do_stability_checks: false,
+            };
+            let partial_post_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(posts_inherited),
                 do_stability_checks,
             };
+
             let pledge_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pledges_inherited),
-                do_stability_checks,
+                do_stability_checks: false,
             };
+            // let partial_pledge_ctx = SpecEncCtx {
+            //     extern_spec: specs.extern_spec,
+            //     enc_mode,
+            //     context_def_id,
+            //     substs: substs_for(pledges_inherited),
+            //     do_stability_checks,
+            // };
 
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
             let all_args: FxHashMap<mir::Local, _> = match enc_mode {
@@ -299,35 +339,71 @@ impl TaskEncoder for MirSpecEnc {
                 }
             };
 
+            // TODO If we are in impure context then we do one encoding where
+
             // Encode each functional precondition; if one cannot be encoded (e.g.
             // it uses an unsupported feature), report the error at *that spec's*
             // span and skip only it, keeping the permission contract and the other
             // specs intact.
-            let pres: Vec<(vir::ExprBool<'_>, Span)> = pres
+            let pres: Vec<(MirSpecCond<'_>, Span)> = pres
                 .iter()
                 .filter_map(|spec_def_id| {
-                    let spec = Self::encode_pure(vcx, deps, pre_ctx, *spec_def_id, "precondition")?;
-                    let expr = spec.expr.downcast_ty::<vir::Bool>();
                     let span = vcx.tcx().def_span(*spec_def_id);
-                    // Reify *inside* the span scope: the nodes created by the
-                    // reification pick up the ambient span, which makes error
-                    // positions inside this precondition point at the spec.
-                    //
-                    // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
-                    // TODO we might want to make local_refs available here
-                    let expr = vcx.with_span(span, |vcx| {
-                        expr.reify(
-                            vcx,
-                            (
+                    vcx.with_span(span, |vcx| {
+                        let total = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                pre_ctx,
                                 *spec_def_id,
-                                pre_args,
-                                local_refs,
-                                vir::OldLabel::None,
-                                im_state_ex,
-                            ),
-                        )
-                    });
-                    Some((expr, span))
+                                "precondition",
+                            )?;
+                            let expr = spec.expr.downcast_ty::<vir::Bool>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    local_refs,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        let partial = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                partial_pre_ctx,
+                                *spec_def_id,
+                                "precondition",
+                            )?;
+                            let expr = spec.expr.downcast_ty::<vir::Bool>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    local_refs,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        Some((MirSpecCond { total, partial }, span))
+                    })
                 })
                 .collect();
 
@@ -346,32 +422,66 @@ impl TaskEncoder for MirSpecEnc {
                 }
                 MirSpecEncMode::PureWithResult | MirSpecEncMode::PureWithoutResult => all_args,
             };
-            let posts: Vec<(vir::ExprBool<'_>, Span)> = posts
+            let posts: Vec<(MirSpecCond<'_>, Span)> = posts
                 .iter()
                 .filter_map(|spec_def_id| {
                     let span = vcx.tcx().def_span(spec_def_id);
                     vcx.with_span(span, |vcx| {
-                        let spec =
-                            Self::encode_pure(vcx, deps, post_ctx, *spec_def_id, "postcondition")?;
-                        vcx.handle_error("postcondition.violated:assertion.false", move |_| {
-                            Some(vec![PrustiError::verification(
-                                "postcondition might not hold",
-                                span.into(),
-                            )])
-                        });
-                        let expr = spec.expr.downcast_ty::<vir::Bool>();
-                        let expr = expr.reify(
-                            vcx,
-                            (
+                        let total = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                post_ctx,
                                 *spec_def_id,
-                                post_args,
-                                local_refs,
-                                vir::OldLabel::None,
-                                im_state_ex,
-                            ),
-                        );
-                        let expr = expr.realloc_span();
-                        Some((expr, span))
+                                "postcondition",
+                            )?;
+                            vcx.handle_error("postcondition.violated:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "postcondition might not hold",
+                                    span.into(),
+                                )])
+                            });
+                            let expr = spec.expr.downcast_ty::<vir::Bool>();
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    post_args,
+                                    local_refs,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                            .realloc_span()
+                        };
+                        let partial = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                partial_post_ctx,
+                                *spec_def_id,
+                                "postcondition",
+                            )?;
+                            vcx.handle_error("postcondition.violated:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "postcondition might not hold",
+                                    span.into(),
+                                )])
+                            });
+                            let expr = spec.expr.downcast_ty::<vir::Bool>();
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    post_args,
+                                    local_refs,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                            .realloc_span()
+                        };
+                        Some((MirSpecCond { total, partial }, span))
                     })
                 })
                 .collect();

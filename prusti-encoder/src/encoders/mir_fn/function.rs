@@ -253,7 +253,7 @@ impl TaskEncoder for FunctionEnc {
                     // use inhale-exhale expression to prevent viper checking that
                     // the function body expression satisfies the postcondition:
                     // that's checked in the method encoding of this function.
-                    vcx.mk_inhale_exhale_expr(*post, vcx.mk_bool::<true>())
+                    vcx.mk_inhale_exhale_expr(post.total, vcx.mk_bool::<true>())
                 })
                 .collect::<Vec<_>>();
             let posts = vcx.alloc_slice(&posts);
