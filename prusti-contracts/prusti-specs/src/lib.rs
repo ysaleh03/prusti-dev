@@ -449,7 +449,7 @@ fn generate_for_modifies(
     Ok((
         vec![spec_item],
         vec![parse_quote_spanned! {span=>
-            #[prusti::pre_spec_id_ref = #spec_id_str]
+            #[prusti::modifies_spec_id_ref = #spec_id_str]
         }],
     ))
 }
@@ -463,7 +463,7 @@ fn generate_for_reads(attr: TokenStream, span: Span, item: &untyped::AnyFnItem) 
     Ok((
         vec![spec_item],
         vec![parse_quote_spanned! {span=>
-            #[prusti::pre_spec_id_ref = #spec_id_str]
+            #[prusti::reads_spec_id_ref = #spec_id_str]
         }],
     ))
 }
@@ -1243,12 +1243,12 @@ pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
         let spec_id_str = spec_id.to_string();
 
         Ok(quote_spanned! {item.span()=>
-            #[prusti::im_model]
+            #[prusti::im_model_trait]
             #[prusti::spec_id = #spec_id_str]
             #[prusti::specs_version = #SPECS_VERSION]
             #model_trait
 
-            #[prusti::spec_only]
+            #[prusti::im_model_impl]
             #[prusti::spec_id = #spec_id_str]
             #[prusti::specs_version = #SPECS_VERSION]
             #model_impl
@@ -1367,7 +1367,7 @@ fn generate_for_capable(attr: TokenStream, span: Span, item: &syn::ItemConst) ->
     Ok((
         vec![spec_item],
         vec![parse_quote_spanned! {span=>
-            #[prusti::pre_spec_id_ref = #spec_id_str]
+            #[prusti::capable_spec_id_ref = #spec_id_str]
         }],
     ))
 }

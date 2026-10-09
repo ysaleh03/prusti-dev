@@ -67,11 +67,11 @@ pub fn rewrite_im_spec(
     let spec_id_str = spec_id.to_string();
 
     Ok(quote_spanned! {item_impl.span()=>
-        #[prusti::im_spec]
+        #[prusti::im_spec_trait]
         #[prusti::spec_id = #spec_id_str]
         #new_trait
 
-        #[prusti::spec_only]
+        #[prusti::im_spec_impl]
         #[prusti::spec_id = #spec_id_str]
         #[prusti::specs_version = #SPECS_VERSION]
         #new_impl
