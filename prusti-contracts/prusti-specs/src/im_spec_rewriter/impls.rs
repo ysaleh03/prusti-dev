@@ -1,6 +1,6 @@
 //! Encoding of mendel specs for impls
 use super::common::*;
-use crate::{is_predicate_macro, SPECS_VERSION};
+use crate::{is_predicate_macro, specifications::preparser::parse_prusti, SPECS_VERSION};
 use proc_macro2::TokenStream;
 use quote::quote_spanned;
 use syn::{parse_quote, parse_quote_spanned, spanned::Spanned};
@@ -188,19 +188,23 @@ impl syn::parse::Parse for CapableInput {
 
         let capability: syn::Ident = input.parse()?;
         match capability.to_string().as_str() {
-            "unique" | "shared" | "atomic_unique" => (),
+            "exclusive" | "shared" | "local_read" | "local_write" | "atomic_read"
+            | "atomic_write" => (),
             _ => {
                 return Err(syn::Error::new(capability.span(), "unknown capability"));
             }
         }
 
+        input.parse::<syn::Token![::]>()?;
         input.parse::<syn::Token![<]>()?;
         let ty: syn::Type = input.parse()?;
         input.parse::<syn::Token![>]>()?;
 
         let content;
         syn::parenthesized!(content in input);
-        let addr: syn::Expr = content.parse()?;
+
+        let addr_tokens = content.parse()?;
+        let addr = syn::parse2::<syn::Expr>(parse_prusti(addr_tokens)?)?;
 
         Ok(CapableInput {
             receiver,

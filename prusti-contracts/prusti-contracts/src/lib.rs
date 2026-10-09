@@ -453,7 +453,7 @@ mod private_shared {
     impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
 
     impl<'a, T: ?Sized> Addr<'a, T> {
-        pub fn unique(l: Addr<'a, T>) -> bool {
+        pub fn exclusive(l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
 
@@ -461,11 +461,19 @@ mod private_shared {
             unimplemented!()
         }
 
-        pub fn local_unique(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
+        pub fn local_read(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
 
-        pub fn atomic_unique(l: Addr<'a, T>) -> bool {
+        pub fn local_write(l: Addr<'a, T>) -> bool {
+            unimplemented!()
+        }
+
+        pub fn atomic_read(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
+            unimplemented!()
+        }
+
+        pub fn atomic_write(l: Addr<'a, T>) -> bool {
             unimplemented!()
         }
     }
