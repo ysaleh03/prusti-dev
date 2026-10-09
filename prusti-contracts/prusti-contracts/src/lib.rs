@@ -471,18 +471,16 @@ mod private_shared {
     }
 
     impl<'a, T: ?Sized> Addr<'a, T> {
-        pub fn to_ref(_: Addr<'a, T>) -> &'a T {
+        pub fn to_ref(self) -> &'a T {
             unimplemented!()
         }
 
-        pub fn to_dyn(_: Addr<'a, T>) -> AddrDyn {
+        pub fn to_dyn(self) -> AId{
             unimplemented!()
         }
     }
 
-    // TODO AddrDyn might be a bad name for this. This is an Addr where the
-    // type of the referent is stored internally as a value.
-    pub struct AddrDyn;
+    pub struct AId;
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);
 

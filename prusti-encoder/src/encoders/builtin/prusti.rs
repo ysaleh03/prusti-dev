@@ -8,7 +8,7 @@ use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDe
 use vir::{CastType, FunctionIdn, TyVal};
 
 use crate::encoders::{
-    ImStateEnc, im_state,
+    ImCapEnc, ImStateEnc, im_state,
     ty::{
         RustTyDecomposition,
         generics::{GArgs, TyExprEnc},
@@ -127,7 +127,9 @@ pub enum FloatOp {
 /// The abstract pointer addr_to_ref and capability builtins
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum AddrOp {
-    ToImmRef,
+    ToId,
+    ToRef,
+    ToRep,
     Unique,
     Shared,
     LocalUnique,
@@ -137,8 +139,8 @@ pub enum AddrOp {
 /// Rep builtin operations
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum RepOp {
-    NewAddr,
-    NewRef,
+    FromAddr,
+    FromRef,
 }
 
 /// A `prusti_contracts` builtin, classified from the callee and grouped by
@@ -291,6 +293,9 @@ impl PrustiBuiltin {
                 Some("Int") => Self::Int(Self::num_op(item)),
                 Some("Real") => Self::Real(Self::num_op(item)),
                 Some("Addr") => match item {
+                    "to_ref" => Self::Addr(AddrOp::ToRef),
+                    "to_id" => Self::Addr(AddrOp::ToId),
+                    "to_rep" => Self::Addr(AddrOp::ToRep),
                     "unique" => Self::Addr(AddrOp::Unique),
                     "shared" => Self::Addr(AddrOp::Shared),
                     "local_unique" => Self::Addr(AddrOp::LocalUnique),
@@ -298,8 +303,8 @@ impl PrustiBuiltin {
                     other => todo!("unsupported capability {other}"),
                 },
                 Some("Rep") => match item {
-                    "new_ref" => Self::Rep(RepOp::NewRef),
-                    "new_addr" => Self::Rep(RepOp::NewAddr),
+                    "new_ref" => Self::Rep(RepOp::FromRef),
+                    "new_addr" => Self::Rep(RepOp::FromAddr),
                     other => todo!("unsupported `Rep` function {other}"),
                 },
                 Some(other) => todo!("unsupported `prusti_contracts` function {other}::{item}"),
@@ -421,11 +426,10 @@ pub struct PrustiBuiltinTask<'vir> {
     /// [`CollectionOpsEnc`] in pure code (where the precondition-free `f_`
     /// functions could never discharge it).
     pub is_pure: bool,
-    /// The call-site span (`is_none()` iff `is_pure`). The returned expression
-    /// is partial iff `!is_pure`, therefore in this case we need to report
-    /// verification errors with this span (thus each impure call site is
-    /// encoded separately).
-    pub span: Option<Span>,
+    /// (Interior Mutability) If the callsite is in a context in which we must
+    /// check that its result is stable using implicit capabilities.
+    pub do_stability_checks: bool,
+    pub span: Span,
 }
 
 // TODO operands should include the imstate ref variable
@@ -500,10 +504,7 @@ impl TaskEncoder for PrustiBuiltinEnc {
         deps.emit_output_ref(*task_key, ())?;
         // The span of a checked operation is part of the key, so this
         // encoding belongs to (and is reachable from) that call statement.
-        vir::with_vcx(|vcx| match task_key.span {
-            Some(span) => vcx.with_span(span, |vcx| Self::encode(task_key, deps, vcx)),
-            None => Self::encode(task_key, deps, vcx),
-        })
+        vir::with_vcx(|vcx| vcx.with_span(task_key.span, |vcx| Self::encode(task_key, deps, vcx)))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -524,9 +525,10 @@ impl PrustiBuiltinEnc {
             def_id,
             args,
             is_pure,
+            do_stability_checks,
             span,
         } = *task_key;
-        assert_eq!(is_pure, span.is_none());
+        // assert_eq!(is_pure, span.is_none());
         let tcx = vcx.tcx();
         let sig = tcx
             .fn_sig(def_id)
@@ -563,6 +565,8 @@ impl PrustiBuiltinEnc {
             args,
             operands,
             curr_im_state,
+            do_stability_checks,
+            is_pure,
             span,
         };
         let res: ExprRet<'vir, vir::Snap> = match builtin {
@@ -644,7 +648,9 @@ struct BuiltinCtxt<'enc, 'vir> {
     args: GArgs<'vir>,
     operands: &'enc [ExprRet<'vir, vir::Snap>],
     curr_im_state: ExprRet<'vir, vir::ImState>,
-    span: Option<Span>,
+    do_stability_checks: bool,
+    is_pure: bool,
+    span: Span,
 }
 
 impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
@@ -663,7 +669,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let ghost = self.e_input_deref(0)?.expect_structlike();
                 let ghost_snap = self.deref_operand(0)?;
                 let value = ghost.fields[0].read(ghost_snap);
-                self.wrap_in_immref(value)?
+                self.wrap_in_immref(value, None)?
             }
             // The block's value is the inline body operand; the checker
             // closure operand is ignored.
@@ -676,7 +682,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 return Err(EncodeFullError::DependencyError(vec![(
                     PrustiBuiltinEnc::ENCODER_NAME,
                     "`ghost_erased` outside of a `ghost!` block".to_string(),
-                    self.span.into_iter().collect(),
+                    vec![self.span],
                 )]));
             }
         })
@@ -710,16 +716,16 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let idx = self.index_to_int(self.operands[1], self.sig.inputs()[1])?;
                 let value = self.value_operand(2, Self::adt_type_arg(self.sig.inputs()[0], 0))?;
                 let val = seq.elem_caster().cast_to_callee_ctx(value);
-                if let Some(span) = self.span {
+                if self.is_pure {
                     self.handle_partial_op_error(
                         "call.failed:seq.index.length",
                         "the update index may be out of bounds",
-                        span,
+                        self.span,
                     );
                     self.handle_partial_op_error(
                         "call.failed:seq.index.negative",
                         "the update index may be negative",
-                        span,
+                        self.span,
                     );
                     self.vcx
                         .mk_seq_update_expr(
@@ -795,16 +801,16 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                     // `s[i]`: the element, wrapped in the (single-field)
                     // `Ghost` struct of the output.
                     let idx = self.index_to_int(self.operands[1], self.sig.inputs()[1])?;
-                    let elem = if let Some(span) = self.span {
+                    let elem = if self.is_pure {
                         self.handle_partial_op_error(
                             "call.failed:seq.index.length",
                             "the sequence index may be out of bounds",
-                            span,
+                            self.span,
                         );
                         self.handle_partial_op_error(
                             "call.failed:seq.index.negative",
                             "the sequence index may be negative",
-                            span,
+                            self.span,
                         );
                         self.vcx
                             .mk_seq_index_expr(seq, idx)
@@ -823,7 +829,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                         .field_snaps_to_snap(vec![elem])
                         .upcast_ty()
                 };
-                self.wrap_in_immref(value)?
+                self.wrap_in_immref(value, None)?
             }
         })
     }
@@ -840,11 +846,11 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         start: Option<ExprRet<'vir, vir::Int>>,
         end: Option<ExprRet<'vir, vir::Int>>,
     ) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
-        Ok(if let Some(span) = self.span {
+        Ok(if self.is_pure {
             self.handle_partial_op_error(
                 "application.precondition:assertion.false",
                 "the range bounds may be out of bounds",
-                span,
+                self.span,
             );
             // A two-sided `s[a..b]` composes the checked slices: the inner
             // `prusti_seq_slice_to` ensures `0 <= b <= |s|` and the outer
@@ -1011,11 +1017,11 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let self_ = self.sig.inputs()[0].builtin_deref(false).unwrap();
                 let key = self.value_operand(1, Self::adt_type_arg(self_, 0))?;
                 let key = map_data.map_key_caster().cast_to_callee_ctx(key);
-                let val = if let Some(span) = self.span {
+                let val = if self.is_pure {
                     self.handle_partial_op_error(
                         "call.failed:map.key.contains",
                         "the map may not contain this key",
-                        span,
+                        self.span,
                     );
                     self.vcx
                         .mk_map_lookup_expr(map, key.downcast_ty::<vir::PSnap>())
@@ -1034,7 +1040,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                     .expect_structlike()
                     .field_snaps_to_snap(vec![val])
                     .upcast_ty();
-                self.wrap_in_immref(val)?
+                self.wrap_in_immref(val, None)?
             }
         })
     }
@@ -1156,8 +1162,32 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
     }
 
     fn encode_addr_op(&mut self, op: AddrOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
-        todo!()
-        // let data = self.e_input(0)?.expect_addr();
+        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+        let addr_ty = self.e_input(0)?.expect_addr();
+        let opand = self.operands[0].downcast_ty::<vir::CSnap>();
+        Ok(match op {
+            AddrOp::ToRef => {
+                let tyval = addr_ty.type_access(opand);
+                let addr = addr_ty.addr_access(opand);
+                // TODO is this an invariant?
+                let snap = if self.do_stability_checks {
+                    self.handle_partial_op_error(
+                        "application.precondition:assertion.false",
+                        "insufficient capability to guarantee that call to `to_ref` is stable",
+                        self.span,
+                    );
+                    let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+                    im_caps.get_snap_partial_idn.call()(tyval, self.curr_im_state, addr)
+                } else {
+                    im_state.get_snap_idn.call()(tyval, self.curr_im_state, addr)
+                };
+                // TODO it's a bit unfortunate that we have to do this given that the immref
+                // snapshot takes a generic s_Param
+                self.wrap_in_immref(addr_ty.mk_referent_concrete(snap), Some(addr))?
+            }
+            _ => todo!(),
+        })
+
         // let ptr = self.operands[0].downcast_ty();
         // let pc = self
         //     .vcx
@@ -1230,6 +1260,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
     fn wrap_in_immref(
         &mut self,
         value: ExprRet<'vir, vir::Snap>,
+        addr: Option<ExprRet<'vir, vir::Ref>>,
     ) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
         let metadata_ty = self
             .sig
@@ -1239,21 +1270,20 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         // bounds prove `T: Sized` (`pointee_metadata_ty_or_projection` only
         // resolves bound-independent sizedness).
         let metadata_ty = self.args.context().normalize(metadata_ty);
-        // This can only happen for `Ghost::deref` (the `index` functions all
-        // return `&Ghost<T>`).
         let metadata = self.encode_ty(metadata_ty)?.zst_to_snap().ok_or_else(|| {
             EncodeFullError::DependencyError(vec![(
                 PrustiBuiltinEnc::ENCODER_NAME,
                 format!(
-                    "Ghost::deref on maybe unsized `{:?}` not supported",
+                    "Fabricating spec-mode reference to unsized `{:?}` is not supported",
                     Self::deref_opt(self.sig.output()).unwrap()
                 ),
-                self.span.into_iter().collect(),
+                vec![self.span],
             )])
         })?;
+        let addr = addr.unwrap_or(self.vcx.mk_null().lazy());
         Ok(self
             .e_output_immref()?
-            .prim_to_snap(self.vcx.mk_null().lazy(), metadata.upcast_ty(), value)
+            .prim_to_snap(addr, metadata.upcast_ty(), value)
             .upcast_ty())
     }
 
@@ -1400,10 +1430,10 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
     fn encode_rep_op(&mut self, op: RepOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
         Ok(match op {
-            RepOp::NewAddr => {
+            RepOp::FromAddr => {
                 todo!()
             }
-            RepOp::NewRef => {
+            RepOp::FromRef => {
                 let arg = self.operands[0].downcast_ty();
                 let arg_mutref = self.e_input(0)?.expect_mutref();
                 let arg_snap = arg_mutref.cast_to_callee_ctx(arg_mutref.value_access(arg));

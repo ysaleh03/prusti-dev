@@ -16,11 +16,10 @@ pub(crate) fn ty_pure<'vir>(
     Ok(())
 }
 
-// pub(crate) fn ty_impure<'vir>(
-//     _data: &(&'vir LazyRustTy<'vir>, &'vir TyPureRepData<'vir>),
-//     _deps: &mut TaskEncoderDependencies<'vir, TyImpureEnc>,
-//     builder: &mut PredicateBuilder<'vir>,
-// ) -> Result<TyImpureRepData<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
-//     super::primitive::set_primitive(builder);
-//     Ok(())
-// }
+pub(crate) fn ty_impure<'vir>(
+    builder: &mut PredicateBuilder<'vir>,
+) -> Result<(), EncodeFullError<'vir, TyImpureEnc>> {
+    super::primitive::set_primitive(builder);
+    builder.mk_snap_function(None, &[]);
+    Ok(())
+}

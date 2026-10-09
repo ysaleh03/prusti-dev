@@ -36,13 +36,57 @@ impl<'vir> TyDatas<'vir> for UsePureTyDatas {
     type VariantData = <PureTyDatas as TyDatas<'vir>>::VariantData;
     type EnumData = <PureTyDatas as TyDatas<'vir>>::EnumData;
     type BuiltinData = TyUsePureBuiltinData<'vir>;
-    type AddrData = <PureTyDatas as TyDatas<'vir>>::AddrData;
+    type AddrData = TyUsePureAddrData<'vir>;
 }
 
 pub type TyUsePure<'vir> = Ty<'vir, UsePureTyDatas>;
 pub type TyUsePureArray<'vir> = ArrayData<'vir, UsePureTyDatas>;
 pub type TyUsePureStruct<'vir> = StructData<'vir, UsePureTyDatas>;
 pub type TyUsePureEnum<'vir> = EnumData<'vir, UsePureTyDatas>;
+
+#[derive(Debug, Clone, Copy)]
+pub struct TyUsePureAddrData<'vir> {
+    referent_caster: FieldCaster<'vir>,
+    pure: <PureTyDatas as TyDatas<'vir>>::AddrData,
+}
+
+impl<'vir> TyUsePureAddrData<'vir> {
+    pub fn addr_access<Curr, Next>(
+        &self,
+        snap: vir::ExprGenCSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenRef<'vir, Curr, Next> {
+        self.pure.addr_access.call()(snap)
+    }
+
+    pub fn type_access<Curr, Next>(
+        &self,
+        snap: vir::ExprGenCSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenTyVal<'vir, Curr, Next> {
+        self.pure.type_access.call()(snap)
+    }
+
+    pub fn mk_addr<Curr, Next>(
+        &self,
+        addr: vir::ExprGenRef<'vir, Curr, Next>,
+        tyval: vir::ExprGenTyVal<'vir, Curr, Next>,
+    ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
+        self.pure.mk_addr.call()(addr, tyval)
+    }
+
+    pub fn mk_referent_generic<Curr, Next>(
+        &self,
+        snap: vir::ExprGenSnap<'vir, Curr, Next>
+    ) -> vir::ExprGenPSnap<'vir, Curr, Next> {
+        self.referent_caster.cast_to_callee_ctx(snap).downcast_ty()
+    }
+
+    pub fn mk_referent_concrete<Curr, Next>(
+        &self,
+        snap: vir::ExprGenPSnap<'vir, Curr, Next>
+    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
+        self.referent_caster.cast_to_caller_ctx(snap.upcast_ty()).downcast_ty()
+    }
+}
 
 /// Use-side data for a `prusti_contracts` builtin. The collection builtins
 /// store their elements as generic snapshots (`s_Param`), so their operations
@@ -278,7 +322,13 @@ impl<'a, 'vir> TyUsePureWalker<'a, 'vir> {
                     casters,
                 })
             }
-            TySpecifics::Addr(data) => TySpecifics::mk_addr(*data.1),
+            TySpecifics::Addr(data) => {
+                let referent_caster = self.encode_normalized(*data.0, ty.0.params)?;
+                TySpecifics::mk_addr(TyUsePureAddrData {
+                    pure: *data.1,
+                    referent_caster,
+                })
+            },
             TySpecifics::AddrDyn(data) => todo!(),
             TySpecifics::Rep(data) => TySpecifics::Rep(()),
         };

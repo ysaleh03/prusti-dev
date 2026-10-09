@@ -216,6 +216,7 @@ impl TaskEncoder for FunctionEnc {
                     kind: PureKind::Pure,
                     parent_def_id: def_id,
                     gargs: params.identity_args(),
+                    do_stability_checks: false,
                 }) {
                     Ok(out) => {
                         let expr = out

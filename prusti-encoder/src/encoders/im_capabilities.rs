@@ -24,6 +24,8 @@ pub struct ImCapEncRef<'vir> {
 
     pub get_snap_partial_idn:
         vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::PSnap>,
+    pub get_rep_partial_idn:
+        vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::GRep>,
 }
 
 impl<'vir> OutputRefAny for ImCapEncRef<'vir> {}
@@ -112,12 +114,12 @@ impl TaskEncoder for ImCapEnc {
                 vir::TYPE_INT,
             );
             let stable_read_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("im_stable_read_idn"),
+                vir::ViperIdent::new("im_stable_read"),
                 (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
             let stable_write_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("im_stable_write_idn"),
+                vir::ViperIdent::new("im_stable_write"),
                 (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
                 vir::TYPE_BOOL,
             );
@@ -126,6 +128,12 @@ impl TaskEncoder for ImCapEnc {
                 vir::ViperIdent::new("im_get_snap_partial"),
                 (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
                 vir::TYPE_PSNAP,
+            );
+
+            let get_rep_partial_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_get_rep_partial"),
+                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
+                vir::TYPE_GREP,
             );
 
             deps.emit_output_ref(*task_key, ImCapEncRef {
@@ -137,6 +145,7 @@ impl TaskEncoder for ImCapEnc {
                 stable_read_idn,
                 stable_write_idn,
                 get_snap_partial_idn,
+                get_rep_partial_idn,
             })?;
 
             domain_functions.push(vcx.mk_domain_function(stable_read_idn, false, None));
@@ -281,7 +290,7 @@ impl TaskEncoder for ImCapEnc {
             );
             axioms.push(exclusive_modifiable);
 
-            // Partial lookup function
+            // Partial lookup functions
 
             let tyval_decl = vcx.mk_local_decl("ty", vir::TYPE_TYVAL);
             let tyval_ex = vcx.mk_local_ex(tyval_decl);
@@ -289,6 +298,7 @@ impl TaskEncoder for ImCapEnc {
             let state_ex = vcx.mk_local_ex(state_decl);
             let addr_decl = vcx.mk_local_decl("addr", vir::TYPE_REF);
             let addr_ex = vcx.mk_local_ex(addr_decl);
+
             functions.push(vcx.mk_function(
                 get_snap_partial_idn,
                 (tyval_decl, state_decl, addr_decl),
@@ -297,6 +307,15 @@ impl TaskEncoder for ImCapEnc {
                     vcx.mk_result(vir::TYPE_PSNAP),
                     im_state.get_snap_idn.call()(tyval_ex, state_ex, addr_ex),
                 )]),
+                None,
+                None,
+            ));
+
+            functions.push(vcx.mk_function(
+                get_rep_partial_idn,
+                (tyval_decl, state_decl, addr_decl),
+                vcx.alloc_slice(&[stable_write_idn.call()(tyval_ex, state_ex, addr_ex)]),
+                &[],
                 None,
                 None,
             ));

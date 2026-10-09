@@ -231,7 +231,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
     type BuiltinData = RustBuiltinData<'tcx>;
-    // type AddrData = LazyRustTy<'tcx>;
+    type AddrData = LazyRustTy<'tcx>;
     type RepData = LazyRustTy<'tcx>;
 }
 
@@ -706,7 +706,8 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 //     }];
                 //     TySpecifics::mk_structlike((), fields)
                 // }
-                "Addr" | "AddrDyn" => TySpecifics::mk_addr(()),
+                "Addr" => TySpecifics::mk_addr(LazyRustTy(Self::new_param_ty(1))),
+                "AId" => todo!(),
                 "Rep" => TySpecifics::mk_rep(LazyRustTy(Self::new_param_ty(0))),
                 s => todo!("Unimplemented builtin {s}"),
             }

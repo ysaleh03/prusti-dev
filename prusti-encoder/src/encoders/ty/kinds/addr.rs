@@ -58,10 +58,9 @@ pub(crate) fn ty_pure<'vir>(
 }
 
 pub(crate) fn ty_impure<'vir>(
-    _data: &(&'vir (), &'vir TyPureAddrData<'vir>),
-    _deps: &mut TaskEncoderDependencies<'vir, TyImpureEnc>,
     builder: &mut PredicateBuilder<'vir>,
 ) -> Result<TyImpureAddr<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
     super::primitive::set_primitive(builder);
+    builder.mk_snap_function(None, &[]);
     Ok(TyImpureAddrData {})
 }

@@ -134,13 +134,14 @@ struct SpecEncCtx<'vir> {
     enc_mode: MirSpecEncMode,
     context_def_id: DefId,
     substs: ty::GenericArgsRef<'vir>,
+    // TODO figure out if we want to do separate stability-check encoding for methods
+    do_stability_checks: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MirSpecEncMode {
     // TODO IM add more modes for pure_unstable and pure_memory?
     // TODO do well-definedness and/or stability? we would do these in the impure encoding...
-
     /// Assumes the arguments and the result are available in local variables
     /// `_1p`, ... `_np`, and `_0p`, respectively, all of type `Ref``, i.e.,
     /// their snapshot is taken first.
@@ -225,23 +226,27 @@ impl TaskEncoder for MirSpecEnc {
             let (posts, posts_inherited) = crate::encoders::spec_items(&specs.posts);
             let (pledges, pledges_inherited) = crate::encoders::spec_items(&specs.pledges);
 
+            let do_stability_checks = matches!(enc_mode, MirSpecEncMode::Impure);
             let pre_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pres_inherited),
+                do_stability_checks,
             };
             let post_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(posts_inherited),
+                do_stability_checks,
             };
             let pledge_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pledges_inherited),
+                do_stability_checks,
             };
 
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
@@ -310,7 +315,6 @@ impl TaskEncoder for MirSpecEnc {
                     //
                     // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
                     // TODO we might want to make local_refs available here
-                    //
                     let expr = vcx.with_span(span, |vcx| {
                         expr.reify(
                             vcx,
@@ -320,7 +324,7 @@ impl TaskEncoder for MirSpecEnc {
                                 local_refs,
                                 vir::OldLabel::None,
                                 im_state_ex,
-                            ), // TODO IM pure_unstable
+                            ),
                         )
                     });
                     Some((expr, span))
@@ -448,6 +452,7 @@ impl MirSpecEnc {
                 GParams::new_maybe_extern(ctx.context_def_id, ctx.extern_spec),
                 ctx.substs,
             ),
+            do_stability_checks: ctx.do_stability_checks,
         });
         spec.inspect_err(|err| {
             let (message, err_span) = crate::encoders::mir_fn::dep_error(err);

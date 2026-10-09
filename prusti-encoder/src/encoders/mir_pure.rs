@@ -11,6 +11,7 @@ use crate::encoders::{
 };
 use itertools::Itertools;
 use pcg::utils::Place;
+use prusti_interface::PrustiError;
 use prusti_rustc_interface::{
     data_structures::graph::{self, Successors},
     index::IndexVec,
@@ -87,6 +88,9 @@ pub struct MirPureEncTask<'vir> {
     /// The generic arguments the body is encoded with, together with the
     /// context whose parameters give them meaning.
     pub gargs: GArgs<'vir>,
+    /// (Interior Mutability) Whether to use the versions of IM primitives that
+    /// check capabilities in the current state.
+    pub do_stability_checks: bool,
 }
 
 impl TaskEncoder for MirPureEnc {
@@ -100,6 +104,7 @@ impl TaskEncoder for MirPureEnc {
         PureKind,    // encoding a pure function?
         DefId,       // ID of the function
         GArgs<'vir>, // the generic arguments and their context
+        bool,        // whether to do stability checks
     );
 
     type OutputFullDependency<'vir> = MirPureEncOutput<'vir>;
@@ -113,6 +118,7 @@ impl TaskEncoder for MirPureEnc {
             task.kind,
             task.parent_def_id,
             task.gargs,
+            task.do_stability_checks,
         )
     }
 
@@ -124,7 +130,7 @@ impl TaskEncoder for MirPureEnc {
 
         deps.emit_output_ref(*task_key, ())?;
 
-        let (_, kind, def_id, gargs) = *task_key;
+        let (_, kind, def_id, gargs, do_stability_checks) = *task_key;
 
         tracing::debug!("encoding {def_id:?}");
         let (inputs, expr) = vir::with_vcx(move |vcx| {
@@ -159,7 +165,16 @@ impl TaskEncoder for MirPureEnc {
             } else {
                 body.span
             };
-            let mut enc = Enc::new(vcx, task_key.0, def_id, kind, gargs, &body, deps);
+            let mut enc = Enc::new(
+                vcx,
+                task_key.0,
+                def_id,
+                kind,
+                gargs,
+                &body,
+                deps,
+                do_stability_checks,
+            );
             let expr_inner = vcx.with_span(body_span, |_| {
                 if let PureKind::SpecBlock(block) = kind {
                     enc.encode_spec_block(block)
@@ -299,6 +314,7 @@ struct Enc<'vir: 'enc, 'enc> {
     rel1_mode: bool,
     before_expiry_mode: bool,
     impure_context: bool,
+    do_stability_checks: bool,
 }
 
 struct EncodedPlace<'vir> {
@@ -379,6 +395,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         gargs: GArgs<'vir>,
         body: &'enc mir::Body<'vir>,
         deps: &'enc mut TaskEncoderDependencies<'vir, MirPureEnc>,
+        do_stability_checks: bool,
     ) -> Self {
         let rev_doms = rev_doms::ReverseDominators::new(&body.basic_blocks);
         Self {
@@ -409,6 +426,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     ..
                 } | PureKind::SpecBlock(..)
             ),
+            do_stability_checks,
         }
     }
 
@@ -445,6 +463,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             self.vcx,
             self.vcx.mk_local_ex(phi_idx.initialised.unwrap()),
             elem_idx,
+        )
+    }
+
+    fn mk_lazy_im_state_expr(&self) -> ExprRetAny<'vir, vir::ImState> {
+        let old_mode = self.old_mode;
+        self.vcx.mk_lazy_expr(
+            "mir_pure_im_state",
+            vir::TYPE_IMSTATE,
+            Box::new(move |vcx, lctx: ExprInput<'vir>| {
+                assert!(lctx.4.is_some(), "current ImState not bound");
+                if old_mode {
+                    vcx.mk_old(lctx.4.unwrap(), lctx.3).kind
+                } else {
+                    lctx.4.unwrap().kind
+                }
+            }),
         )
     }
 
@@ -909,20 +943,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
-                        let old_mode = self.old_mode;
-                        let im_state_ex = self.vcx.mk_lazy_expr(
-                            "mir_pure_im_state",
-                            vir::TYPE_IMSTATE,
-                            Box::new(move |vcx, lctx: ExprInput<'vir>| {
-                                assert!(lctx.4.is_some(), "current ImState not bound");
-                                if old_mode {
-                                    vcx.mk_old(lctx.4.unwrap(), lctx.3).kind
-                                } else {
-                                    lctx.4.unwrap().kind
-                                }
-                            }),
-                        );
-
+                        let im_state_ex = self.mk_lazy_im_state_expr();
                         match self.encode_prusti_builtin(
                             builtin,
                             def_id,
@@ -931,6 +952,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             im_state_ex,
                             term.source_info.span,
                             &new_curr_ver,
+                            self.do_stability_checks,
                         )? {
                             Some(expr) => Ok(expr),
                             // The pure-only builtins (quantifiers, spec blocks,
@@ -1443,6 +1465,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 kind: PureKind::Closure,
                 parent_def_id: cl_def_id,
                 gargs: GParams::from(cl_def_id).identity_args(),
+                do_stability_checks: self.do_stability_checks,
             })?
             .expr;
         let reify_args = self.vcx.alloc(reify_args);
@@ -1450,7 +1473,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             vir::vir_format!(self.vcx, "spec closure body ({name})"),
             body.ty(),
             Box::new(move |vcx, lctx: ExprInput<'vir>| {
-                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3, None))
+                body.reify(vcx, (cl_def_id, reify_args, None, lctx.3, lctx.4))
                     .kind
             }),
         );

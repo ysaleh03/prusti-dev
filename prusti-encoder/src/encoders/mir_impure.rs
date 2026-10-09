@@ -1732,6 +1732,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             parent_def_id: self.def_id,
             gargs: GParams::from(self.def_id).identity_args(),
             kind: PureKind::SpecBlock(spec_block),
+            do_stability_checks: true,
         })?;
         use vir::Reify;
         let locals: FxHashMap<mir::Local, _> = enc_output
@@ -1898,6 +1899,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 match spec.kind {
                     SpecBlockKind::Assert => {
                         self.vcx.with_span(span, |vcx| {
+                            let error_msg = "assertion might not be stable";
+                            vcx.handle_error("application.precondition:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(error_msg, span.into())])
+                            });
                             let error_msg = "assertion might not hold";
                             vcx.handle_error("exhale.failed:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(error_msg, span.into())])
@@ -2586,6 +2591,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     curr_im_state,
                     span,
                     &None,
+                    true,
                 )?
                 .unwrap();
             Some((false, expr))
