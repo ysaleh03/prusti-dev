@@ -66,7 +66,7 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
         let name = field.ident.as_ref().expect("field names checked");
         let field_ty = &field.ty;
 
-        impl_items.push(parse_quote_spanned! {field.span()=>
+        trait_items.push(parse_quote_spanned! {field.span()=>
             #[trusted]
             #[pure_memory]
             #[prusti::im_model_fn]
