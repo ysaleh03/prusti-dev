@@ -558,6 +558,14 @@ fn get_procedure_spec_ids(def_id: DefId, attrs: &[hir::Attribute]) -> Option<Pro
             .map(|raw_spec_id| SpecIdRef::Terminates(parse_spec_id(raw_spec_id, def_id))),
     );
     spec_id_refs.extend(
+        read_prusti_attrs("modifies_spec_id_ref", attrs)
+            .map(|raw_spec_id| SpecIdRef::Modifies(parse_spec_id(raw_spec_id, def_id))),
+    );
+    spec_id_refs.extend(
+        read_prusti_attrs("reads_spec_id_ref", attrs)
+            .map(|raw_spec_id| SpecIdRef::Reads(parse_spec_id(raw_spec_id, def_id))),
+    );
+    spec_id_refs.extend(
         // TODO: pledges with LHS that is not "result" would need to carry the
         // LHS expression through typing
         read_prusti_attrs("pledge_spec_id_ref", attrs).map(|raw_spec_id| SpecIdRef::Pledge {
