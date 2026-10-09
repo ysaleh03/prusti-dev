@@ -230,31 +230,49 @@ impl AstRewriter {
     pub fn process_capability(
         &mut self,
         spec_id: SpecificationId,
-        tokens: TokenStream,
+        capability: syn::Ident,
+        side_cond: syn::Expr,
+        addr: syn::Expr,
+        addr_ty: syn::Type,
         item: &syn::ItemConst,
-    ) -> syn::Result<syn::Item> {
-        let expr = parse_prusti(tokens)?;
-        let item_span = expr.span();
-
-        let item_name = syn::Ident::new(
-            &format!("prusti_capable_item_{}_{}", item.ident, spec_id),
-            item_span,
-        );
-
+    ) -> syn::Result<(syn::Item, syn::Item)> {
         let spec_id_str = spec_id.to_string();
 
-        let spec_item: syn::ItemFn = parse_quote_spanned! {item_span=>
+        let side_cond_span = side_cond.span();
+        let side_cond_name = syn::Ident::new(
+            &format!("prusti_capable_side_condition_{}_{}", item.ident, spec_id),
+            side_cond_span,
+        );
+        let side_cond_item: syn::ItemFn = parse_quote_spanned! {side_cond_span=>
             #[allow(unused_must_use, unused_parens, unused_variables, dead_code, non_snake_case)]
             #[prusti::spec_only]
-            #[prusti::capability]
+            #[prusti::capable_side_condition]
             #[prusti::spec_id = #spec_id_str]
-            fn #item_name(&self) -> bool {
-                let val: bool = #expr;
+            fn #side_cond_name(&self) -> bool {
+                let val: bool = #side_cond;
                 val
             }
         };
 
-        Ok(syn::Item::Fn(spec_item))
+        let addr_span = side_cond.span();
+        let addr_name = syn::Ident::new(
+            &format!("prusti_capable_addr_{}_{}", item.ident, spec_id),
+            addr_span,
+        );
+        let capability = capability.to_string();
+        let addr_item: syn::ItemFn = parse_quote_spanned! {addr_span=>
+            #[allow(unused_must_use, unused_parens, unused_variables, dead_code, non_snake_case)]
+            #[prusti::spec_only]
+            #[prusti::capable_addr]
+            #[prusti::capability = #capability]
+            #[prusti::spec_id = #spec_id_str]
+            fn #addr_name<'a>(&'a self) -> Addr<'a, #addr_ty> {
+                let val: Addr<'a, #addr_ty> = #addr;
+                val
+            }
+        };
+
+        Ok((syn::Item::Fn(side_cond_item), syn::Item::Fn(addr_item)))
     }
 
     /// Parse a loop invariant into a Rust expression

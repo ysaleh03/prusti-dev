@@ -118,90 +118,51 @@ fn generate_empty_trait(item_impl: &syn::ItemImpl) -> syn::Result<syn::ItemTrait
 }
 
 fn extend_with_macro(makro: &syn::ImplItemMacro) -> syn::Result<(bool, syn::Attribute)> {
-    let capable_input: CapableInput = makro.mac.parse_body()?;
-    let receiver = capable_input.receiver;
+    // let capability = match capable_input.capability {
+    //     CapabilityInput {
+    //         capability,
+    //         addr,
+    //         ty,
+    //     } => {
+    //         let addr = addr {
+    //             quote_spanned! {makro.span()=>
+    //             ::prusti_contracts::Addr::#capability(
+    //                 self.#addr0(),
+    //                 self.#addr1()
+    //             )}
+    //         } else {
+    //             quote_spanned! {makro.span()=>
+    //             ::prusti_contracts::Addr::#capability(
+    //                 self.#addr0()
+    //             )}
+    //         }
+    //     }
+    // };
+    //
 
-    let capability = match capable_input.capability {
-        CapabilityInput {
-            capability,
-            addr0,
-            addr1,
-        } => {
-            if let Some(addr1) = addr1 {
-                quote_spanned! {makro.span()=>
-                ::prusti_contracts::Addr::#capability(
-                    self.#addr0(),
-                    self.#addr1()
-                )}
-            } else {
-                quote_spanned! {makro.span()=>
-                ::prusti_contracts::Addr::#capability(
-                    self.#addr0()
-                )}
-            }
-        }
+    let CapableInput {
+        receiver,
+        side_condition,
+        capability,
+        addr,
+        ty,
+    } = makro.mac.parse_body()?;
+
+    let side_condition = side_condition.unwrap_or(syn::parse_quote_spanned! {makro.span()=> true});
+
+    let attr = syn::parse_quote_spanned! {makro.span()=>
+      #[capable(#capability, #side_condition, #ty, #addr)]
     };
-
-    let attr = if let Some(expr) = capable_input.side_conditions {
-        let side_conditions = quote_spanned! {expr.span()=> #expr };
-        parse_quote_spanned! {makro.span()=> #[capable(!#side_conditions || #capability)]}
-    } else {
-        parse_quote_spanned! {makro.span()=> #[capable(#capability)]}
-    };
-
     Ok((receiver.mutability.is_some(), attr))
-}
-
-#[derive(Debug)]
-struct CapabilityInput {
-    capability: syn::Ident,
-    addr0: syn::Ident,
-    addr1: Option<syn::Ident>,
-}
-
-impl syn::parse::Parse for CapabilityInput {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let capability: syn::Ident = input.parse()?;
-
-        let content;
-        syn::parenthesized!(content in input);
-
-        match capability.to_string().as_str() {
-            "unique" | "shared" | "atomic_unique" => {
-                let addr0 = content.parse()?;
-                if !content.is_empty() {
-                    return Err(content.error("unexpected tokens"));
-                }
-                Ok(CapabilityInput {
-                    capability,
-                    addr0,
-                    addr1: None,
-                })
-            }
-            "local_unique" => {
-                let addr0 = content.parse()?;
-                let addr1 = content.parse()?;
-                if !content.is_empty() {
-                    return Err(content.error("unexpected tokens"));
-                }
-                Ok(CapabilityInput {
-                    capability,
-                    addr0,
-                    addr1: Some(addr1),
-                })
-            }
-            _ => Err(syn::Error::new(capability.span(), "unknown capability")),
-        }
-    }
 }
 
 #[derive(Debug)]
 struct CapableInput {
     receiver: syn::Receiver,
-    _if: Option<syn::Token![if]>,
-    side_conditions: Option<syn::Expr>,
-    _fat_arrow: syn::Token![=>],
-    capability: CapabilityInput,
+    capability: syn::Ident,
+    side_condition: Option<syn::Expr>,
+    ty: syn::Type,
+    addr: syn::Expr,
 }
 
 impl syn::parse::Parse for CapableInput {
@@ -215,23 +176,79 @@ impl syn::parse::Parse for CapableInput {
             ));
         }
 
-        let (_if, side_conditions) = if input.peek(syn::Token![if]) {
-            let _if = input.parse()?;
+        let side_condition = if input.peek(syn::Token![if]) {
+            input.parse::<syn::Token![if]>()?;
             let expr = input.parse()?;
-            (Some(_if), Some(expr))
+            Some(expr)
         } else {
-            (None, None)
+            None
         };
 
-        let _fat_arrow = input.parse()?;
-        let capability = input.parse()?;
+        input.parse::<syn::Token![=>]>()?;
+
+        let capability: syn::Ident = input.parse()?;
+        match capability.to_string().as_str() {
+            "unique" | "shared" | "atomic_unique" => (),
+            _ => {
+                return Err(syn::Error::new(capability.span(), "unknown capability"));
+            }
+        }
+
+        input.parse::<syn::Token![<]>()?;
+        let ty: syn::Type = input.parse()?;
+        input.parse::<syn::Token![>]>()?;
+
+        let content;
+        syn::parenthesized!(content in input);
+        let addr: syn::Expr = content.parse()?;
 
         Ok(CapableInput {
             receiver,
-            _if,
-            side_conditions,
-            _fat_arrow,
             capability,
+            side_condition,
+            ty,
+            addr,
         })
     }
 }
+
+// #[derive(Debug)]
+// struct CapableInput {
+//     receiver: syn::Receiver,
+//     _if: Option<syn::Token![if]>,
+//     side_conditions: Option<syn::Expr>,
+//     _fat_arrow: syn::Token![=>],
+//     capability: CapabilityInput,
+// }
+
+// impl syn::parse::Parse for CapableInput {
+//     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+//         let receiver: syn::Receiver = input.parse()?;
+
+//         if !receiver.reference.clone().is_some_and(|r| r.1.is_none()) {
+//             return Err(syn::Error::new(
+//                 receiver.span(),
+//                 "Expected `&self` or `&mut self`",
+//             ));
+//         }
+
+//         let (side_conditions) = if input.peek(syn::Token![if]) {
+//             input.parse()?;
+//             let expr = input.parse()?;
+//             Some(expr)
+//         } else {
+//             None
+//         };
+
+//         let _fat_arrow = input.parse()?;
+//         let capability = input.parse()?;
+
+//         Ok(CapableInput {
+//             receiver,
+//             _if,
+//             side_conditions,
+//             _fat_arrow,
+//             capability,
+//         })
+//     }
+// }
