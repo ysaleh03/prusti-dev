@@ -1185,19 +1185,8 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 // snapshot takes a generic s_Param
                 self.wrap_in_immref(addr_ty.mk_referent_concrete(snap), Some(addr))?
             }
-            _ => todo!(),
+            _ => todo!(), // TODO to_rep, to_id
         })
-
-        // let ptr = self.operands[0].downcast_ty();
-        // let pc = self
-        //     .vcx
-        //     .mk_local_ex(self.vcx.mk_local_decl("pc", vir::TYPE_INT));
-        // Ok(match op {
-        //     AddrOp::Unique => data.unique.call()(ptr, pc).upcast_ty(),
-        //     AddrOp::Shared => data.shared.call()(ptr, pc).upcast_ty(),
-        //     AddrOp::LocalUnique => data.local_unique.call()(ptr, pc).upcast_ty(),
-        //     AddrOp::AtomicUnique => data.atomic_unique.call()(ptr, pc).upcast_ty(),
-        // })
     }
 
     /// The snapshot of the `impl Value<T>` operand `i`, where `expected` is
