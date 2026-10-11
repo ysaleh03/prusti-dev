@@ -490,6 +490,10 @@ mod private_shared {
 
     pub struct AId;
 
+    pub trait DropFrame<T: ?Sized> {
+        fn drop_frame(&self) -> Set<AId>;
+    }
+
     pub struct Rep<T: ?Sized>(PhantomData<T>);
 
     impl<T: ?Sized> Clone for Rep<T> {
