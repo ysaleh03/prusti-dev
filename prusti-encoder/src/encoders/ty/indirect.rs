@@ -9,10 +9,11 @@ use prusti_rustc_interface::{
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, Reify};
 
-use crate::encoders::{TyUseImpureEnc, ty::RustTyDecomposition};
+use crate::encoders::{ImCapEnc, ImStateEnc, TyUseImpureEnc, ty::RustTyDecomposition};
 
 use super::{
     data::{StructData, TySpecifics},
+    generics::TyExprEnc,
     rust_ty::RustTyDatas,
     use_pure::{TyUsePureEnc, UsePureTyDatas},
 };
@@ -134,6 +135,8 @@ impl TaskEncoder for IndirectPredicatesEnc {
                 | TySpecifics::AddrDyn(_)
                 | TySpecifics::Rep(_) => (),
                 TySpecifics::MutRef((data, ref_domain)) => {
+                    // TODO IM this might be the place to grab capability predicates?
+
                     let inner_ty = data.referent.decompose_context(ty.ty.params, ty.args);
                     let inner_impure = deps.require_dep::<TyUseImpureEnc>(inner_ty)?;
                     let ref_region = PcgRegion::from(ty.args.args()[0].expect_region());
@@ -246,6 +249,137 @@ impl TaskEncoder for IndirectPredicatesEnc {
                 (),
                 IndirectPredicatesEncOutputRef::new(predicate_applications),
             ))
+        })
+    }
+}
+
+pub struct IndirectCapsEnc;
+
+#[derive(Clone)]
+pub struct IndirectCapsEncOutputRef<'vir> {
+    pub cap_applications: Vec<ExprOutput<'vir>>,
+}
+
+impl<'vir> IndirectCapsEncOutputRef<'vir> {
+    pub fn new(cap_applications: Vec<ExprOutput<'vir>>) -> Self {
+        Self { cap_applications }
+    }
+}
+
+impl<'vir> task_encoder::OutputRefAny for IndirectCapsEncOutputRef<'vir> {}
+
+impl TaskEncoder for IndirectCapsEnc {
+    task_encoder::encoder_cache!(IndirectCapsEnc);
+    const ENCODER_NAME: &'static str = "indirect capabilities encoder";
+
+    type TaskDescription<'vir> = LifetimeProjection<'vir, RustTyDecomposition<'vir>, Region>;
+
+    type TaskKey<'tcx> = Self::TaskDescription<'tcx>;
+
+    type EncodingError = ();
+
+    type OutputFullDependency<'vir> = IndirectCapsEncOutputRef<'vir>;
+
+    fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
+        *task
+    }
+
+    fn do_encode_full<'vir>(
+        task_key: &Self::TaskKey<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, Self>,
+    ) -> EncodeFullResult<'vir, Self> {
+        deps.emit_output_ref(*task_key, ())?;
+        vir::with_vcx(|vcx| {
+            let task_region = projection_region(task_key);
+            let ty = task_key.base();
+            let self_ty_enc = deps.require_dep::<TyUsePureEnc>(ty)?;
+            let combined = ty.ty.zip(self_ty_enc);
+            let mut cap_applications = vec![];
+            // Collects (accessor, indirect_predicate) pairs for the fields of a
+            // struct-like (used for structs and enum variants). Fields are
+            // recursed into at their concrete (normalized) type.
+            match combined.specifics {
+                // Optimisation: if there are no type arguments, there cannot be
+                // anything behind a ref inside (except for 'static, which we
+                // ignore for now). Plus it skips unsupported types if they
+                // don't have lifetimes.
+                _ if ty.args.args().is_empty() => (),
+                TySpecifics::Primitive(_)
+                // | TySpecifics::ImmRef(_)
+                | TySpecifics::Raw(_)
+                | TySpecifics::Builtin(_) => (),
+                // TODO: it's not valid to have nothing for these. We should fix
+                // this by using an opaque predicate to represent potential
+                // indirect stuff. For example:
+                // fn foo<'a, T: Trait<'a>>(x: T) -> &'a mut i32 { x.get() }
+                // Here, `T` could be instantiated as `&'a mut i32` in which
+                // case we would want a wand with `i32(result) --* opaque_behind_a(x)`.
+                // This is why we should return `opaque_behind_a(x)` here.
+                TySpecifics::ImmRef((data, ref_domain)) => {
+                    // (Interior Mutability) we do have to emit explicit capability predicates for
+                    // shared references that live across a function call
+                    let inner_ty = data.referent.decompose_normalize(ty.args);
+                    let inner_impure = deps.require_dep::<TyUseImpureEnc>(inner_ty)?;
+                    let tyval = deps.require_dep::<TyExprEnc>(inner_ty)?;
+                    let im_caps = deps.require_ref::<ImCapEnc>(())?;
+                    let im_state = deps.require_ref::<ImStateEnc>(())?;
+                    cap_applications.push(vcx.mk_lazy_expr(
+                        "shared_indirect",
+                        vir::TYPE_BOOL,
+                        Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
+                            let addr = ref_domain.addr_access(self_expr.downcast_ty());
+                            im_caps.shared_idn.call()(
+                                tyval,
+                                im_state.get_idn.call()(
+                                    vcx.mk_local_ex(im_state.state_ref_decl),
+                                ),
+                                // TODO should this be different?
+                                vcx.mk_int::<0>(),
+                                addr,
+                            )
+                            .kind
+                        }),
+                    ));
+                }
+                TySpecifics::Param(_)
+                | TySpecifics::Opaque(_)
+                | TySpecifics::ArrayLike(_)
+                | TySpecifics::Addr(_)
+                | TySpecifics::AddrDyn(_)
+                | TySpecifics::Rep(_) => (),
+                TySpecifics::MutRef((data, ref_domain)) => {
+                    // TODO IM this might be the place to grab capability predicates?
+
+                    let inner_ty = data.referent.decompose_context(ty.ty.params, ty.args);
+                    let inner_impure = deps.require_dep::<TyUseImpureEnc>(inner_ty)?;
+                    let ref_region = PcgRegion::from(ty.args.args()[0].expect_region());
+                    if ref_region == task_region {
+                        let tyval = deps.require_dep::<TyExprEnc>(inner_ty)?;
+                        let im_caps = deps.require_ref::<ImCapEnc>(())?;
+                        let im_state = deps.require_ref::<ImStateEnc>(())?;
+                        cap_applications.push(vcx.mk_lazy_expr(
+                            "exclusive_indirect",
+                            vir::TYPE_BOOL,
+                            Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
+                                let addr = ref_domain.deref_access(self_expr.downcast_ty());
+                                im_caps.exclusive_idn.call()(
+                                    tyval,
+                                    im_state.get_idn.call()(
+                                        vcx.mk_local_ex(im_state.state_ref_decl),
+                                    ),
+                                    // TODO should this be different?
+                                    vcx.mk_int::<0>(),
+                                    addr,
+                                )
+                                .kind
+                            }),
+                        ));
+                    }
+                }
+                TySpecifics::StructLike(data) => (),
+                TySpecifics::EnumLike(data) => (),
+            };
+            Ok(((), IndirectCapsEncOutputRef::new(cap_applications)))
         })
     }
 }

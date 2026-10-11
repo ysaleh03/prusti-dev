@@ -129,6 +129,7 @@ impl<'vir> OutputRefAny for MethodEncOutputRef<'vir> {}
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MethodEncOutput<'vir> {
     method: vir::Method<'vir>,
+    stab_method: vir::Method<'vir>,
 }
 
 #[derive(Clone, Debug)]
@@ -216,7 +217,9 @@ impl TaskEncoder for MethodEnc {
             // the permissions, the functional spec, and (in the postcondition)
             // wands in case of a reborrowing function.
             let mut pres = Vec::new();
+            let mut stab_pres = Vec::new();
             let mut posts = Vec::new();
+            let mut stab_posts = Vec::new();
             let spec = deps.require_dep_spanned::<MirSpecEnc>(
                 (def_id, def_id, MirSpecEncMode::Impure),
                 span,
@@ -246,7 +249,9 @@ impl TaskEncoder for MethodEnc {
             let im_state_ref = vcx.mk_local_ex(im_state.state_ref_decl);
             let im_state_owned = vcx.mk_predicate_app_expr((im_state.pred_idn)(im_state_ref)(None));
             pres.push(im_state_owned);
+            stab_pres.push(im_state_owned);
             posts.push(im_state_owned);
+            stab_posts.push(im_state_owned);
 
             // Add direct resources for inputs and outputs to the pre- and
             // postconditions, respectively. "Direct" here refers to owned
@@ -258,22 +263,20 @@ impl TaskEncoder for MethodEnc {
                 args.push(vir::vir_local_decl! { vcx; [name_p] : Ref });
                 if arg_idx != mir::RETURN_PLACE {
                     pres.push(arg_defs[arg_idx].impure_pred);
-                    // (Interior Mutability) add an inhale-exhale expression
-                    // for each initial capability
-                    pres.push(
-                        vcx.mk_inhale_exhale_expr(
-                            arg_defs[arg_idx].impure_cap,
-                            vcx.mk_bool::<true>(),
-                        ),
-                    )
+                    stab_pres.push(arg_defs[arg_idx].impure_pred);
+                    stab_pres.push(arg_defs[arg_idx].impure_cap)
                 }
             }
             posts.push(arg_defs[mir::RETURN_PLACE].impure_pred);
 
             // ..
             pres.extend(wands.indirect_pres(vcx, &arg_defs, deps));
+            stab_pres.extend(wands.indirect_pres(vcx, &arg_defs, deps));
             posts.extend(wands.indirect_posts(vcx, &arg_defs, deps));
+            stab_posts.extend(wands.indirect_posts(vcx, &arg_defs, deps));
             posts.extend(wands.wand_posts(vcx, &arg_defs, deps));
+            stab_posts.extend(wands.wand_posts(vcx, &arg_defs, deps));
+            stab_posts.extend(wands.indirect_cap_posts(vcx, &arg_defs, deps));
 
             // Trusted functions, call stubs, external functions and trait
             // functions without a default implementation have no body to
@@ -454,19 +457,28 @@ impl TaskEncoder for MethodEnc {
             };
 
             // Add functional specification as the last pre- and postconditions.
-            // (Interior Mutability) each function pre-condition is encoded as an inhale-exhale
-            // expression where the partial ImState operations are checked on inhale
-            pres.extend(
-                spec.pres
-                    .iter()
-                    .map(|(cond, _)| vcx.mk_inhale_exhale_expr(cond.partial, cond.total)),
-            );
-            posts.extend(
-                spec.posts
-                    .iter()
-                    .map(|(cond, _)| vcx.mk_inhale_exhale_expr(cond.partial, cond.total)),
-            );
+            pres.extend(spec.pres.iter().map(|(cond, _)| cond.total));
+            stab_pres.extend(spec.pres.iter().map(|(cond, _)| cond.partial));
+            posts.extend(spec.posts.iter().map(|(cond, _)| cond.total));
+            stab_posts.extend(spec.posts.iter().map(|(cond, _)| cond.partial));
 
+            let stab_method_name = vir::vir_format_identifier!(
+                vcx,
+                "m_check_stab_{}",
+                vir::ViperIdent::from_def_id(vcx, def_id)
+            );
+            let stab_method_ref: MethodIdn<
+                'vir,
+                (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap),
+            > = MethodIdn::new(
+                stab_method_name,
+                (
+                    vir::TYPE_REF,
+                    ref_args,
+                    generics.ty_args(),
+                    generics.const_args(),
+                ),
+            );
             Ok((
                 MethodEncOutput {
                     method: vcx.mk_method(
@@ -482,6 +494,19 @@ impl TaskEncoder for MethodEnc {
                         vcx.alloc_slice(&posts),
                         blocks.map(|blocks| vcx.alloc_slice(&blocks)),
                     ),
+                    stab_method: vcx.mk_method(
+                        stab_method_ref,
+                        (
+                            im_state.state_ref_decl,
+                            &args,
+                            generics.ty_decls(),
+                            generics.const_decls(),
+                        ),
+                        &[],
+                        vcx.alloc_slice(&stab_pres),
+                        vcx.alloc_slice(&stab_posts),
+                        None,
+                    ),
                 },
                 (),
             ))
@@ -491,6 +516,7 @@ impl TaskEncoder for MethodEnc {
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
         for output in Self::all_outputs_local_no_errors(program) {
             program.add_method(output.method);
+            program.add_method(output.stab_method);
         }
     }
 }

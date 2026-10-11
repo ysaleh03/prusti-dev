@@ -4,7 +4,7 @@ use crate::encoders::{
     ty::{
         RustTyDecomposition,
         generics::{GArgs, GArgsTyEnc, GParams, GenericParamsEnc},
-        indirect::{IndirectPredicatesEnc, projection_for_generalized_idx},
+        indirect::{IndirectCapsEnc, IndirectPredicatesEnc, projection_for_generalized_idx},
     },
 };
 use pcg::borrow_pcg::{
@@ -174,6 +174,7 @@ impl<'vir> WandEncOutput<'vir> {
         }
     }
 
+    // TODO IM should this return implicit capability predicates too?
     /// The (unreified) predicates associated with the given node, or `None` if
     /// there are no resources associated with it.
     #[allow(clippy::type_complexity)]
@@ -195,6 +196,24 @@ impl<'vir> WandEncOutput<'vir> {
         (!predicates.is_empty()).then_some(predicates)
     }
 
+    fn caps_for_function_shape_node(
+        &self,
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, impl TaskEncoder>,
+        g: FunctionShapeNode<Generalized>,
+        call_ctx: WandCallContext<'vir>,
+    ) -> Option<Vec<vir::ExprGenBool<'vir, vir::ExprSnap<'vir>, vir::ExprKind<'vir>>>> {
+        let arg_ty = g.ty(self.fn_sig(vcx, call_ctx));
+        let decomp = RustTyDecomposition::from_ty(arg_ty, self.g_params(vcx, call_ctx));
+        let region_proj =
+            projection_for_generalized_idx(arg_ty, g.region_idx(), decomp, vcx.tcx())?;
+        let caps = deps
+            .require_dep::<IndirectCapsEnc>(region_proj)
+            .unwrap()
+            .cap_applications;
+        (!caps.is_empty()).then_some(caps)
+    }
+
     fn encode_predicates_for_function_shape_node(
         &self,
         vcx: &'vir vir::VirCtxt<'vir>,
@@ -212,6 +231,30 @@ impl<'vir> WandEncOutput<'vir> {
         Some(
             vcx.mk_conj(
                 &predicates
+                    .iter()
+                    .map(|p| p.reify(vcx, local_snap))
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }
+
+    fn encode_caps_for_function_shape_node(
+        &self,
+        vcx: &'vir vir::VirCtxt<'vir>,
+        deps: &mut TaskEncoderDependencies<'vir, impl TaskEncoder>,
+        g: impl Into<FunctionShapeNode<Generalized>>,
+        call_ctx: WandCallContext<'vir>,
+        mut snap: impl FnMut(mir::Local) -> vir::ExprSnap<'vir>,
+    ) -> Option<vir::ExprBool<'vir>> {
+        use vir::Reify;
+        let g = g.into();
+        let caps = self.caps_for_function_shape_node(vcx, deps, g, call_ctx)?;
+
+        let local = g.mir_local();
+        let local_snap = snap(local);
+        Some(
+            vcx.mk_conj(
+                &caps
                     .iter()
                     .map(|p| p.reify(vcx, local_snap))
                     .collect::<Vec<_>>(),
@@ -260,6 +303,33 @@ impl<'vir> WandEncOutput<'vir> {
             })
         });
         unblocked_input_posts.chain(output_posts)
+    }
+
+    pub fn indirect_cap_posts<'a, E: TaskEncoder>(
+        &'a self,
+        vcx: &'vir vir::VirCtxt<'vir>,
+        local_defs: &'a MirLocalDefEncOutput<'vir>,
+        deps: &'a mut TaskEncoderDependencies<'vir, E>,
+    ) -> impl Iterator<Item = vir::ExprBool<'vir>> + 'a {
+        let unblocked_input_posts = self
+            .inputs()
+            .filter(|i| !self.blocked_inputs().contains(i))
+            .filter_map(|lp| {
+                self.encode_caps_for_function_shape_node(vcx, deps, lp, None, |i| {
+                    vcx.mk_old_expr(local_defs[i].impure_snap)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter();
+
+        unblocked_input_posts
+        // let output_posts = self.outputs().filter_map(|g| {
+        //     self.encode_caps_for_function_shape_node(vcx, deps, g, None, |i| {
+        //         local_defs[i].impure_snap
+        //     })
+        // });
+        // unblocked_input_posts.chain(output_posts)
+        // TODO does the result need to be here for some reason?
     }
 
     pub fn wand_posts<'a, E: TaskEncoder>(
@@ -489,15 +559,12 @@ impl TaskEncoder for WandEnc {
             let spec = deps.require_dep::<MirSpecEnc>((def_id, def_id, MirSpecEncMode::Impure))?;
             if coupled_edges.is_empty() {
                 assert!(spec.pledges.is_empty());
-                return Ok((
-                    (),
-                    WandEncOutput {
-                        function_data: task_key.data,
-                        inputs,
-                        outputs,
-                        wands: vec![],
-                    },
-                ));
+                return Ok(((), WandEncOutput {
+                    function_data: task_key.data,
+                    inputs,
+                    outputs,
+                    wands: vec![],
+                }));
             }
             let pledges = spec.pledges;
             let wands: Vec<WandData<'vir>> = coupled_edges

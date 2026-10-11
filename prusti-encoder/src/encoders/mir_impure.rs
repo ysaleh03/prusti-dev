@@ -2215,6 +2215,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 ..
             }
             | mir::TerminatorKind::Drop { target, .. } => {
+                // TODO IM if there is a `DropFrame(?)` impl for target then we use it
+                // as the modifies clause? Otherwise, for now we have to havoc everything
+                // unless the dropped value is a primitive type.
+
                 // A `Drop`'s semantics (releasing the dropped place's
                 // permission via a weaken exhale) are carried by the PCG
                 // statements, so only its goto remains to be encoded here.
