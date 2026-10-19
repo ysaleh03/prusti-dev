@@ -93,7 +93,7 @@ pub fn is_function_pure<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
         SpecQuery::GetProcKind(def_id, args.args()),
         |proc_spec: &ProcedureSpecification| kind_is_pure(&proc_spec.kind),
     )
-    .unwrap_or_default()
+    .unwrap_or(is_function_pure_unstable(def_id, args))
 }
 
 pub fn is_function_pure_unstable<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
@@ -236,17 +236,14 @@ impl TaskEncoder for SpecEnc {
                 SpecificationItem::Empty,
                 SpecificationItem::Empty,
             ));
-            Ok((
-                (),
-                SpecEncOutput {
-                    extern_spec,
-                    pres,
-                    posts,
-                    pledges,
-                    modifies,
-                    reads,
-                },
-            ))
+            Ok(((), SpecEncOutput {
+                extern_spec,
+                pres,
+                posts,
+                pledges,
+                modifies,
+                reads,
+            }))
         })
     }
 }

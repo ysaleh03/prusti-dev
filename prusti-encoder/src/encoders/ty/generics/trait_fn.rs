@@ -4,11 +4,11 @@ use prusti_rustc_interface::{
     span::def_id::DefId,
 };
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
-use vir::{FunctionIdn, MethodIdn, ViperIdent, vir_format_identifier};
+use vir::{CastType, FunctionIdn, MethodIdn, ViperIdent, vir_format_identifier};
 
 use crate::{
     encoders::{
-        FunctionCallEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
+        FunctionCallEnc, ImStateEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
         mir_fn::CallTaskDescription,
         pure::spec::{MirSpecEncMode, MirSpecEncTask},
         ty::{
@@ -29,13 +29,11 @@ pub struct TraitFnEncOutputRef<'vir> {
     pub post_func:
         FunctionIdn<'vir, (vir::Snap, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
     // (Interior Mutability) the function that computes the footprint of a method
-    pub footprint_stub: Option<
-        FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
-    >,
+    pub footprint_stub:
+        Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
     // (Interior Mutability) the function that computes the frame of a pure_unstable function
-    pub frame_stub: Option<
-        FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
-    >,
+    pub frame_stub:
+        Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
     pub call_stub_impure:
         Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
     pub call_stub_pure_caller:
@@ -122,6 +120,7 @@ impl TaskEncoder for TraitFnEnc {
             let return_type = local_defs.snap_ty_return();
             let ref_args = vcx.alloc_slice(&vec![vir::TYPE_REF; arg_count]);
 
+            // TODO should we have is_pure return true for pure_unstable functions?
             let is_pure = crate::encoders::is_function_pure(
                 def_id,
                 GArgs::new(item_params, item_params.rust_params()),
@@ -131,6 +130,7 @@ impl TaskEncoder for TraitFnEnc {
                 GArgs::new(item_params, item_params.rust_params()),
             );
 
+            // TODO pre- and post should be indexed by an ImState?
             let pre_func = FunctionIdn::new(
                 vir_format_identifier!(vcx, "{trait_name}_fn_pre_{item_name}"),
                 (
@@ -187,13 +187,19 @@ impl TaskEncoder for TraitFnEnc {
                     return_type,
                 )
             });
+            let clause_fn_arg_tys = &vcx.alloc(
+                arg_types
+                    .iter()
+                    .map(|ty| *ty)
+                    .chain([vir::TYPE_IMSTATE.upcast_ty()])
+                    .collect::<Vec<_>>(),
+            )[..];
             let footprint_stub = (!(is_pure || is_pure_unstable)).then(|| {
                 let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
                 FunctionIdn::new(
                     vir_format_identifier!(vcx, "{trait_name}_footprint_stub_{item_name}"),
                     (
-                        vir::TYPE_IMSTATE,
-                        arg_types,
+                        clause_fn_arg_tys,
                         item_generics.ty_args(),
                         item_generics.const_args(),
                     ),
@@ -205,8 +211,7 @@ impl TaskEncoder for TraitFnEnc {
                 FunctionIdn::new(
                     vir_format_identifier!(vcx, "{trait_name}_frame_stub_{item_name}"),
                     (
-                        vir::TYPE_IMSTATE,
-                        arg_types,
+                        clause_fn_arg_tys,
                         item_generics.ty_args(),
                         item_generics.const_args(),
                     ),
@@ -249,7 +254,15 @@ impl TaskEncoder for TraitFnEnc {
                 });
             }
 
-            let func_args = local_defs.local_decl_args().collect::<Vec<_>>();
+            let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let func_args = if is_pure_unstable {
+                local_defs
+                    .local_decl_args()
+                    .chain([im_state.state_decl.upcast_ty()])
+                    .collect::<Vec<_>>()
+            } else {
+                local_defs.local_decl_args().collect::<Vec<_>>()
+            };
             let func_arg_exprs = vcx.alloc_slice(
                 &func_args
                     .iter()

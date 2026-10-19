@@ -1,11 +1,11 @@
 use prusti_interface::PrustiError;
 use prusti_rustc_interface::span::def_id::DefId;
 use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
-use vir::{FunctionIdn, Reify};
+use vir::{CastType, FunctionIdn, Reify};
 
 use crate::encoders::{
-    MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure, PureKind,
-    TyUsePureEnc,
+    ImStateEnc, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure,
+    PureKind, TyUsePureEnc,
     mir_fn::{CallTaskDescription, RustSignature},
     pure::spec::{MirSpecEncMode, MirSpecEncTask},
     ty::{
@@ -87,6 +87,7 @@ impl TaskEncoder for FunctionCallEnc {
             FunctionEncOutputRef {
                 caller_ref: assoc_enc.call_stub_pure_caller.unwrap(),
                 function_ref: assoc_enc.call_stub_pure_function.unwrap(),
+                frame_ref: assoc_enc.frame_stub,
             }
         } else {
             deps.require_ref::<FunctionEnc>(task_key.callee)?
@@ -129,20 +130,22 @@ impl TaskEncoder for FunctionCallEnc {
 
 // Function encoder
 
-struct FunctionEnc;
+pub struct FunctionEnc;
 
 #[derive(Debug, Clone)]
-struct FunctionEncOutputRef<'vir> {
+pub struct FunctionEncOutputRef<'vir> {
+    // (Interior Mutability) pure_unstable functions are encoded to take an extra ImState argument
     caller_ref: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
     function_ref: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
+    pub frame_ref:
+        Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
 }
 
 impl<'vir> OutputRefAny for FunctionEncOutputRef<'vir> {}
 
 #[derive(Debug, Clone, Copy)]
-struct FunctionEncOutput<'vir> {
-    caller: vir::Function<'vir>,
-    function: vir::Function<'vir>,
+pub struct FunctionEncOutput<'vir> {
+    functions: &'vir [vir::Function<'vir>],
 }
 
 #[derive(Clone, Debug)]
@@ -178,10 +181,26 @@ impl TaskEncoder for FunctionEnc {
             let name = vir::ViperIdent::from_def_id(vcx, def_id);
             let caller_ident = vir::vir_format_identifier!(vcx, "cf_{name}");
             let function_ident = vir::vir_format_identifier!(vcx, "f_{name}");
-            let arg_types = vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>());
             let return_type = local_defs.snap_ty_return();
             let params = GParams::from(def_id);
             let generics = deps.require_dep::<GenericParamsEnc>(params)?;
+
+            let is_pure_unstable = crate::encoders::is_function_pure_unstable(
+                def_id,
+                GArgs::new(params, params.rust_params()),
+            );
+            let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let arg_types = if is_pure_unstable {
+                vcx.alloc_slice(
+                    &local_defs
+                        .snap_ty_args()
+                        .chain([vir::TYPE_IMSTATE.upcast_ty()])
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>())
+            };
+
             let caller_ref = FunctionIdn::new(
                 caller_ident,
                 (arg_types, generics.ty_args(), generics.const_args()),
@@ -192,15 +211,21 @@ impl TaskEncoder for FunctionEnc {
                 (arg_types, generics.ty_args(), generics.const_args()),
                 return_type,
             );
+
+            let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
+            let frame_ref = is_pure_unstable.then(|| {
+                FunctionIdn::new(
+                    vir::vir_format_identifier!(vcx, "ff_{name}"),
+                    (arg_types, generics.ty_args(), generics.const_args()),
+                    set_ty,
+                )
+            });
+
             deps.emit_output_ref(def_id, FunctionEncOutputRef {
                 caller_ref,
                 function_ref,
+                frame_ref,
             })?;
-
-            let is_pure_unstable = crate::encoders::is_function_pure_unstable(
-                def_id,
-                GArgs::new(params, params.rust_params()),
-            );
 
             let spec = deps.require_dep::<MirSpecEnc>(MirSpecEncTask {
                 def_id,
@@ -273,7 +298,13 @@ impl TaskEncoder for FunctionEnc {
             // encode specs. The partial version could check that the pre/post-condition and reads-clause are self-framing
             //
 
+            let mut functions = Vec::new();
+
             if false {
+                // NOTE: encode two versions of the function:
+                // 1) the *total* version which has no pre-conditions
+                // 2) the *partial* version which requires that each element of the reads-clause is stable in the current state
+
                 // because we are precise (i.e. we require stab_read directly to the location being
                 // read from) we don't have to worry about transitive capability bs
                 // TODO forall l, t :: stab_read(s, l, t) iff (mk_thing(l, t) in reads_ex)
@@ -352,7 +383,14 @@ impl TaskEncoder for FunctionEnc {
                 .collect::<Vec<_>>();
             let posts = vcx.alloc_slice(&posts);
 
-            let func_args = local_defs.local_decl_args().collect::<Vec<_>>();
+            let func_args = if is_pure_unstable {
+                local_defs
+                    .local_decl_args()
+                    .chain([im_state.state_decl.upcast_ty()])
+                    .collect::<Vec<_>>()
+            } else {
+                local_defs.local_decl_args().collect::<Vec<_>>()
+            };
             let wrapped_call_args = func_args
                 .iter()
                 .map(|arg| vcx.mk_local_ex(arg))
@@ -362,30 +400,37 @@ impl TaskEncoder for FunctionEnc {
                 generics.ty_exprs(),
                 generics.const_exprs(),
             );
-            let caller = vcx.mk_function(
+            functions.push(vcx.mk_function(
                 caller_ref,
                 (&func_args, generics.ty_decls(), generics.const_decls()),
                 vcx.alloc_slice(&spec.pre_exprs().collect::<Vec<_>>()),
                 posts,
                 None,
                 Some(wrapped_call),
-            );
-            let function = vcx.mk_function(
+            ));
+            functions.push(vcx.mk_function(
                 function_ref,
                 (&func_args, generics.ty_decls(), generics.const_decls()),
                 &[],
                 posts,
                 expr.is_none().then_some(&vir::DecreasesGenData::Star),
                 expr,
-            );
-            Ok((FunctionEncOutput { caller, function }, ()))
+            ));
+            Ok((
+                FunctionEncOutput {
+                    functions: &vcx.alloc(functions)[..],
+                },
+                (),
+            ))
         })
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
         for output in Self::all_outputs_local_no_errors(program) {
-            program.add_function(output.caller);
-            program.add_function(output.function);
+            output
+                .functions
+                .iter()
+                .for_each(|function| program.add_function(function));
         }
     }
 }
