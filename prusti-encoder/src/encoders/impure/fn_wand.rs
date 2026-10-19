@@ -1,11 +1,7 @@
 use crate::encoders::{
-    EncodeResult, ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
-    pure::spec::{EncodedPledge, MirSpecEncMode, PledgeArgs, PledgeExpr},
-    ty::{
-        RustTyDecomposition,
-        generics::{GArgs, GArgsTyEnc, GParams, GenericParamsEnc},
-        indirect::{IndirectCapsEnc, IndirectPredicatesEnc, projection_for_generalized_idx},
-    },
+    pure::spec::{EncodedPledge, MirSpecEncMode, MirSpecEncTask, PledgeArgs, PledgeExpr}, ty::{
+        generics::{GArgs, GArgsTyEnc, GParams, GenericParamsEnc}, indirect::{projection_for_generalized_idx, IndirectCapsEnc, IndirectPredicatesEnc}, RustTyDecomposition
+    }, EncodeResult, ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc
 };
 use pcg::borrow_pcg::{
     FunctionData, FunctionShape, FunctionShapeInput, FunctionShapeNode, FunctionShapeOutput,
@@ -556,7 +552,12 @@ impl TaskEncoder for WandEnc {
             let edges: FxHashSet<_> = shape.edges().map(|e| (e.input(), e.output())).collect();
 
             let (inputs, outputs) = shape.take_inputs_and_outputs();
-            let spec = deps.require_dep::<MirSpecEnc>((def_id, def_id, MirSpecEncMode::Impure))?;
+            let spec = deps.require_dep::<MirSpecEnc>(MirSpecEncTask {
+                def_id,
+                context_def_id: def_id,
+                enc_mode: MirSpecEncMode::Impure,
+                is_unstable: true,
+            })?;
             if coupled_edges.is_empty() {
                 assert!(spec.pledges.is_empty());
                 return Ok(((), WandEncOutput {

@@ -14,7 +14,7 @@ use crate::encoders::{
     WandEnc, WandEncTask,
     mir_fn::{CallTaskDescription, RustSignature, SpecBlocks, SpecBlocksEnc},
     mir_impure::ImpureImData,
-    pure::spec::{MirSpecEncMode, MirSpecExpr},
+    pure::spec::{MirSpecEncMode, MirSpecEncTask, MirSpecExpr},
     ty::generics::{
         GArgCaster, GArgs, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc,
     },
@@ -232,10 +232,13 @@ impl TaskEncoder for MethodEnc {
                 ProcKind::Method
             };
 
-            let local_defs = deps.require_dep::<MirLocalDefEnc>(MirLocalDefEncTask::Local {
-                def_id,
-                all_locals: false,
-            })?;
+            let local_defs = deps.require_dep_spanned::<MirLocalDefEnc>(
+                MirLocalDefEncTask::Local {
+                    def_id,
+                    all_locals: false,
+                },
+                span,
+            )?;
             let footprint_ref = matches!(proc_kind, ProcKind::Method).then(|| {
                 let arg_types = vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>());
                 let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
@@ -261,14 +264,6 @@ impl TaskEncoder for MethodEnc {
                 footprint_ref,
             })?;
 
-            let arg_defs = deps.require_dep_spanned::<MirLocalDefEnc>(
-                MirLocalDefEncTask::Local {
-                    def_id,
-                    all_locals: false,
-                },
-                span,
-            )?;
-
             // Method contract. We will need to emit pre- and postconditions for
             // the permissions, the functional spec, and (in the postcondition)
             // wands in case of a reborrowing function.
@@ -277,7 +272,12 @@ impl TaskEncoder for MethodEnc {
             let mut posts = Vec::new();
             let mut cap_posts = Vec::new();
             let spec = deps.require_dep_spanned::<MirSpecEnc>(
-                (def_id, def_id, MirSpecEncMode::Impure),
+                MirSpecEncTask {
+                    def_id,
+                    context_def_id: def_id,
+                    enc_mode: MirSpecEncMode::Impure,
+                    is_unstable: true,
+                },
                 span,
             )?;
             let function_data = FunctionData::new(def_id);
@@ -313,22 +313,22 @@ impl TaskEncoder for MethodEnc {
             // without going through any dereferences.
             let mut args = Vec::with_capacity(arg_count + params.count());
             for arg_idx in (0..arg_count).map(mir::Local::from) {
-                let name_p = arg_defs[arg_idx].local.name;
+                let name_p = local_defs[arg_idx].local.name;
                 args.push(vir::vir_local_decl! { vcx; [name_p] : Ref });
                 if arg_idx != mir::RETURN_PLACE {
-                    pres.push(arg_defs[arg_idx].impure_pred);
+                    pres.push(local_defs[arg_idx].impure_pred);
                     if matches!(proc_kind, ProcKind::Method | ProcKind::PureUnstable) {
-                        cap_pres.push(arg_defs[arg_idx].impure_cap)
+                        cap_pres.push(local_defs[arg_idx].impure_cap)
                     }
                 }
             }
-            posts.push(arg_defs[mir::RETURN_PLACE].impure_pred);
+            posts.push(local_defs[mir::RETURN_PLACE].impure_pred);
 
             // ..
-            pres.extend(wands.indirect_pres(vcx, &arg_defs, deps));
-            posts.extend(wands.indirect_posts(vcx, &arg_defs, deps));
-            posts.extend(wands.wand_posts(vcx, &arg_defs, deps));
-            cap_posts.extend(wands.indirect_cap_posts(vcx, &arg_defs, deps));
+            pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
+            posts.extend(wands.indirect_posts(vcx, &local_defs, deps));
+            posts.extend(wands.wand_posts(vcx, &local_defs, deps));
+            cap_posts.extend(wands.indirect_cap_posts(vcx, &local_defs, deps));
 
             // TODO for reads-clauses can we assume that all pure_unstable functions
             // are trusted? Ah but wouldn't we like to check the well-definedness of function
@@ -362,7 +362,15 @@ impl TaskEncoder for MethodEnc {
                     assert!(spec.reads.is_empty());
                     cap_pres.push(none_modifies_ex);
 
-                    let footprint_args = todo!();
+                    // let pure_spec = deps.require_dep_spanned::<MirSpecEnc>(
+                    //     (def_id, def_id, MirSpecEncMode::PureWithoutResult),
+                    //     span,
+                    // )?;
+
+                    let footprint_params = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| local_defs[local].local_snap)
+                        .collect::<Vec<_>>();
 
                     if spec.modifies.is_empty() {
                         // If the modifies clause is empty then we require every location to be modifiable.
@@ -376,7 +384,12 @@ impl TaskEncoder for MethodEnc {
 
                         footprint = Some(vcx.mk_function(
                             footprint_ref.unwrap(),
-                            footprint_args,
+                            (
+                                im_state.state_decl,
+                                &footprint_params,
+                                generics.ty_decls(),
+                                generics.const_decls(),
+                            ),
                             &[],
                             vcx.alloc_slice(&[vir::expr! {
                                 forall l: PSnap :: { ((l) in (result: Set)) }
@@ -403,8 +416,7 @@ impl TaskEncoder for MethodEnc {
                             },
                         );
 
-                        // TODO add a body to the frame function
-
+                        // TODO add a body to the footprint function
                         let modifies_ex =
                             im_state.modifies_idn.call()(im_state.get_idn.call()(im_state_ref));
 

@@ -48,14 +48,6 @@ pub struct TyUsePureAddrData<'vir> {
 }
 
 impl<'vir> TyUsePureAddrData<'vir> {
-    pub fn tyval_invariant<Curr, Next>(
-        &self,
-        snap: vir::ExprGenCSnap<'vir, Curr, Next>,
-        tyval: vir::ExprGenTyVal<'vir, Curr, Next>,
-    ) -> vir::ExprGenBool<'vir, Curr, Next> {
-        self.pure.invariant.call()(snap, tyval)
-    }
-
     pub fn addr_access<Curr, Next>(
         &self,
         snap: vir::ExprGenCSnap<'vir, Curr, Next>,

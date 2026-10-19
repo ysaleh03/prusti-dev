@@ -377,6 +377,7 @@ impl TaskEncoder for ConstEnc {
                             gargs: GParams::from(uneval.def).identity_args(),
                             kind: PureKind::Constant(promoted),
                             do_stability_checks: false,
+                            is_unstable: false,
                         };
                         let expr = deps.require_dep::<MirPureEnc>(task)?.expr;
                         use vir::Reify;

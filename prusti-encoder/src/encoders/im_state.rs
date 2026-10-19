@@ -35,6 +35,7 @@ pub struct ImStateEncRef<'vir> {
     pub bump_idn: vir::MethodIdn<'vir, vir::Ref>,
 
     pub state_ref_decl: vir::LocalDecl<'vir, vir::Ref>,
+    pub state_decl: vir::LocalDecl<'vir, vir::ImState>,
 }
 
 impl<'vir> OutputRefAny for ImStateEncRef<'vir> {}
@@ -169,6 +170,8 @@ impl TaskEncoder for ImStateEnc {
 
             let state_ref_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_REF);
 
+            let state_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_IMSTATE);
+
             deps.emit_output_ref(*task_key, ImStateEncRef {
                 next_idn,
                 lte_idn,
@@ -183,10 +186,11 @@ impl TaskEncoder for ImStateEnc {
                 get_idn,
                 pred_idn,
                 bump_idn,
-                state_ref_decl,
                 addr_from_psnap_idn,
                 ty_from_psnap_idn,
                 mk_aloc_psnap_idn,
+                state_ref_decl,
+                state_decl,
             })?;
 
             // Domain Functions

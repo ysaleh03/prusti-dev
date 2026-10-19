@@ -7,9 +7,11 @@ use crate::encoders::{
     MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure, PureKind,
     TyUsePureEnc,
     mir_fn::{CallTaskDescription, RustSignature},
-    pure::spec::MirSpecEncMode,
+    pure::spec::{MirSpecEncMode, MirSpecEncTask},
     ty::{
-        generics::{GArgCaster, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc},
+        generics::{
+            GArgCaster, GArgs, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc,
+        },
         use_pure::TyUsePure,
     },
 };
@@ -111,16 +113,13 @@ impl TaskEncoder for FunctionCallEnc {
                 deps.require_dep::<TyUsePureEnc>(ty_task)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((
-            (),
-            FunctionCallEncOutput {
-                function: function_ref,
-                ty_args,
-                inputs,
-                output,
-                arg_tys,
-            },
-        ))
+        Ok(((), FunctionCallEncOutput {
+            function: function_ref,
+            ty_args,
+            inputs,
+            output,
+            arg_tys,
+        }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -193,16 +192,22 @@ impl TaskEncoder for FunctionEnc {
                 (arg_types, generics.ty_args(), generics.const_args()),
                 return_type,
             );
-            deps.emit_output_ref(
-                def_id,
-                FunctionEncOutputRef {
-                    caller_ref,
-                    function_ref,
-                },
-            )?;
+            deps.emit_output_ref(def_id, FunctionEncOutputRef {
+                caller_ref,
+                function_ref,
+            })?;
 
-            let spec =
-                deps.require_dep::<MirSpecEnc>((def_id, def_id, MirSpecEncMode::PureWithResult))?;
+            let is_pure_unstable = crate::encoders::is_function_pure_unstable(
+                def_id,
+                GArgs::new(params, params.rust_params()),
+            );
+
+            let spec = deps.require_dep::<MirSpecEnc>(MirSpecEncTask {
+                def_id,
+                context_def_id: def_id,
+                enc_mode: MirSpecEncMode::PureWithResult,
+                is_unstable: is_pure_unstable,
+            })?;
 
             let expr = if !crate::encoders::encodes_body(def_id) {
                 None
@@ -217,11 +222,13 @@ impl TaskEncoder for FunctionEnc {
                     parent_def_id: def_id,
                     gargs: params.identity_args(),
                     do_stability_checks: false,
+                    is_unstable: is_pure_unstable,
                 }) {
                     Ok(out) => {
-                        let expr = out
-                            .expr
-                            .reify(vcx, (def_id, spec.pre_args, None, vir::OldLabel::None, None)); // TODO pass im_state if this is a pure_unstable function
+                        let expr = out.expr.reify(
+                            vcx,
+                            (def_id, spec.pre_args, None, vir::OldLabel::None, None),
+                        ); // TODO pass im_state if this is a pure_unstable function
                         assert!(
                             expr.ty() == return_type,
                             "expected {:?}, got {:?}",
@@ -259,7 +266,7 @@ impl TaskEncoder for FunctionEnc {
             //
             // TODO also note that we DONT want to emit the address-stripping operation
             // at call-sites for these functions
-            
+
             // TODO encode the framing axiom
 
             // TODO we need to generate a partial/total version of each pure-unstable function anyhow in order to
@@ -267,66 +274,70 @@ impl TaskEncoder for FunctionEnc {
             //
 
             if false {
-              // TODO is this right? shouldn't we further restrict this set by what the signature implies is
-              // readable? Hmmmm
-              // Do we want to allow someone to write a specification where the pure-unstable function's result
-              // includes locations that the pre-condition might not be strong enough to guarantee readability for?
-              // Is it enough to *only* check (stability?)
+                // because we are precise (i.e. we require stab_read directly to the location being
+                // read from) we don't have to worry about transitive capability bs
+                // TODO forall l, t :: stab_read(s, l, t) iff (mk_thing(l, t) in reads_ex)
 
-              // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
-              // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
-              // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
-              // interface this seems overly strict
+                // TODO is this right? shouldn't we further restrict this set by what the signature implies is
+                // readable? Hmmmm
+                // Do we want to allow someone to write a specification where the pure-unstable function's result
+                // includes locations that the pre-condition might not be strong enough to guarantee readability for?
+                // Is it enough to *only* check (stability?)
 
-              // TODO what is the downside to having pure_unstable reads-clauses?
+                // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
+                // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
+                // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
+                // interface this seems overly strict
 
-              // TODO pre-condition contains stable_read for all elements of the reads-clause.
+                // TODO what is the downside to having pure_unstable reads-clauses?
 
-              // TODO we need to encode the reads-clause of the function in such a way that we can
-              // ensure that only the locations that are in the reads-clause are read in the spec +
-              // that the expression that computes the reads clause doesn't read anything not in the
-              // reads-clause.
-              //
-              // TODO maybe for pure functions we don't assume capabilities for arguments? instead we
-              // would just assume stable_read for every element of the reads-clause?
+                // TODO pre-condition contains stable_read for all elements of the reads-clause.
 
-              // TODO generate
+                // TODO we need to encode the reads-clause of the function in such a way that we can
+                // ensure that only the locations that are in the reads-clause are read in the spec +
+                // that the expression that computes the reads clause doesn't read anything not in the
+                // reads-clause.
+                //
+                // TODO maybe for pure functions we don't assume capabilities for arguments? instead we
+                // would just assume stable_read for every element of the reads-clause?
 
-              // TODO check that the frame is self-framing
-              // TODO check that the frame expression is stable
-              // TODO possibly? check that the pre-and postconditions are framed by the reads-set
-              // let reads_set_partial = spec.reads.iter().fold(
-              //     vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-              //     |acc, (spec_ex, _)| {
-              //         let MirSpecExpr { total, partial } = *spec_ex;
-              //         vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, partial)
-              //             .downcast_ty()
-              //     },
-              // );
+                // TODO generate
 
-              // // TODO is this right? shouldn't we further restrict this set by what the signature implies is
-              // // readable? Hmmmm
-              // // Do we want to allow someone to write a specification where the pure-unstable function's result
-              // // includes locations that the pre-condition might not be strong enough to guarantee readability for?
-              // // Is it enough to *only* check (stability?)
+                // TODO check that the frame is self-framing
+                // TODO check that the frame expression is stable
+                // TODO possibly? check that the pre-and postconditions are framed by the reads-set
+                // let reads_set_partial = spec.reads.iter().fold(
+                //     vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                //     |acc, (spec_ex, _)| {
+                //         let MirSpecExpr { total, partial } = *spec_ex;
+                //         vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, partial)
+                //             .downcast_ty()
+                //     },
+                // );
 
-              // // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
-              // // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
-              // // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
-              // // interface this seems overly strict
+                // // TODO is this right? shouldn't we further restrict this set by what the signature implies is
+                // // readable? Hmmmm
+                // // Do we want to allow someone to write a specification where the pure-unstable function's result
+                // // includes locations that the pre-condition might not be strong enough to guarantee readability for?
+                // // Is it enough to *only* check (stability?)
 
-              // // TODO what is the downside to having pure_unstable reads-clauses?
+                // // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
+                // // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
+                // // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
+                // // interface this seems overly strict
 
-              // // TODO check that the frame is self-framing
-              // // TODO check that the frame expression is stable
-              // // TODO possibly? check that the pre-and postconditions are framed by the reads-set
+                // // TODO what is the downside to having pure_unstable reads-clauses?
 
-              // let readable_pre_partial = vir::expr! {
-              //     forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, im_state_ex, l)) }
-              //     ((([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])) ==> ([im_caps.stable_read_idn](t, im_state_ex, l))) &&
-              //     (([im_caps.stable_read_idn](t, im_state_ex, l)) ==> (([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])))
-              // };
-              // stab_pres.push(readable_pre_partial);
+                // // TODO check that the frame is self-framing
+                // // TODO check that the frame expression is stable
+                // // TODO possibly? check that the pre-and postconditions are framed by the reads-set
+
+                // let readable_pre_partial = vir::expr! {
+                //     forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, im_state_ex, l)) }
+                //     ((([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])) ==> ([im_caps.stable_read_idn](t, im_state_ex, l))) &&
+                //     (([im_caps.stable_read_idn](t, im_state_ex, l)) ==> (([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])))
+                // };
+                // stab_pres.push(readable_pre_partial);
             }
 
             let posts = spec

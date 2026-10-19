@@ -10,7 +10,7 @@ use crate::{
     encoders::{
         FunctionCallEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
         mir_fn::CallTaskDescription,
-        pure::spec::MirSpecEncMode,
+        pure::spec::{MirSpecEncMode, MirSpecEncTask},
         ty::{
             RustTyDecomposition,
             generics::{GArgs, GParams, GenericParamsEnc, r#trait::TraitEnc, trait_impls},
@@ -29,11 +29,13 @@ pub struct TraitFnEncOutputRef<'vir> {
     pub post_func:
         FunctionIdn<'vir, (vir::Snap, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
     // (Interior Mutability) the function that computes the footprint of a method
-    pub footprint_stub:
-        Option<FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    pub footprint_stub: Option<
+        FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
+    >,
     // (Interior Mutability) the function that computes the frame of a pure_unstable function
-    pub frame_stub:
-        Option<FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    pub frame_stub: Option<
+        FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
+    >,
     pub call_stub_impure:
         Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
     pub call_stub_pure_caller:
@@ -259,7 +261,12 @@ impl TaskEncoder for TraitFnEnc {
             let has_body = is_function_with_body(vcx.tcx(), def_id);
 
             let spec = deps.require_dep_spanned::<MirSpecEnc>(
-                (def_id, def_id, MirSpecEncMode::PureWithoutResult),
+                MirSpecEncTask {
+                    def_id,
+                    context_def_id: def_id,
+                    enc_mode: MirSpecEncMode::PureWithoutResult,
+                    is_unstable: true, // TODO IM we might want to choose this depending on the kind of function we are encoding
+                },
                 span,
             )?;
             let pres = vcx.mk_conj(&spec.pre_exprs().collect::<Vec<_>>());

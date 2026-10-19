@@ -180,29 +180,46 @@ pub enum MirSpecEncMode {
 // TODO we need to handle pure_memory and pure_unstable, where the addresses of
 // reference-typed arguments are available
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MirSpecEncTask {
+    pub def_id: DefId,
+    pub context_def_id: DefId,
+    pub enc_mode: MirSpecEncMode,
+    pub is_unstable: bool,
+}
+
 impl TaskEncoder for MirSpecEnc {
     task_encoder::encoder_cache!(MirSpecEnc);
     const ENCODER_NAME: &'static str = "MIR spec encoder";
 
-    type TaskDescription<'tcx> = (
-        DefId, // The function annotated with specs
-        DefId, // Context, i.e., where the specs are emitted
-        MirSpecEncMode,
-    );
+    type TaskDescription<'tcx> = MirSpecEncTask;
+
+    type TaskKey<'vir> = (DefId, DefId, MirSpecEncMode, bool);
+
+    // type TaskDescription<'tcx> = (
+    //     DefId, // The function annotated with specs
+    //     DefId, // Context, i.e., where the specs are emitted
+    //     MirSpecEncMode,
+    // );
 
     type OutputFullDependency<'vir> = MirSpecEncOutput<'vir>;
 
     type EncodingError = <MirPureEnc as TaskEncoder>::EncodingError;
 
     fn task_to_key<'vir>(task: &Self::TaskDescription<'vir>) -> Self::TaskKey<'vir> {
-        *task
+        (
+            task.def_id,
+            task.context_def_id,
+            task.enc_mode,
+            task.is_unstable,
+        )
     }
 
     fn do_encode_full<'vir>(
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-        let (def_id, context_def_id, enc_mode) = *task_key;
+        let (def_id, context_def_id, enc_mode, is_unstable) = *task_key;
         deps.emit_output_ref(*task_key, ())?;
 
         vir::with_vcx(|vcx| {
@@ -311,13 +328,20 @@ impl TaskEncoder for MirSpecEnc {
                 _ => None,
             };
 
+            // TODO if we are encoding an e.g. pure_unstable function this should be
+            // an argument to the function
+
             let im_state_ex = {
                 let im_state = deps.require_ref::<ImStateEnc>(())?;
                 match enc_mode {
                     MirSpecEncMode::Impure => Some(im_state.get_idn.call()(
                         vcx.mk_local_ex(im_state.state_ref_decl),
                     )),
-                    _ => None,
+                    MirSpecEncMode::PureWithResult | MirSpecEncMode::PureWithoutResult => {
+                        // TODO we should probably only bind this when a certain flag tells
+                        // us to
+                        Some(vcx.mk_local_ex(im_state.state_decl))
+                    }
                 }
             };
 
@@ -340,6 +364,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "precondition",
                                 false,
+                                is_unstable,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Bool>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -367,6 +392,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "precondition",
                                 true,
+                                is_unstable,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Bool>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -405,6 +431,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "modifies",
                                 false,
+                                is_unstable,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Set>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -425,8 +452,15 @@ impl TaskEncoder for MirSpecEnc {
                             )
                         };
                         let partial = {
-                            let spec =
-                                Self::encode_pure(vcx, deps, pre_ctx, *spec_def_id, "reads", true)?;
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                pre_ctx,
+                                *spec_def_id,
+                                "reads",
+                                true,
+                                is_unstable,
+                            )?;
                             let expr = spec.expr.downcast_ty::<vir::Set>();
                             // Reify *inside* the span scope: the nodes created by the
                             // reification pick up the ambient span, which makes error
@@ -463,6 +497,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "reads",
                                 false,
+                                is_unstable,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Set>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -483,8 +518,15 @@ impl TaskEncoder for MirSpecEnc {
                             )
                         };
                         let partial = {
-                            let spec =
-                                Self::encode_pure(vcx, deps, pre_ctx, *spec_def_id, "reads", true)?;
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                pre_ctx,
+                                *spec_def_id,
+                                "reads",
+                                true,
+                                is_unstable,
+                            )?;
                             let expr = spec.expr.downcast_ty::<vir::Set>();
                             // Reify *inside* the span scope: the nodes created by the
                             // reification pick up the ambient span, which makes error
@@ -539,6 +581,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "postcondition",
                                 false,
+                                is_unstable,
                             )?;
                             vcx.handle_error("postcondition.violated:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(
@@ -567,6 +610,7 @@ impl TaskEncoder for MirSpecEnc {
                                 *spec_def_id,
                                 "postcondition",
                                 true,
+                                is_unstable,
                             )?;
                             vcx.handle_error("postcondition.violated:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(
@@ -626,6 +670,7 @@ impl TaskEncoder for MirSpecEnc {
                                     lhs_def_id,
                                     "pledge lhs",
                                     false,
+                                    is_unstable,
                                 )?;
                                 let lhs = spec.expr.downcast_ty::<vir::Bool>();
                                 Some(PledgeExpr::new(lhs_def_id, lhs))
@@ -639,6 +684,7 @@ impl TaskEncoder for MirSpecEnc {
                             *rhs_def_id,
                             "pledge rhs",
                             false,
+                            is_unstable,
                         )?;
                         let rhs = spec.expr.downcast_ty::<vir::Bool>();
                         let rhs_span = vcx.tcx().def_span(rhs_def_id);
@@ -681,6 +727,7 @@ impl MirSpecEnc {
         def_id: DefId,
         type_: &str,
         do_stability_checks: bool,
+        is_unstable: bool,
     ) -> Option<MirPureEncOutput<'vir>> {
         let span = vcx.tcx().def_span(def_id);
         let spec = deps.require_dep::<MirPureEnc>(crate::encoders::MirPureEncTask {
@@ -695,6 +742,7 @@ impl MirSpecEnc {
                 ctx.substs,
             ),
             do_stability_checks,
+            is_unstable,
         });
         spec.inspect_err(|err| {
             let (message, err_span) = crate::encoders::mir_fn::dep_error(err);

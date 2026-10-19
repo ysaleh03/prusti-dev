@@ -91,6 +91,8 @@ pub struct MirPureEncTask<'vir> {
     /// (Interior Mutability) Whether to use the versions of IM primitives that
     /// check capabilities in the current state.
     pub do_stability_checks: bool,
+    /// (Interior Mutability) Whether this expression has access to the current ImState
+    pub is_unstable: bool,
 }
 
 impl TaskEncoder for MirPureEnc {
@@ -105,6 +107,7 @@ impl TaskEncoder for MirPureEnc {
         DefId,       // ID of the function
         GArgs<'vir>, // the generic arguments and their context
         bool,        // whether to do stability checks
+        bool,        // whether this expression is unstable
     );
 
     type OutputFullDependency<'vir> = MirPureEncOutput<'vir>;
@@ -119,6 +122,7 @@ impl TaskEncoder for MirPureEnc {
             task.parent_def_id,
             task.gargs,
             task.do_stability_checks,
+            task.is_unstable
         )
     }
 
@@ -130,7 +134,7 @@ impl TaskEncoder for MirPureEnc {
 
         deps.emit_output_ref(*task_key, ())?;
 
-        let (_, kind, def_id, gargs, do_stability_checks) = *task_key;
+        let (_, kind, def_id, gargs, do_stability_checks, is_unstable) = *task_key;
 
         tracing::debug!("encoding {def_id:?}");
         let (inputs, expr) = vir::with_vcx(move |vcx| {
@@ -174,6 +178,7 @@ impl TaskEncoder for MirPureEnc {
                 &body,
                 deps,
                 do_stability_checks,
+                is_unstable,
             );
             let expr_inner = vcx.with_span(body_span, |_| {
                 if let PureKind::SpecBlock(block) = kind {
@@ -315,6 +320,7 @@ struct Enc<'vir: 'enc, 'enc> {
     before_expiry_mode: bool,
     impure_context: bool,
     do_stability_checks: bool,
+    is_unstable: bool,
 }
 
 struct EncodedPlace<'vir> {
@@ -396,6 +402,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         body: &'enc mir::Body<'vir>,
         deps: &'enc mut TaskEncoderDependencies<'vir, MirPureEnc>,
         do_stability_checks: bool,
+        is_unstable: bool,
     ) -> Self {
         let rev_doms = rev_doms::ReverseDominators::new(&body.basic_blocks);
         Self {
@@ -427,6 +434,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 } | PureKind::SpecBlock(..)
             ),
             do_stability_checks,
+            is_unstable,
         }
     }
 
@@ -1466,6 +1474,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 parent_def_id: cl_def_id,
                 gargs: GParams::from(cl_def_id).identity_args(),
                 do_stability_checks: self.do_stability_checks,
+                is_unstable: self.is_unstable,
             })?
             .expr;
         let reify_args = self.vcx.alloc(reify_args);

@@ -70,7 +70,6 @@ pub struct TyPureRepData<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct TyPureAddrData<'vir> {
     pub to_dyn: FunctionIdn<'vir, (vir::CSnap), vir::CSnap>,
-    pub invariant: FunctionIdn<'vir, (vir::CSnap, vir::TyVal), vir::Bool>,
     pub common: TyPureAddrCommon<'vir>,
 }
 

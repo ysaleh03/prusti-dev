@@ -1733,6 +1733,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             gargs: GParams::from(self.def_id).identity_args(),
             kind: PureKind::SpecBlock(spec_block),
             do_stability_checks: true,
+            is_unstable: true,
         })?;
         use vir::Reify;
         let locals: FxHashMap<mir::Local, _> = enc_output

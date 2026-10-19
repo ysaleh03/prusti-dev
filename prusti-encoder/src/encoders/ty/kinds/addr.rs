@@ -40,18 +40,6 @@ pub(crate) fn ty_pure_typed<'vir>(
     let self_snap_ex = builder.vcx.mk_local_ex(self_snap_decl);
 
     let tyval_decl = builder.vcx.mk_local_decl("ty", vir::TYPE_TYVAL);
-    let invariant = builder.function(
-        "invariant",
-        (builder.self_type(), vir::TYPE_TYVAL),
-        vir::TYPE_BOOL,
-        (self_snap_decl, tyval_decl),
-        &[],
-        &[],
-        Some(builder.vcx.mk_eq_expr(
-            type_access.call()(self_snap_ex),
-            builder.vcx.mk_local_ex(tyval_decl),
-        )),
-    );
 
     let dyn_ty = data.dyn_ty.decompose(task_key.params);
     let dyn_use = deps.require_dep::<TyUsePureEnc>(dyn_ty)?;
@@ -70,7 +58,6 @@ pub(crate) fn ty_pure_typed<'vir>(
     );
 
     Ok(TyPureAddrData {
-        invariant,
         to_dyn,
         common: TyPureAddrCommon {
             mk_addr,

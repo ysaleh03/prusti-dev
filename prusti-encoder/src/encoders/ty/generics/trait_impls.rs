@@ -13,7 +13,7 @@ use crate::{
         ConstEnc, FunctionCallEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc, Pure,
         r#const::ConstEncTask,
         mir_fn::{CallTaskDescription, RustSignature},
-        pure::spec::MirSpecEncMode,
+        pure::spec::{MirSpecEncMode, MirSpecEncTask},
         ty::{
             RustTy, RustTyDecomposition,
             generics::{
@@ -104,11 +104,21 @@ impl TaskEncoder for TraitImplEnc {
                 let impl_item_has_body = is_function_with_body(vcx.tcx(), impl_item_def_id);
 
                 let trait_item_spec = deps.require_dep_spanned::<MirSpecEnc>(
-                    (trait_item_def_id, impl_item_def_id, MirSpecEncMode::Impure),
+                    MirSpecEncTask {
+                        def_id: trait_item_def_id,
+                        context_def_id: impl_item_def_id,
+                        enc_mode: MirSpecEncMode::Impure,
+                        is_unstable: true,
+                    },
                     impl_span,
                 )?;
                 let impl_item_spec = deps.require_dep_spanned::<MirSpecEnc>(
-                    (impl_item_def_id, impl_item_def_id, MirSpecEncMode::Impure),
+                    MirSpecEncTask {
+                        def_id: impl_item_def_id,
+                        context_def_id: impl_item_def_id,
+                        enc_mode: MirSpecEncMode::Impure,
+                        is_unstable: true,
+                    },
                     impl_span,
                 )?;
 
@@ -751,11 +761,12 @@ impl TaskEncoder for TraitImplItemEnc {
                     let impl_item_has_body = is_function_with_body(vcx.tcx(), impl_item_def_id);
 
                     let impl_item_spec = deps.require_dep_spanned::<MirSpecEnc>(
-                        (
-                            impl_item_def_id,
-                            impl_item_def_id,
-                            MirSpecEncMode::PureWithoutResult,
-                        ),
+                        MirSpecEncTask {
+                            def_id: impl_item_def_id,
+                            context_def_id: impl_item_def_id,
+                            enc_mode: MirSpecEncMode::PureWithoutResult,
+                            is_unstable: true, // TODO IM pick this depending on the kind of function we are encoding
+                        },
                         impl_span,
                     )?;
                     let pres = vcx.mk_conj(&impl_item_spec.pre_exprs().collect::<Vec<_>>());
