@@ -75,6 +75,12 @@ impl DefSpecificationMap {
                 if let Some(posts) = spec.posts.extract_with_selective_replacement() {
                     specs.extend(posts);
                 }
+                if let Some(modifies) = spec.modifies.extract_with_selective_replacement() {
+                    specs.extend(modifies);
+                }
+                if let Some(reads) = spec.reads.extract_with_selective_replacement() {
+                    specs.extend(reads);
+                }
                 if let Some(Some(term)) = spec.terminates.extract_with_selective_replacement() {
                     specs.push(term.to_def_id());
                 }
@@ -513,15 +519,16 @@ impl SpecGraph<ProcedureSpecification> {
 
     /// Attaches the `modifies` clause `mods` to this [SpecGraph].
     ///
-    /// If this postcondition has a constraint it will be attached to the corresponding
+    /// If this `modifies` clause has a constraint it will be attached to the corresponding
     /// constrained spec **and** the base spec, otherwise just to the base spec.
     pub fn add_modifies<'tcx>(&mut self, mods: LocalDefId, env: &Environment<'tcx>) {
         match self.get_constraint(mods, env) {
             None => {
                 self.base_spec.modifies.push(mods.to_def_id());
-                self.specs_with_constraints
-                    .values_mut()
-                    .for_each(|s| s.modifies.push(mods.to_def_id()));
+                // TODO hold off on this before we figure out how it should work.
+                // self.specs_with_constraints
+                //     .values_mut()
+                //     .for_each(|s| s.modifies.push(mods.to_def_id()));
             }
             Some(obligation) => {
                 self.get_constrained_spec_mut(obligation)
@@ -750,6 +757,15 @@ impl SpecificationItem<ProcedureSpecificationKind> {
         Ok(matches!(
             self.extract_with_selective_replacement(),
             Some(ProcedureSpecificationKind::Pure) | Some(ProcedureSpecificationKind::Predicate(_))
+        ))
+    }
+
+    pub fn is_pure_unstable(&self) -> Result<bool, ProcedureSpecificationKindError> {
+        self.validate()?;
+
+        Ok(matches!(
+            self.extract_with_selective_replacement(),
+            Some(ProcedureSpecificationKind::PureUnstable)
         ))
     }
 

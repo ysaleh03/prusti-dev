@@ -443,11 +443,11 @@ mod private_shared {
 
     /// A type to represent abstract addresses on the heap of type `T`,
     /// usable only in mendel specifications and ghost code.
-    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>);
+    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>, ALoc);
 
     impl<'a, T: ?Sized> Clone for Addr<'a, T> {
         fn clone(&self) -> Self {
-            Addr(PhantomData)
+            unimplemented!()
         }
     }
     impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
@@ -483,33 +483,34 @@ mod private_shared {
             unimplemented!()
         }
 
-        pub fn to_dyn(self) -> AId{
+        pub fn to_dyn(self) -> ALoc {
             unimplemented!()
         }
     }
 
-    pub struct AId;
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct ALoc;
 
     pub trait DropFrame<T: ?Sized> {
-        fn drop_frame(&self) -> Set<AId>;
+        fn drop_frame(&self) -> Set<ALoc>;
     }
 
     pub struct Rep<T: ?Sized>(PhantomData<T>);
 
     impl<T: ?Sized> Clone for Rep<T> {
         fn clone(&self) -> Self {
-            Rep(PhantomData)
+            unimplemented!()
         }
     }
     impl<T: ?Sized> Copy for Rep<T> {}
 
     impl<T: ?Sized> Rep<T> {
         pub fn new_ref(_: &mut T) -> Self {
-            Rep(PhantomData)
+            unimplemented!()
         }
 
         pub fn new_addr<'a>(_: Addr<'a, T>) -> Self {
-            Rep(PhantomData)
+            unimplemented!()
         }
     }
 }

@@ -1,6 +1,6 @@
 use prusti_rustc_interface::abi;
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder};
-use vir::CastType;
+use vir::{CastType, TyVal};
 
 use crate::encoders::{
     Pure,
@@ -11,11 +11,7 @@ use crate::encoders::{
 };
 
 use super::{
-    TyUseEnc, UseTyDatas,
-    data::*,
-    generics::{GArgCaster, GArgsTy},
-    pure::{PureTyDatas, TyPureEnc, TyPureFieldRef, TyPureRef},
-    rust_ty::RustTySpecial,
+    data::*, generics::{GArgCaster, GArgsTy, TyExprEnc}, pure::{PureTyDatas, TyPureEnc, TyPureFieldRef, TyPureRef}, rust_ty::RustTySpecial, TyUseEnc, UseTyDatas
 };
 
 pub(super) type UsePureTyDatas = UseTyDatas<Pure>;
@@ -37,6 +33,7 @@ impl<'vir> TyDatas<'vir> for UsePureTyDatas {
     type EnumData = <PureTyDatas as TyDatas<'vir>>::EnumData;
     type BuiltinData = TyUsePureBuiltinData<'vir>;
     type AddrData = TyUsePureAddrData<'vir>;
+    type AddrDynData = <PureTyDatas as TyDatas<'vir>>::AddrDynData;
 }
 
 pub type TyUsePure<'vir> = Ty<'vir, UsePureTyDatas>;
@@ -51,18 +48,26 @@ pub struct TyUsePureAddrData<'vir> {
 }
 
 impl<'vir> TyUsePureAddrData<'vir> {
+    pub fn tyval_invariant<Curr, Next>(
+        &self,
+        snap: vir::ExprGenCSnap<'vir, Curr, Next>,
+        tyval: vir::ExprGenTyVal<'vir, Curr, Next>,
+    ) -> vir::ExprGenBool<'vir, Curr, Next> {
+        self.pure.invariant.call()(snap, tyval)
+    }
+
     pub fn addr_access<Curr, Next>(
         &self,
         snap: vir::ExprGenCSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenRef<'vir, Curr, Next> {
-        self.pure.addr_access.call()(snap)
+        self.pure.common.addr_access.call()(snap)
     }
 
     pub fn type_access<Curr, Next>(
         &self,
         snap: vir::ExprGenCSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenTyVal<'vir, Curr, Next> {
-        self.pure.type_access.call()(snap)
+        self.pure.common.type_access.call()(snap)
     }
 
     pub fn mk_addr<Curr, Next>(
@@ -70,7 +75,7 @@ impl<'vir> TyUsePureAddrData<'vir> {
         addr: vir::ExprGenRef<'vir, Curr, Next>,
         tyval: vir::ExprGenTyVal<'vir, Curr, Next>,
     ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
-        self.pure.mk_addr.call()(addr, tyval)
+        self.pure.common.mk_addr.call()(addr, tyval)
     }
 
     pub fn mk_referent_generic<Curr, Next>(
@@ -323,13 +328,17 @@ impl<'a, 'vir> TyUsePureWalker<'a, 'vir> {
                 })
             }
             TySpecifics::Addr(data) => {
-                let referent_caster = self.encode_normalized(*data.0, ty.0.params)?;
+                // TODO IM somehow we need to encode the fact that when we know the
+                // static type of an Addr we also know exactly what the type arg is
+                // Can we handle this like const params?
+                let referent_caster = self.encode_normalized(data.0.param, ty.0.params)?;
+                let referent_decomp = data.0.param.decompose(ty.0.params);
                 TySpecifics::mk_addr(TyUsePureAddrData {
                     pure: *data.1,
                     referent_caster,
                 })
             },
-            TySpecifics::AddrDyn(data) => todo!(),
+            TySpecifics::AddrDyn(data) => TySpecifics::mk_addrdyn(*data.1),
             TySpecifics::Rep(data) => TySpecifics::Rep(()),
         };
         Ok(specifics)

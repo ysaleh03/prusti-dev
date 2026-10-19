@@ -17,9 +17,8 @@ pub mod mir_fn;
 pub mod custom;
 pub mod addr;
 
-pub use im_state::ImStateEnc;
-pub use im_state::ImTyNameEnc;
 pub use im_capabilities::ImCapEnc;
+pub use im_state::{ImStateEnc, ImTyNameEnc};
 
 pub use body::{encodes_body, impure_body, impure_body_with_facts, pure_body, spec_body};
 pub use builtin::{
@@ -38,12 +37,12 @@ pub(crate) use mir_shared::EncodeResult;
 pub use pure::spec::MirSpecEnc;
 pub(super) use spec::with_proc_spec;
 pub use spec::{
-    SpecEnc, SpecEncTask, is_function_im_method, is_function_pure, is_function_trusted,
-    is_type_trusted, kind_is_pure, report_kind_refinement_error, spec_is_trusted, spec_items,
+    SpecEnc, SpecEncTask, is_function_im_method, is_function_pure, is_function_pure_unstable,
+    is_function_trusted, is_type_trusted, kind_is_pure, report_kind_refinement_error,
+    spec_is_trusted, spec_items,
 };
 pub use ty::{
-    TyInhabitedEnc,
-    ImTyEnc,
+    ImTyEnc, TyInhabitedEnc, TyInvariantEnc,
     use_impure::TyUseImpureEnc,
     use_pure::TyUsePureEnc,
     viper_tuple::{ViperTupleEnc, ViperTupleEncOutput},

@@ -121,7 +121,7 @@ impl_exp_type!(Dyn, TypeKind::Unsupported(..) => false, "Represents a dynamicall
 // impl_exp_type!(GRep[TYPE_GREP = Domain("r_Param", &[])] => Rep | Dyn, "The generic rep domain (`r_Param`)");
 // impl_exp_type!(Rep => Dyn, ref kind if matches!(kind, TypeKind::Domain(name, ..) if name.starts_with("r_")), "A rep domain");
 impl_exp_type!(GRep[TYPE_GREP = Domain("s_im_Rep", &[])] => Snap | Dyn, "Interior mutability shallow representation");
-impl_exp_type!(GAddr[TYPE_GADDR = Domain("s_im_Addr", &[])] => Snap | Dyn, "Interior mutability address type");
+impl_exp_type!(ALoc[TYPE_ALOC = Domain("s_im_ALoc", &[])] => Snap | Dyn, "Interior mutability dynamically typed abstract location");
 impl_exp_type!(ImState[TYPE_IMSTATE = Int] => Int | Prim | Dyn, "Interior mutability state type");
 
 #[macro_export]

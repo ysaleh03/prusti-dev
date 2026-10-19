@@ -104,22 +104,25 @@ pub struct EncodedPledge<'vir> {
 }
 
 #[derive(Clone, Copy)]
-pub struct MirSpecCond<'vir> {
-    pub total: vir::ExprBool<'vir>,
+pub struct MirSpecExpr<'vir, T: vir::CompType + Clone + Copy> {
+    pub total: vir::Expr<'vir, T>,
     // (Interior Mutability) if stability checks are on, the encoding that contains them
-    pub partial: vir::ExprBool<'vir>,
+    pub partial: vir::Expr<'vir, T>,
 }
 
 #[derive(Clone)]
 pub struct MirSpecEncOutput<'vir> {
     /// Each precondition paired with the source span of its spec item.
-    pub pres: Vec<(MirSpecCond<'vir>, Span)>,
+    pub pres: Vec<(MirSpecExpr<'vir, vir::Bool>, Span)>,
     /// Each postcondition paired with the source span of its spec item.
-    pub posts: Vec<(MirSpecCond<'vir>, Span)>,
+    pub posts: Vec<(MirSpecExpr<'vir, vir::Bool>, Span)>,
     pub pledges: Vec<EncodedPledge<'vir>>,
     pub pre_args: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
     #[allow(dead_code)]
     pub post_args: &'vir FxHashMap<mir::Local, vir::ExprSnap<'vir>>,
+
+    pub modifies: Vec<(MirSpecExpr<'vir, vir::Set>, Span)>,
+    pub reads: Vec<(MirSpecExpr<'vir, vir::Set>, Span)>,
 }
 
 impl<'vir> MirSpecEncOutput<'vir> {
@@ -240,6 +243,8 @@ impl TaskEncoder for MirSpecEnc {
             let specs = deps
                 .require_dep::<crate::encoders::SpecEnc>(crate::encoders::SpecEncTask { def_id })?;
             let (pres, pres_inherited) = crate::encoders::spec_items(&specs.pres);
+            let (modifies, modifies_inherited) = crate::encoders::spec_items(&specs.modifies);
+            let (reads, reads_inherited) = crate::encoders::spec_items(&specs.reads);
             let (posts, posts_inherited) = crate::encoders::spec_items(&specs.posts);
             let (pledges, pledges_inherited) = crate::encoders::spec_items(&specs.pledges);
 
@@ -251,14 +256,6 @@ impl TaskEncoder for MirSpecEnc {
                 substs: substs_for(pres_inherited),
                 do_stability_checks: false,
             };
-            let partial_pre_ctx = SpecEncCtx {
-                extern_spec: specs.extern_spec,
-                enc_mode,
-                context_def_id,
-                substs: substs_for(pres_inherited),
-                do_stability_checks,
-            };
-
             let post_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
@@ -266,14 +263,6 @@ impl TaskEncoder for MirSpecEnc {
                 substs: substs_for(posts_inherited),
                 do_stability_checks: false,
             };
-            let partial_post_ctx = SpecEncCtx {
-                extern_spec: specs.extern_spec,
-                enc_mode,
-                context_def_id,
-                substs: substs_for(posts_inherited),
-                do_stability_checks,
-            };
-
             let pledge_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
@@ -281,13 +270,6 @@ impl TaskEncoder for MirSpecEnc {
                 substs: substs_for(pledges_inherited),
                 do_stability_checks: false,
             };
-            // let partial_pledge_ctx = SpecEncCtx {
-            //     extern_spec: specs.extern_spec,
-            //     enc_mode,
-            //     context_def_id,
-            //     substs: substs_for(pledges_inherited),
-            //     do_stability_checks,
-            // };
 
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
             let all_args: FxHashMap<mir::Local, _> = match enc_mode {
@@ -345,7 +327,7 @@ impl TaskEncoder for MirSpecEnc {
             // it uses an unsupported feature), report the error at *that spec's*
             // span and skip only it, keeping the permission contract and the other
             // specs intact.
-            let pres: Vec<(MirSpecCond<'_>, Span)> = pres
+            let mut pres: Vec<(MirSpecExpr<'_, _>, Span)> = pres
                 .iter()
                 .filter_map(|spec_def_id| {
                     let span = vcx.tcx().def_span(*spec_def_id);
@@ -357,6 +339,7 @@ impl TaskEncoder for MirSpecEnc {
                                 pre_ctx,
                                 *spec_def_id,
                                 "precondition",
+                                false,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Bool>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -380,9 +363,10 @@ impl TaskEncoder for MirSpecEnc {
                             let spec = Self::encode_pure(
                                 vcx,
                                 deps,
-                                partial_pre_ctx,
+                                pre_ctx,
                                 *spec_def_id,
                                 "precondition",
+                                true,
                             )?;
                             let expr = spec.expr.downcast_ty::<vir::Bool>();
                             // Reify *inside* the span scope: the nodes created by the
@@ -402,7 +386,124 @@ impl TaskEncoder for MirSpecEnc {
                                 ),
                             )
                         };
-                        Some((MirSpecCond { total, partial }, span))
+                        Some((MirSpecExpr { total, partial }, span))
+                    })
+                })
+                .collect();
+
+            // TODO hmmm do we need to encode this with explicit snap args instead of reading from the heap
+            let modifies: Vec<(MirSpecExpr<'_, _>, Span)> = modifies
+                .iter()
+                .filter_map(|spec_def_id| {
+                    let span = vcx.tcx().def_span(*spec_def_id);
+                    vcx.with_span(span, |vcx| {
+                        let total = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                pre_ctx,
+                                *spec_def_id,
+                                "modifies",
+                                false,
+                            )?;
+                            let expr = spec.expr.downcast_ty::<vir::Set>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    None,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        let partial = {
+                            let spec =
+                                Self::encode_pure(vcx, deps, pre_ctx, *spec_def_id, "reads", true)?;
+                            let expr = spec.expr.downcast_ty::<vir::Set>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    None,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        Some((MirSpecExpr { total, partial }, span))
+                    })
+                })
+                .collect();
+
+            let reads: Vec<(MirSpecExpr<'_, _>, Span)> = reads
+                .iter()
+                .filter_map(|spec_def_id| {
+                    let span = vcx.tcx().def_span(*spec_def_id);
+                    vcx.with_span(span, |vcx| {
+                        let total = {
+                            let spec = Self::encode_pure(
+                                vcx,
+                                deps,
+                                pre_ctx,
+                                *spec_def_id,
+                                "reads",
+                                false,
+                            )?;
+                            let expr = spec.expr.downcast_ty::<vir::Set>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    None,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        let partial = {
+                            let spec =
+                                Self::encode_pure(vcx, deps, pre_ctx, *spec_def_id, "reads", true)?;
+                            let expr = spec.expr.downcast_ty::<vir::Set>();
+                            // Reify *inside* the span scope: the nodes created by the
+                            // reification pick up the ambient span, which makes error
+                            // positions inside this precondition point at the spec.
+                            //
+                            // TODO If we want to access 'rep's of locals and their projections what else do we pass here?
+                            // TODO we might want to make local_refs available here
+                            expr.reify(
+                                vcx,
+                                (
+                                    *spec_def_id,
+                                    pre_args,
+                                    None,
+                                    vir::OldLabel::None,
+                                    im_state_ex,
+                                ),
+                            )
+                        };
+                        Some((MirSpecExpr { total, partial }, span))
                     })
                 })
                 .collect();
@@ -422,7 +523,10 @@ impl TaskEncoder for MirSpecEnc {
                 }
                 MirSpecEncMode::PureWithResult | MirSpecEncMode::PureWithoutResult => all_args,
             };
-            let posts: Vec<(MirSpecCond<'_>, Span)> = posts
+            // TODO IM if this is a pure function that returns an ALoc<'a, T> there needs to be some postcondition that constrains the type element of the return value.
+            // More generally could this be a special case of a (type-dependent) type invariant?
+
+            let mut posts: Vec<(MirSpecExpr<'_, _>, Span)> = posts
                 .iter()
                 .filter_map(|spec_def_id| {
                     let span = vcx.tcx().def_span(spec_def_id);
@@ -434,6 +538,7 @@ impl TaskEncoder for MirSpecEnc {
                                 post_ctx,
                                 *spec_def_id,
                                 "postcondition",
+                                false,
                             )?;
                             vcx.handle_error("postcondition.violated:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(
@@ -458,9 +563,10 @@ impl TaskEncoder for MirSpecEnc {
                             let spec = Self::encode_pure(
                                 vcx,
                                 deps,
-                                partial_post_ctx,
+                                post_ctx,
                                 *spec_def_id,
                                 "postcondition",
+                                true,
                             )?;
                             vcx.handle_error("postcondition.violated:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(
@@ -481,10 +587,25 @@ impl TaskEncoder for MirSpecEnc {
                             )
                             .realloc_span()
                         };
-                        Some((MirSpecCond { total, partial }, span))
+                        Some((MirSpecExpr { total, partial }, span))
                     })
                 })
                 .collect();
+
+            // TODO IM this is a bit of a hack to make sure that Prusti knows that an ALocT
+            // returned from a function contains the right type witness. Maybe we can generalize
+            // this later into some more general invariant methodology.
+            let return_inv = local_defs[mir::RETURN_PLACE]
+                .invariant
+                .invariant(post_args.get(&(local_defs.arg_count + 1).into()).unwrap());
+            posts.push((
+                (MirSpecExpr {
+                    total: return_inv,
+                    partial: return_inv,
+                }),
+                vcx.tcx().def_span(def_id),
+            ));
+
             let pledges = pledges
                 .iter()
                 .filter_map(
@@ -493,6 +614,7 @@ impl TaskEncoder for MirSpecEnc {
                          rhs: rhs_def_id,
                          ..
                      }| {
+                        // TODO should we emit stability checks somewhere for pledges?
                         // Optional expiry obligation (lhs). If it cannot be encoded,
                         // report at its span and skip the whole pledge.
                         let lhs_expr = match *lhs_def_id {
@@ -503,14 +625,21 @@ impl TaskEncoder for MirSpecEnc {
                                     pledge_ctx,
                                     lhs_def_id,
                                     "pledge lhs",
+                                    false,
                                 )?;
                                 let lhs = spec.expr.downcast_ty::<vir::Bool>();
                                 Some(PledgeExpr::new(lhs_def_id, lhs))
                             }
                             None => None,
                         };
-                        let spec =
-                            Self::encode_pure(vcx, deps, pledge_ctx, *rhs_def_id, "pledge rhs")?;
+                        let spec = Self::encode_pure(
+                            vcx,
+                            deps,
+                            pledge_ctx,
+                            *rhs_def_id,
+                            "pledge rhs",
+                            false,
+                        )?;
                         let rhs = spec.expr.downcast_ty::<vir::Bool>();
                         let rhs_span = vcx.tcx().def_span(rhs_def_id);
                         let rhs_expr = vcx.with_span(rhs_span, move |vcx| {
@@ -536,6 +665,8 @@ impl TaskEncoder for MirSpecEnc {
                 pledges,
                 pre_args,
                 post_args,
+                modifies,
+                reads,
             };
             Ok(((), data))
         })
@@ -549,6 +680,7 @@ impl MirSpecEnc {
         ctx: SpecEncCtx<'vir>,
         def_id: DefId,
         type_: &str,
+        do_stability_checks: bool,
     ) -> Option<MirPureEncOutput<'vir>> {
         let span = vcx.tcx().def_span(def_id);
         let spec = deps.require_dep::<MirPureEnc>(crate::encoders::MirPureEncTask {
@@ -562,7 +694,7 @@ impl MirSpecEnc {
                 GParams::new_maybe_extern(ctx.context_def_id, ctx.extern_spec),
                 ctx.substs,
             ),
-            do_stability_checks: ctx.do_stability_checks,
+            do_stability_checks,
         });
         spec.inspect_err(|err| {
             let (message, err_span) = crate::encoders::mir_fn::dep_error(err);

@@ -246,6 +246,89 @@ impl TaskEncoder for FunctionEnc {
 
             tracing::debug!("finished {def_id:?}");
 
+            // TODO do we need to add a precondition that checks for stability here?
+            // and/or have a partial and total version of this. Maybe if we encode
+            // things with do_stability_checks on.
+            //
+            // In the impure stab encoding we should already have checked that the
+            // function spec is stable, but we still need to encode the version of
+            // this function which we can reason about a call being stable.
+            //
+            // I guess the way we would do this is by requiring stab_read for all
+            // elements of the reads-clause.
+            //
+            // TODO also note that we DONT want to emit the address-stripping operation
+            // at call-sites for these functions
+            
+            // TODO encode the framing axiom
+
+            // TODO we need to generate a partial/total version of each pure-unstable function anyhow in order to
+            // encode specs. The partial version could check that the pre/post-condition and reads-clause are self-framing
+            //
+
+            if false {
+              // TODO is this right? shouldn't we further restrict this set by what the signature implies is
+              // readable? Hmmmm
+              // Do we want to allow someone to write a specification where the pure-unstable function's result
+              // includes locations that the pre-condition might not be strong enough to guarantee readability for?
+              // Is it enough to *only* check (stability?)
+
+              // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
+              // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
+              // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
+              // interface this seems overly strict
+
+              // TODO what is the downside to having pure_unstable reads-clauses?
+
+              // TODO pre-condition contains stable_read for all elements of the reads-clause.
+
+              // TODO we need to encode the reads-clause of the function in such a way that we can
+              // ensure that only the locations that are in the reads-clause are read in the spec +
+              // that the expression that computes the reads clause doesn't read anything not in the
+              // reads-clause.
+              //
+              // TODO maybe for pure functions we don't assume capabilities for arguments? instead we
+              // would just assume stable_read for every element of the reads-clause?
+
+              // TODO generate
+
+              // TODO check that the frame is self-framing
+              // TODO check that the frame expression is stable
+              // TODO possibly? check that the pre-and postconditions are framed by the reads-set
+              // let reads_set_partial = spec.reads.iter().fold(
+              //     vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+              //     |acc, (spec_ex, _)| {
+              //         let MirSpecExpr { total, partial } = *spec_ex;
+              //         vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, partial)
+              //             .downcast_ty()
+              //     },
+              // );
+
+              // // TODO is this right? shouldn't we further restrict this set by what the signature implies is
+              // // readable? Hmmmm
+              // // Do we want to allow someone to write a specification where the pure-unstable function's result
+              // // includes locations that the pre-condition might not be strong enough to guarantee readability for?
+              // // Is it enough to *only* check (stability?)
+
+              // // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
+              // // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
+              // // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
+              // // interface this seems overly strict
+
+              // // TODO what is the downside to having pure_unstable reads-clauses?
+
+              // // TODO check that the frame is self-framing
+              // // TODO check that the frame expression is stable
+              // // TODO possibly? check that the pre-and postconditions are framed by the reads-set
+
+              // let readable_pre_partial = vir::expr! {
+              //     forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, im_state_ex, l)) }
+              //     ((([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])) ==> ([im_caps.stable_read_idn](t, im_state_ex, l))) &&
+              //     (([im_caps.stable_read_idn](t, im_state_ex, l)) ==> (([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])))
+              // };
+              // stab_pres.push(readable_pre_partial);
+            }
+
             let posts = spec
                 .posts
                 .iter()

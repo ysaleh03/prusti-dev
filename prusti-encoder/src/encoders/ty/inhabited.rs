@@ -194,7 +194,7 @@ impl<'a, 'vir> InhabitedWalker<'a, 'vir> {
                     .collect::<EncResult<'vir, Vec<_>>>()?;
                 vir::with_vcx(|vcx| vcx.mk_disj(&variants))
             }
-            // TODO IM revisit to see if these need to be interesting
+            // TODO IM revisit
             TySpecifics::Addr(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),
             TySpecifics::AddrDyn(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),
             TySpecifics::Rep(_) => vir::with_vcx(|vcx| vcx.mk_bool::<true>()),

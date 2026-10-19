@@ -1,6 +1,7 @@
 pub mod pure;
 pub mod inhabited;
 pub mod indirect;
+pub mod invariant;
 pub mod impure;
 pub mod kinds;
 pub mod use_impure;
@@ -17,6 +18,7 @@ pub mod interpretation;
 
 pub use data::TySpecifics;
 pub use inhabited::TyInhabitedEnc;
+pub use invariant::TyInvariantEnc;
 pub use interior_mut::ImTyEnc;
 pub use rust_ty::*;
 

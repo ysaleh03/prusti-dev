@@ -22,6 +22,8 @@ pub struct SpecEncOutput<'vir> {
     pub pres: SpecificationItem<&'vir [DefId]>,
     pub posts: SpecificationItem<&'vir [DefId]>,
     pub pledges: SpecificationItem<&'vir [Pledge]>,
+    pub modifies: SpecificationItem<&'vir [DefId]>,
+    pub reads: SpecificationItem<&'vir [DefId]>,
 }
 
 thread_local! {
@@ -94,11 +96,23 @@ pub fn is_function_pure<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
     .unwrap_or_default()
 }
 
+pub fn is_function_pure_unstable<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
+    with_proc_spec(
+        SpecQuery::GetProcKind(def_id, args.args()),
+        |proc_spec: &ProcedureSpecification| kind_is_pure_unstable(&proc_spec.kind),
+    )
+    .unwrap_or_default()
+}
+
 /// `kind.is_pure()`, treating an invalid trait-to-impl kind refinement as
 /// impure. This is a pure query; the refinement error itself is reported to
 /// the user separately by [`report_kind_refinement_error`].
 pub fn kind_is_pure(kind: &SpecificationItem<typed::ProcedureSpecificationKind>) -> bool {
     kind.is_pure().unwrap_or(false)
+}
+
+pub fn kind_is_pure_unstable(kind: &SpecificationItem<typed::ProcedureSpecificationKind>) -> bool {
+    kind.is_pure_unstable().unwrap_or(false)
 }
 
 /// Emit a user error for an invalid trait-to-impl kind refinement (e.g. an
@@ -199,7 +213,7 @@ impl TaskEncoder for SpecEnc {
     ) -> EncodeFullResult<'vir, Self> {
         deps.emit_output_ref(*task_key, ())?;
         vir::with_vcx(|vcx| {
-            let (extern_spec, pres, posts, pledges) = with_proc_spec(
+            let (extern_spec, pres, posts, pledges, modifies, reads) = with_proc_spec(
                 SpecQuery::GetProcKind(
                     task_key.0,
                     ty::List::identity_for_item(vcx.tcx(), task_key.0),
@@ -209,11 +223,15 @@ impl TaskEncoder for SpecEnc {
                     let pres = specs.pres.map(|items| vcx.alloc_slice(items));
                     let posts = specs.posts.map(|items| vcx.alloc_slice(items));
                     let pledges = specs.pledges.map(|items| vcx.alloc_slice(items));
-                    (specs.extern_spec, pres, posts, pledges)
+                    let modifies = specs.modifies.map(|items| vcx.alloc_slice(items));
+                    let reads = specs.reads.map(|items| vcx.alloc_slice(items));
+                    (specs.extern_spec, pres, posts, pledges, modifies, reads)
                 },
             )
             .unwrap_or((
                 None,
+                SpecificationItem::Empty,
+                SpecificationItem::Empty,
                 SpecificationItem::Empty,
                 SpecificationItem::Empty,
                 SpecificationItem::Empty,
@@ -225,6 +243,8 @@ impl TaskEncoder for SpecEnc {
                     pres,
                     posts,
                     pledges,
+                    modifies,
+                    reads,
                 },
             ))
         })

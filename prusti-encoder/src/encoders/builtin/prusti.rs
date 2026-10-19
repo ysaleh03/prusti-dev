@@ -1167,6 +1167,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         let opand = self.operands[0].downcast_ty::<vir::CSnap>();
         Ok(match op {
             AddrOp::ToRef => {
+                // TODO this is the source of the issues - I think we can't encode both ALoc and ALocT literally identicaly
                 let tyval = addr_ty.type_access(opand);
                 let addr = addr_ty.addr_access(opand);
                 // TODO is this an invariant?

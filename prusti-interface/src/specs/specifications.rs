@@ -52,6 +52,7 @@ pub struct FunctionCallEncodingQuery<'tcx> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SpecQuery<'tcx> {
+    // TODO add modifies clause fn DefId somwhere here?
     FunctionDefEncoding(DefId, &'tcx [GenericArg<'tcx>]),
     FunctionCallEncoding(FunctionCallEncodingQuery<'tcx>),
     /// For determining the [ProcedureSpecificationKind] of a procedure, e.g.

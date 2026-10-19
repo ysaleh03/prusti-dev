@@ -221,7 +221,7 @@ impl TaskEncoder for TyImpureEnc {
                 TySpecifics::Addr(addr) => {
                     TySpecifics::mk_addr(super::kinds::addr::ty_impure(&mut builder)?)
                 }
-                TySpecifics::AddrDyn(addr) => todo!(),
+                TySpecifics::AddrDyn(addr) => TySpecifics::mk_addr(super::kinds::addr::ty_impure(&mut builder)?),
                 TySpecifics::Rep(rep) => TySpecifics::mk_rep(super::kinds::rep::ty_impure(&mut builder)?),
             };
             let output = TyData::new(data, specifics).alloc();

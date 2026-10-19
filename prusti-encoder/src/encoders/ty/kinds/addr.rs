@@ -1,59 +1,82 @@
-use crate::encoders::ty::{
-    LazyRustTy, RustAddr,
-    impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrData, TyImpureEnc},
-    pure::{AdtBuilder, TyPureAddrData, TyPureEnc},
+use crate::encoders::{
+    TyUsePureEnc,
+    ty::{
+        LazyRustTy, RustAddr, RustAddrData, RustTyDatas, TySpecifics,
+        data::TyData,
+        impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrData, TyImpureEnc},
+        pure::{AdtBuilder, DomainBuilder, TyPureAddrCommon, TyPureAddrData, TyPureEnc},
+        use_pure::TyUsePure,
+    },
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::{CastType, VirCtxt};
 
-pub(crate) fn ty_pure<'vir>(
-    _vcx: &'vir VirCtxt<'vir>,
-    _data: &RustAddr<'vir>,
-    _deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
+pub(crate) fn ty_pure_dyn<'vir>(
     builder: &mut AdtBuilder<'vir>,
-) -> Result<TyPureAddrData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
-    // TODO we should be able to construct an Addr<T> from a Ref and TyVal
-
+) -> Result<TyPureAddrCommon<'vir>, EncodeFullError<'vir, TyPureEnc>> {
     let (mk_addr, destructors) =
-        builder.constructor("mk_Addr", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
+        builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
 
-    // let immref_type = todo!();
-    // let addr_to_immref = builder.function("s_ImmRef_to_Addr", vir::TYPE_REF, immref_type);
-    // let immref_to_addr = builder.function("Addr_to_s_ImmRef", immref_type, vir::TYPE_REF);
-
-    // let capability_input_type = (vir::TYPE_REF, vir::TYPE_INT);
-    // let unique = builder.function("unique", capability_input_type, vir::TYPE_BOOL);
-    // let shared = builder.function("shared", capability_input_type, vir::TYPE_BOOL);
-    // let local_unique = builder.function(
-    //     "local_unique",
-    //     (vir::TYPE_REF, vir::TYPE_REF, vir::TYPE_INT),
-    //     vir::TYPE_BOOL,
-    // );
-    // let atomic_unique = builder.function("atomic_unique", capability_input_type, vir::TYPE_BOOL);
-
-    // builder.axiom("unique", vir::expr! {
-    //     forall l: [vir::TYPE_REF], pc: Int :: {[unique](l, pc)} ([unique](l, pc)) ==> ([unique](l, pc))
-    //  });
-    // builder.axiom("shared", vir::expr! {
-    //     forall l: [vir::TYPE_REF], pc: Int :: {[shared](l, pc)} ([shared](l, pc)) ==> ([shared](l, pc))
-    //  });
-    // builder.axiom("local_unique", vir::expr! {
-    //     forall ld: [vir::TYPE_REF], l: [vir::TYPE_REF], pc: Int :: {[local_unique](ld, l, pc)} ([local_unique](ld, l, pc)) ==> ([local_unique](ld, l, pc))
-    //  });
-    // builder.axiom("unique", vir::expr! {
-    //     forall s: [vir::TYPE_REF], pc: Int :: {[unique](s, pc)} ([unique](s, pc)) ==> ([unique](s, pc))
-    //  });
-
-    Ok(TyPureAddrData {
+    Ok(TyPureAddrCommon {
         mk_addr,
         addr_access: destructors[0].downcast_ty(),
         type_access: destructors[1].downcast_ty(),
-        // addr_to_immref,
-        // immref_to_addr,
-        // unique,
-        // shared,
-        // local_unique,
-        // atomic_unique,
+    })
+}
+
+pub(crate) fn ty_pure_typed<'vir>(
+    task_key: &TyData<'vir, RustTyDatas>,
+    deps: &mut TaskEncoderDependencies<'vir, TyPureEnc>,
+    data: &RustAddrData<'vir>,
+    builder: &mut AdtBuilder<'vir>,
+) -> Result<TyPureAddrData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
+    let (mk_addr, destructors) =
+        builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
+
+    let addr_access = destructors[0].downcast_ty();
+    let type_access = destructors[1].downcast_ty();
+
+    let self_snap_decl = builder.vcx.mk_local_decl("s", builder.self_type());
+    let self_snap_ex = builder.vcx.mk_local_ex(self_snap_decl);
+
+    let tyval_decl = builder.vcx.mk_local_decl("ty", vir::TYPE_TYVAL);
+    let invariant = builder.function(
+        "invariant",
+        (builder.self_type(), vir::TYPE_TYVAL),
+        vir::TYPE_BOOL,
+        (self_snap_decl, tyval_decl),
+        &[],
+        &[],
+        Some(builder.vcx.mk_eq_expr(
+            type_access.call()(self_snap_ex),
+            builder.vcx.mk_local_ex(tyval_decl),
+        )),
+    );
+
+    let dyn_ty = data.dyn_ty.decompose(task_key.params);
+    let dyn_use = deps.require_dep::<TyUsePureEnc>(dyn_ty)?;
+    let dyn_common = dyn_use.expect_addrdyn();
+    let to_dyn = builder.function(
+        "to_dyn",
+        builder.self_type(),
+        dyn_use.snapshot.downcast_ty(),
+        (self_snap_decl,),
+        &[],
+        &[],
+        Some(dyn_common.mk_addr.call()(
+            addr_access.call()(self_snap_ex),
+            type_access.call()(self_snap_ex),
+        )),
+    );
+
+    Ok(TyPureAddrData {
+        invariant,
+        to_dyn,
+        common: TyPureAddrCommon {
+            mk_addr,
+            addr_access,
+            type_access,
+        },
     })
 }
 

@@ -109,8 +109,8 @@ impl TaskEncoder for ImTyEnc {
             // let self_ty_use_pure = deps.require_dep::<TyUsePureEnc>(*task_key)?;
             // let self_snapshot = self_ty_use_pure.snapshot.downcast_ty();
             match &task_key.specifics {
-                TySpecifics::Param(RustParamData::Generic) => unreachable!(),
-                TySpecifics::Param(RustParamData::Dyn)
+                TySpecifics::Param(RustParamData::Generic)
+                | TySpecifics::Param(RustParamData::Dyn)
                 | TySpecifics::Opaque(_)
                 | TySpecifics::Primitive(_)
                 | TySpecifics::Raw(_)
@@ -121,7 +121,7 @@ impl TaskEncoder for ImTyEnc {
                 }
                 TySpecifics::ImmRef(data) => {
                     // TODO sharing an immref implies sharing its target
-                    
+
                     deps.emit_output_ref(*task_key, ImTyEncRef {
                         specifics: ImTySpecifics::Other,
                     })?;
@@ -285,7 +285,7 @@ impl TaskEncoder for ImTyEnc {
                                 vir::vir_format_identifier!(vcx, "{}_{}_exclusive", self_name, idx),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    &[],
+                                    &[], // TODO triggers
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_exclusive,
@@ -310,7 +310,7 @@ impl TaskEncoder for ImTyEnc {
                                 ),
                                 vcx.mk_forall_expr(
                                     vcx.alloc_slice(&qvars[..]),
-                                    &[],
+                                    &[], // TODO triggers
                                     vcx.mk_bin_op_expr(
                                         vir::BinOpKind::Implies,
                                         self_shared,
@@ -344,9 +344,101 @@ impl TaskEncoder for ImTyEnc {
                     //     .collect::<EncResult<'vir, Vec<_>>>()?;
                     // vir::with_vcx(|vcx| vcx.mk_disj(&variants))
                 }
-                TySpecifics::Addr(_) => todo!(),
-                TySpecifics::AddrDyn(_) => todo!(),
-                TySpecifics::Rep(_) => todo!(),
+                TySpecifics::Addr(_) => {
+                    deps.emit_output_ref(*task_key, ImTyEncRef {
+                        specifics: ImTySpecifics::Other,
+                    })?;
+                }
+                TySpecifics::AddrDyn(data) => {
+                    deps.emit_output_ref(*task_key, ImTyEncRef {
+                        specifics: ImTySpecifics::Other,
+                    })?;
+
+                    let psnap_decl = vcx.mk_local_decl("s", vir::TYPE_PSNAP);
+                    let psnap_ex = vcx.mk_local_ex(psnap_decl);
+
+                    let self_caster =
+                        deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                            param: RustTyDecomposition::param(),
+                            concrete: self_decomp,
+                        }))?;
+                    let addrdyn = self_ty_pure.expect_addrdyn();
+                    // A bit of a hack but here is where we constrain the addr and ty getter functions from ImStateEnc.
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "{}_addr_from_psnap_defn",
+                                task_key.name()
+                            ),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[psnap_decl]),
+                                &[],
+                                vcx.mk_eq_expr(
+                                    im_state.addr_from_psnap_idn.call()(psnap_ex),
+                                    addrdyn.addr_access.call()(
+                                        self_caster
+                                            .cast_to_caller_ctx(psnap_ex.upcast_ty())
+                                            .downcast_ty(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    );
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "{}_ty_from_psnap_defn",
+                                task_key.name()
+                            ),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[psnap_decl]),
+                                &[],
+                                vcx.mk_eq_expr(
+                                    im_state.ty_from_psnap_idn.call()(psnap_ex),
+                                    addrdyn.type_access.call()(
+                                        self_caster
+                                            .cast_to_caller_ctx(psnap_ex.upcast_ty())
+                                            .downcast_ty(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    );
+
+                    let ty_decl = vcx.mk_local_decl("t", vir::TYPE_TYVAL);
+                    let ty_ex = vcx.mk_local_ex(ty_decl);
+                    let ref_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let ref_ex = vcx.mk_local_ex(ref_decl);
+                    let mk_psnap_ex = im_state.mk_aloc_psnap_idn.call()(ty_ex, ref_ex);
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "{}_ty_mk_aloc_psnap_defn",
+                                task_key.name()
+                            ),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[ty_decl.as_dyn(), ref_decl.as_dyn()]),
+                                vcx.alloc_slice(&[vcx.mk_trigger(&[mk_psnap_ex])]),
+                                vcx.mk_eq_expr(
+                                    mk_psnap_ex,
+                                    self_caster
+                                        .cast_to_callee_ctx(
+                                            addrdyn.mk_addr.call()(ref_ex, ty_ex).upcast_ty(),
+                                        )
+                                        .downcast_ty(),
+                                ),
+                            ),
+                        ),
+                    );
+                }
+                TySpecifics::Rep(_) => {
+                    deps.emit_output_ref(*task_key, ImTyEncRef {
+                        specifics: ImTySpecifics::Other,
+                    })?;
+                }
             };
             Ok((
                 ImTyEncResult {

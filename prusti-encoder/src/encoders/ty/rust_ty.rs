@@ -231,7 +231,8 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
     type BuiltinData = RustBuiltinData<'tcx>;
-    type AddrData = LazyRustTy<'tcx>;
+    type AddrData = RustAddrData<'tcx>;
+    type AddrDynData = ();
     type RepData = LazyRustTy<'tcx>;
 }
 
@@ -257,6 +258,12 @@ pub type RustMutRef<'tcx> = <RustTyDatas as TyDatas<'tcx>>::MutRefData;
 pub type RustRaw<'tcx> = <RustTyDatas as TyDatas<'tcx>>::RawData;
 pub type RustBuiltin<'tcx> = <RustTyDatas as TyDatas<'tcx>>::BuiltinData;
 pub type RustAddr<'tcx> = <RustTyDatas as TyDatas<'tcx>>::AddrData;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RustAddrData<'tcx> {
+    pub param: LazyRustTy<'tcx>,
+    pub dyn_ty: LazyRustTy<'tcx>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RustTyData<'tcx> {
@@ -706,8 +713,15 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 //     }];
                 //     TySpecifics::mk_structlike((), fields)
                 // }
-                "Addr" => TySpecifics::mk_addr(LazyRustTy(Self::new_param_ty(1))),
-                "AId" => todo!(),
+                "Addr" => {
+                    let data = Self::from_struct(adt.non_enum_variant());
+                    let dyn_ty = data.fields[1].ty;
+                    TySpecifics::mk_addr(RustAddrData {
+                        param: LazyRustTy(Self::new_param_ty(1)),
+                        dyn_ty,
+                    })
+                }
+                "ALoc" => TySpecifics::mk_addrdyn(()),
                 "Rep" => TySpecifics::mk_rep(LazyRustTy(Self::new_param_ty(0))),
                 s => todo!("Unimplemented builtin {s}"),
             }

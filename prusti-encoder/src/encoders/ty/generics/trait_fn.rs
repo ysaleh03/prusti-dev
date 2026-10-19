@@ -28,11 +28,19 @@ pub struct TraitFnEncOutputRef<'vir> {
     pub pre_func: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
     pub post_func:
         FunctionIdn<'vir, (vir::Snap, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
-    pub call_stub_impure: Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
+    // (Interior Mutability) the function that computes the footprint of a method
+    pub footprint_stub:
+        Option<FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    // (Interior Mutability) the function that computes the frame of a pure_unstable function
+    pub frame_stub:
+        Option<FunctionIdn<'vir, (vir::ImState, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    pub call_stub_impure:
+        Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
     pub call_stub_pure_caller:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
     pub call_stub_pure_function:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
+    // TODO do we need to add a stub for reads/modifies
 }
 
 impl<'vir> OutputRefAny for TraitFnEncOutputRef<'vir> {}
@@ -116,6 +124,10 @@ impl TaskEncoder for TraitFnEnc {
                 def_id,
                 GArgs::new(item_params, item_params.rust_params()),
             );
+            let is_pure_unstable = crate::encoders::is_function_pure_unstable(
+                def_id,
+                GArgs::new(item_params, item_params.rust_params()),
+            );
 
             let pre_func = FunctionIdn::new(
                 vir_format_identifier!(vcx, "{trait_name}_fn_pre_{item_name}"),
@@ -173,16 +185,41 @@ impl TaskEncoder for TraitFnEnc {
                     return_type,
                 )
             });
-            deps.emit_output_ref(
-                *task_key,
-                TraitFnEncOutputRef {
-                    pre_func,
-                    post_func,
-                    call_stub_impure,
-                    call_stub_pure_caller,
-                    call_stub_pure_function,
-                },
-            )?;
+            let footprint_stub = (!(is_pure || is_pure_unstable)).then(|| {
+                let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
+                FunctionIdn::new(
+                    vir_format_identifier!(vcx, "{trait_name}_footprint_stub_{item_name}"),
+                    (
+                        vir::TYPE_IMSTATE,
+                        arg_types,
+                        item_generics.ty_args(),
+                        item_generics.const_args(),
+                    ),
+                    set_ty,
+                )
+            });
+            let frame_stub = is_pure_unstable.then(|| {
+                let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
+                FunctionIdn::new(
+                    vir_format_identifier!(vcx, "{trait_name}_frame_stub_{item_name}"),
+                    (
+                        vir::TYPE_IMSTATE,
+                        arg_types,
+                        item_generics.ty_args(),
+                        item_generics.const_args(),
+                    ),
+                    set_ty,
+                )
+            });
+            deps.emit_output_ref(*task_key, TraitFnEncOutputRef {
+                pre_func,
+                post_func,
+                footprint_stub,
+                frame_stub,
+                call_stub_impure,
+                call_stub_pure_caller,
+                call_stub_pure_function,
+            })?;
             // The stubs' semantics are given by the impls' axioms; require the
             // trait so that its impls' condition/axiom triggers are registered
             // (foreign traits are not encoded by `encode_all_in_crate`).

@@ -124,7 +124,7 @@ impl AstRewriter {
             ),
             SpecItemType::Predicate(return_type) => (return_type.clone(), TokenStream::new()),
             SpecItemType::Modifies | SpecItemType::Reads => (
-                quote_spanned! {item_span => Set<Addr<Int>>}, // TODO: fix
+                quote_spanned! {item_span => Set<ALoc>},
                 TokenStream::new(),
             ),
             _ => (

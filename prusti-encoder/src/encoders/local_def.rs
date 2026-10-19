@@ -15,8 +15,12 @@ use crate::encoders::{
     ImCapEnc, ImStateEnc, TyUseImpureEnc, TyUsePureEnc,
     im_capabilities::ImCapEncRef,
     im_state::ImStateEncRef,
-    ty::{RustTyDecomposition, TySpecifics, generics::TyExprEnc, use_impure::TyUseImpure},
+    ty::{
+        RustTyDecomposition, TySpecifics, generics::TyExprEnc, invariant::TyUseInvariantEnc,
+    },
 };
+
+use super::ty::invariant::TyUseInvariantRef;
 
 pub struct MirLocalDefEnc;
 
@@ -94,6 +98,7 @@ pub struct LocalDef<'vir> {
     /// (Interior Mutability) assertion that the current ImState
     /// contains exclusive capability to this local
     pub impure_cap: vir::ExprBool<'vir>,
+    pub invariant: TyUseInvariantRef<'vir>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -231,12 +236,15 @@ impl TaskEncoder for MirLocalDefEnc {
                 }
                 _ => impure_snap,
             };
+
             let impure_cap = im_caps.exclusive_idn.call()(
                 tyval,
                 im_state.get_idn.call()(vcx.mk_local_ex(im_state.state_ref_decl)),
                 idx,
                 local_ex,
             );
+
+            let invariant = deps.require_ref::<TyUseInvariantEnc>(ty_task).unwrap();
 
             LocalDef {
                 local,
@@ -246,6 +254,7 @@ impl TaskEncoder for MirLocalDefEnc {
                 impure_pred,
                 spec_snap,
                 impure_cap,
+                invariant,
             }
         }
 

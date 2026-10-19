@@ -346,6 +346,10 @@ macro_rules! expr_inner {
         $crate::expr_inner!(@expr_one; $($lhs)*),
         $crate::expr_inner!(@expr_one; $($rhs)*),
     ) };
+    (@expr_one; ( $($lhs:tt)+ ) subset ( $($rhs:tt)+ )) => { vcx!().mk_set_subset_expr(
+        $crate::expr_inner!(@expr_one; $($lhs)*),
+        $crate::expr_inner!(@expr_one; $($rhs)*),
+    ) };
     (@expr_one; ( $($base:tt)+ ) [ $($index:tt)+ ]) => { vcx!().mk_index_expr(
         $crate::expr_inner!(@expr_one; $($base)*),
         $crate::expr_inner!(@expr_one; $($index)*),

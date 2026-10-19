@@ -8,11 +8,11 @@ pub struct ImCapEncRef<'vir> {
         vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
     pub shared_idn:
         vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
-    // pub local_exclusive_idn: vir::FunctionIdn<
-    //     'vir,
-    //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
-    //     vir::Bool,
-    // >,
+    pub local_write_idn: vir::FunctionIdn<
+        'vir,
+        (vir::TyVal, vir::ImState, vir::Int, vir::Ref, vir::PSnap),
+        vir::Bool,
+    >,
     // pub atomic_exclusive_idn: vir::FunctionIdn<
     //     'vir,
     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
@@ -82,18 +82,17 @@ impl TaskEncoder for ImCapEnc {
                 vir::TYPE_BOOL,
             );
 
-            // let local_exclusive_idn = vir::FunctionIdn::new(
-            //     vir::ViperIdent::new("cap_local"),
-            //     (
-            //         vir::TYPE_IMSTATE,
-            //         vir::TYPE_INT,
-            //         vir::TYPE_TYVAL,
-            //         vir::TYPE_REF,
-            //         vir::TYPE_TYVAL,
-            //         vir::TYPE_REF,
-            //     ),
-            //     vir::TYPE_BOOL,
-            // );
+            let local_write_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_local_write"),
+                (
+                    vir::TYPE_TYVAL,
+                    vir::TYPE_IMSTATE,
+                    vir::TYPE_INT,
+                    vir::TYPE_REF,
+                    vir::TYPE_PSNAP
+                ),
+                vir::TYPE_BOOL,
+            );
 
             // let atomic_exclusive_idn = vir::FunctionIdn::new(
             //     vir::ViperIdent::new("cap_atomic"),
@@ -139,7 +138,7 @@ impl TaskEncoder for ImCapEnc {
             deps.emit_output_ref(*task_key, ImCapEncRef {
                 exclusive_idn,
                 shared_idn,
-                // local_exclusive_idn,
+                local_write_idn,
                 // atomic_exclusive_idn,
                 addr_to_idx_idn,
                 stable_read_idn,
@@ -176,10 +175,18 @@ impl TaskEncoder for ImCapEnc {
 
             domain_functions.push(vcx.mk_domain_function(exclusive_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(shared_idn, false, None));
-            // functions.push(vcx.mk_domain_function(local_exclusive_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(local_write_idn, false, None));
             // functions.push(vcx.mk_domain_function(atomic_exclusive_idn, false, None));
 
             // Capability Implications
+
+            let stable_write_read =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_stable_write_read"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref ::
+                    { ([stable_write_idn](t, s, l)) }
+                    ([stable_write_idn](t, s, l)) ==> ([stable_read_idn](t, s, l))
+                });
+            axioms.push(stable_write_read);
 
             let exclusive_shared =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("im_exclusive_shared"), vir::expr! {
@@ -209,18 +216,29 @@ impl TaskEncoder for ImCapEnc {
             );
             axioms.push(shared_stable_read);
 
-            // // local-capabilities are fully available when the address specified in `local` is not
-            // // modified and modifiable
-            // let local_exclusive_full =
-            //     vcx.mk_domain_axiom(vir::ViperIdent::new("local_exclusive_full"), vir::expr! {
-            //         forall s: ImState, t0: Type, t1: Type, l0: Ref, l1: Ref, i: Int ::
-            //         { ([local_exclusive_idn](s, i, t0, l0, t1, l1))  }
-            //         (([local_exclusive_idn](s, i, t0, l0, t1, l1)) &&
-            //          (([im_state.modifiable_idn](s, t0, l0)) &&
-            //           ([im_state.not_modified_idn](s, t0, l0)))) ==>
-            //             ([exclusive_idn](s, ([addr_to_idx_idn](t0, l0)), t1, l1))
-            //     });
-            // axioms.push(local_exclusive_full);
+            let im_state = deps.require_ref::<ImStateEnc>(())?;
+
+            // local-write gives us stable-write when the location is modified and modifiable
+            let local_write_write =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("local_write_write"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int, p: PSnap ::
+                    { ([local_write_idn](t, s, i, l, p))  }
+                    (([local_write_idn](t, s, i, l, p)) &&
+                     (((p) in ([im_state.modifiable_idn](s))) &&
+                      (!((p) in ([im_state.modifies_idn](s)))))) ==>
+                        ([stable_write_idn](t, s, l))
+                });
+            axioms.push(local_write_write);
+
+            let local_write_read =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("local_write_read"), vir::expr! {
+                    forall t: Type, s: ImState, l: Ref, i: Int, p: PSnap ::
+                    { ([local_write_idn](t, s, i, l, p))  }
+                    (([local_write_idn](t, s, i, l, p)) &&
+                      (!((p) in ([im_state.modifies_idn](s))))) ==>
+                        ([stable_read_idn](t, s, l))
+                });
+            axioms.push(local_write_read);
 
             // // local-exclusive is at least as strong as shared when `local` is not modified
             // let local_exclusive_partial =
@@ -248,7 +266,6 @@ impl TaskEncoder for ImCapEnc {
 
             // Two-State Axioms
 
-            let im_state = deps.require_ref::<ImStateEnc>(())?;
             let havocked = im_state.havocked_idn;
 
             let stable_read_stable =
@@ -285,7 +302,7 @@ impl TaskEncoder for ImCapEnc {
                         forall t: Type, s: ImState, l: Ref, i: Int ::
                         { ([exclusive_idn](t, s, i, l)) }
                         ([exclusive_idn](t, s, i, l)) ==>
-                            ([im_state.modifiable_idn](t, s, l))
+                            (([im_state.mk_aloc_psnap_idn](t, l)) in ([im_state.modifiable_idn](s)))
                 },
             );
             axioms.push(exclusive_modifiable);

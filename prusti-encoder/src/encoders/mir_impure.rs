@@ -2284,6 +2284,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 target,
                 ..
             } => {
+                // TODO: IM we need special handling for:
+                // 1) calculating the explicit capabilities that we frame around a call
+                // N.B. for this we might want to implement the special handling for pure functions
+                // where we don't get rid of capabilities.
+                // 2) computing the modifies-set from the clause of the method we are calling
+
                 // emit the current block, create a new label for the terminator
                 // TODO: should we do this for any other terminators?
                 let terminator_label = self.vcx.mk_terminator_label(

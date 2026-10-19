@@ -20,11 +20,15 @@ pub struct ImStateEncRef<'vir> {
     pub get_snap_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::PSnap>,
     pub allocated_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
     pub fresh_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
-    pub modifiable_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
-    pub not_modified_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
+    pub modifiable_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
+    pub modifies_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
 
     pub mk_rep_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::PSnap), vir::GRep>,
     pub rep_eq_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::GRep, vir::GRep), vir::Bool>,
+
+    pub addr_from_psnap_idn: vir::FunctionIdn<'vir, vir::PSnap, vir::Ref>,
+    pub ty_from_psnap_idn: vir::FunctionIdn<'vir, vir::PSnap, vir::TyVal>,
+    pub mk_aloc_psnap_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref), vir::PSnap>,
 
     pub get_idn: vir::FunctionIdn<'vir, vir::Ref, vir::ImState>,
     pub pred_idn: vir::PredicateIdn<'vir, vir::Ref>,
@@ -98,16 +102,17 @@ impl TaskEncoder for ImStateEnc {
                 vir::TYPE_BOOL,
             );
 
+
             let modifiable_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_modifiable"),
-                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
+                vir::TYPE_IMSTATE,
+                vcx.mk_ty_set(vir::TYPE_PSNAP),
             );
 
-            let not_modified_idn = vir::FunctionIdn::new(
-                vir::ViperIdent::new("im_not_modified"),
-                (vir::TYPE_TYVAL, vir::TYPE_IMSTATE, vir::TYPE_REF),
-                vir::TYPE_BOOL,
+            let modifies_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_modifies"),
+                vir::TYPE_IMSTATE,
+                vcx.mk_ty_set(vir::TYPE_PSNAP),
             );
 
             let lte_idn = vir::FunctionIdn::new(
@@ -126,6 +131,28 @@ impl TaskEncoder for ImStateEnc {
                 vir::ViperIdent::new("im_rep_eq"),
                 (vir::TYPE_TYVAL, vir::TYPE_GREP, vir::TYPE_GREP),
                 vir::TYPE_BOOL,
+            );
+
+            // This is a bit of a hack to be able to encode modifies-clauses without
+            // having access to the ALoc type. When the ALoc type is encoded, we
+            // emit an axiom that relates these functions to the ADT destructors.
+
+            let mk_aloc_psnap_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_mk_aloc_psnap"),
+                (vir::TYPE_TYVAL, vir::TYPE_REF),
+                vir::TYPE_PSNAP,
+            );
+
+            let addr_from_psnap_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_addr_from_psnap"),
+                vir::TYPE_PSNAP,
+                vir::TYPE_REF,
+            );
+
+            let ty_from_psnap_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_ty_from_psnap"),
+                vir::TYPE_PSNAP,
+                vir::TYPE_TYVAL,
             );
 
             // Impure Ops
@@ -150,13 +177,16 @@ impl TaskEncoder for ImStateEnc {
                 allocated_idn,
                 fresh_idn,
                 modifiable_idn,
-                not_modified_idn,
+                modifies_idn,
                 mk_rep_idn,
                 rep_eq_idn,
                 get_idn,
                 pred_idn,
                 bump_idn,
                 state_ref_decl,
+                addr_from_psnap_idn,
+                ty_from_psnap_idn,
+                mk_aloc_psnap_idn,
             })?;
 
             // Domain Functions
@@ -168,9 +198,12 @@ impl TaskEncoder for ImStateEnc {
             domain_functions.push(vcx.mk_domain_function(allocated_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(fresh_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(modifiable_idn, false, None));
-            domain_functions.push(vcx.mk_domain_function(not_modified_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(modifies_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(mk_rep_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(rep_eq_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(addr_from_psnap_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(ty_from_psnap_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(mk_aloc_psnap_idn, false, None));
 
             // General Axioms
 
@@ -208,15 +241,15 @@ impl TaskEncoder for ImStateEnc {
                 vcx.mk_domain_axiom(vir::ViperIdent::new("im_fresh_modifiable"), vir::expr! {
                     forall t: Type, s: ImState, l: Ref ::
                     { ([fresh_idn](t, s, l)) }
-                    ([fresh_idn](t, s, l)) ==> ([modifiable_idn](t, s, l))
+                    ([fresh_idn](t, s, l)) ==> (([mk_aloc_psnap_idn](t, l)) in  ([modifiable_idn](s)))
                 });
             axioms.push(fresh_modifiable);
 
             let modifiable_next =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("im_modifiable_next"), vir::expr! {
-                    forall t: Type, s: ImState, l: Ref ::
-                    { ([modifiable_idn](t, ([next_idn](s)), l)) }
-                    ([modifiable_idn](t, s, l)) ==> ([modifiable_idn](t, ([next_idn](s)), l))
+                    forall s: ImState ::
+                    { ([modifiable_idn](([next_idn](s)))) }
+                    ([modifiable_idn](s)) subset ([modifiable_idn](([next_idn](s))))
                 });
             axioms.push(modifiable_next);
 
