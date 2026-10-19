@@ -239,9 +239,9 @@ impl TaskEncoder for MethodEnc {
                 },
                 span,
             )?;
+            let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
             let footprint_ref = matches!(proc_kind, ProcKind::Method).then(|| {
                 let arg_types = vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>());
-                let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
                 vir::FunctionIdn::new(
                     vir::vir_format_identifier!(
                         vcx,
@@ -339,40 +339,49 @@ impl TaskEncoder for MethodEnc {
 
             // TODO we could assume/assert here that modifies & reads are never both non-empty
 
-            let modifies_ex = im_state.modifies_idn.call()(im_state.get_idn.call()(im_state_ref));
-            let modifiable_ex =
-                im_state.modifiable_idn.call()(im_state.get_idn.call()(im_state_ref));
+            let curr_im_state = im_state.get_idn.call()(vcx.mk_local_ex(im_state.state_ref_decl));
+            let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
+            let modifiable_ex = im_state.modifiable_idn.call()(curr_im_state);
 
             // Stability checks are always in a state where no location is modified
             let none_modifies_ex =
                 vcx.mk_eq_expr(modifies_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
-            let im_state_ex = im_state.get_idn.call()(im_state_ref);
 
             let mut footprint = None;
 
             match proc_kind {
                 ProcKind::PureUnstable => {
-                    assert!(spec.modifies.is_empty());
+                    assert!(spec.modifies.pure.is_empty());
                     let none_modifiable_ex = vcx
                         .mk_eq_expr(modifiable_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
                     cap_pres.push(none_modifiable_ex);
                     cap_pres.push(none_modifies_ex);
+
+                    let reads_set_partial = spec.reads.impure.iter().fold(
+                        vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                        |acc, (spec_ex, _)| {
+                            vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                                .downcast_ty()
+                        },
+                    );
+
+                    // A trivial precondition that checks stability of the reads-clause
+                    cap_pres.push(vcx.mk_let_expr(
+                        vcx.mk_local_decl("reads", set_ty),
+                        reads_set_partial,
+                        vcx.mk_bool::<true>(),
+                    ));
                 }
                 ProcKind::Method => {
-                    assert!(spec.reads.is_empty());
+                    assert!(spec.reads.pure.is_empty());
                     cap_pres.push(none_modifies_ex);
-
-                    // let pure_spec = deps.require_dep_spanned::<MirSpecEnc>(
-                    //     (def_id, def_id, MirSpecEncMode::PureWithoutResult),
-                    //     span,
-                    // )?;
 
                     let footprint_params = (1..=local_defs.arg_count)
                         .map(mir::Local::from)
                         .map(|local| local_defs[local].local_snap)
                         .collect::<Vec<_>>();
 
-                    if spec.modifies.is_empty() {
+                    if spec.modifies.pure.is_empty() {
                         // If the modifies clause is empty then we require every location to be modifiable.
                         // As a result, the method can only be called by other methods with no modifies-clause.
                         let all_modifiable_ex = vir::expr! {
@@ -392,33 +401,34 @@ impl TaskEncoder for MethodEnc {
                             ),
                             &[],
                             vcx.alloc_slice(&[vir::expr! {
-                                forall l: PSnap :: { ((l) in (result: Set)) }
-                                (l) in (result: Set)
+                                forall l: PSnap :: { ((l) in (result: [set_ty])) }
+                                (l) in (result: [set_ty])
                             }]),
                             None,
                             None,
                         ));
                     } else {
-                        let modifies_set_total = spec.modifies.iter().fold(
-                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                            |acc, (spec_ex, _)| {
-                                let MirSpecExpr { total, partial } = *spec_ex;
-                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, total)
-                                    .downcast_ty()
-                            },
+                        let modifies_set_total = footprint_ref.unwrap().call()(
+                            curr_im_state,
+                            vcx.alloc(
+                                &local_defs
+                                    .args()
+                                    .map(|arg| arg.impure_snap)
+                                    .collect::<Vec<_>>()[..],
+                            ),
+                            generics.ty_exprs(),
+                            generics.const_exprs(),
                         );
-                        let modifies_set_partial = spec.modifies.iter().fold(
+
+                        let modifies_set_partial = spec.modifies.impure.iter().fold(
                             vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
                             |acc, (spec_ex, _)| {
-                                let MirSpecExpr { total, partial } = *spec_ex;
-                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, partial)
+                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
                                     .downcast_ty()
                             },
                         );
 
-                        // TODO add a body to the footprint function
-                        let modifies_ex =
-                            im_state.modifies_idn.call()(im_state.get_idn.call()(im_state_ref));
+                        let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
 
                         // The method specification is checked assuming that the set of modifiable locations is
                         // exactly the modifies-clause and the set of modified locations is empty.
@@ -434,22 +444,33 @@ impl TaskEncoder for MethodEnc {
                             vcx.mk_set_subset_expr(modifies_set_total, modifiable_ex),
                         );
                         pres.push(modifiable_pre_total);
+
+                        let modifies_set_pure = spec.modifies.pure.iter().fold(
+                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                            |acc, spec_ex| {
+                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                                    .downcast_ty()
+                            },
+                        );
+                        footprint = Some(vcx.mk_function(
+                            footprint_ref.unwrap(),
+                            (
+                                im_state.state_decl,
+                                &footprint_params,
+                                generics.ty_decls(),
+                                generics.const_decls(),
+                            ),
+                            &[],
+                            &[],
+                            None,
+                            Some(modifies_set_pure),
+                        ));
                     }
                 }
                 ProcKind::Pure => {
-                    assert!(spec.modifies.is_empty() && spec.reads.is_empty());
+                    assert!(spec.modifies.pure.is_empty() && spec.reads.pure.is_empty());
                 }
             }
-
-            // TODO there is a big difference between a single modifies-clause (which is empty) and
-            // no modifies-clauses. A method with no modifies-clauses has an unconstrained
-            // modifies-set.
-
-            // (Interior Mutability) add preconditions corresponding to the
-            // function's modifies clause.
-
-            // the VIR that computes the modifies-set should be partial for the
-            // stab encoding and total for the actual method.
 
             // Trusted functions, call stubs, external functions and trait
             // functions without a default implementation have no body to
@@ -504,8 +525,6 @@ impl TaskEncoder for MethodEnc {
                 // let init_capabilities = todo!();
 
                 let im_data = {
-                    let curr_im_state = im_state.get_idn.call()(im_state_ref);
-
                     let prev_im_state_decl = vir::vir_local_decl! { vcx; prev_im_st : ImState };
                     start_stmts.push(vcx.mk_local_decl_stmt(prev_im_state_decl, None));
                     let prev_im_state = vcx.mk_local_ex(prev_im_state_decl);
@@ -634,6 +653,8 @@ impl TaskEncoder for MethodEnc {
             let mut stab_posts = posts.clone();
             stab_posts.append(&mut cap_pres);
 
+            // NOTE: be careful about the order in which we add pre/post-conditions.
+
             // Extend stab pres/posts with the non-functional part of the pres/posts
             stab_pres.extend(spec.pres.iter().map(|(cond, _)| cond.partial));
             stab_posts.extend(spec.posts.iter().map(|(cond, _)| cond.partial));
@@ -698,6 +719,9 @@ impl TaskEncoder for MethodEnc {
         for output in Self::all_outputs_local_no_errors(program) {
             program.add_method(output.method);
             program.add_method(output.stab_method);
+            output
+                .footprint
+                .map(|footprint| program.add_function(footprint));
         }
     }
 }
