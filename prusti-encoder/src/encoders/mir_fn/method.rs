@@ -411,6 +411,8 @@ impl TaskEncoder for MethodEnc {
                         ),
                     );
 
+                    // This method forces Viper to check that the reads-clause is self-framing, i.e. that it only
+                    // reads from unstable memory locations that are themselves described by the reads-clause
                     methods.push(vcx.mk_method(
                         self_frame_idn,
                         (
@@ -420,7 +422,7 @@ impl TaskEncoder for MethodEnc {
                             generics.const_decls(),
                         ),
                         &[],
-                        &vcx.alloc([reads_stable, frame_ex])[..],
+                        &vcx.alloc([im_state_owned, reads_stable, frame_ex])[..],
                         &[],
                         None,
                     ));

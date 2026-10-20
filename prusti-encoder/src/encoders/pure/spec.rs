@@ -163,7 +163,7 @@ struct SpecEncCtx<'vir> {
     context_def_id: DefId,
     substs: ty::GenericArgsRef<'vir>,
     // TODO figure out if we want to do separate stability-check encoding for methods
-    do_stability_checks: bool,
+    is_partial: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -273,27 +273,27 @@ impl TaskEncoder for MirSpecEnc {
             let (posts, posts_inherited) = crate::encoders::spec_items(&specs.posts);
             let (pledges, pledges_inherited) = crate::encoders::spec_items(&specs.pledges);
 
-            let do_stability_checks = matches!(enc_mode, MirSpecEncMode::Impure);
+            let is_partial = matches!(enc_mode, MirSpecEncMode::Impure);
             let pre_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pres_inherited),
-                do_stability_checks: false,
+                is_partial: false,
             };
             let post_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(posts_inherited),
-                do_stability_checks: false,
+                is_partial: false,
             };
             let pledge_ctx = SpecEncCtx {
                 extern_spec: specs.extern_spec,
                 enc_mode,
                 context_def_id,
                 substs: substs_for(pledges_inherited),
-                do_stability_checks: false,
+                is_partial: false,
             };
 
             let local_iter = (1..=local_defs.arg_count).map(mir::Local::from);
@@ -746,7 +746,7 @@ impl MirSpecEnc {
         ctx: SpecEncCtx<'vir>,
         def_id: DefId,
         type_: &str,
-        do_stability_checks: bool,
+        is_partial: bool,
         is_unstable: bool,
     ) -> Option<MirPureEncOutput<'vir>> {
         let span = vcx.tcx().def_span(def_id);
@@ -761,7 +761,7 @@ impl MirSpecEnc {
                 GParams::new_maybe_extern(ctx.context_def_id, ctx.extern_spec),
                 ctx.substs,
             ),
-            do_stability_checks,
+            is_partial,
             is_unstable,
         });
         spec.inspect_err(|err| {

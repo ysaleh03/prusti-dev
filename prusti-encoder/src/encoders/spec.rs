@@ -88,12 +88,12 @@ pub fn is_function_trusted(def_id: DefId) -> bool {
     .unwrap_or_default()
 }
 
-pub fn is_function_pure<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
+pub fn is_function_pure_value<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
     with_proc_spec(
         SpecQuery::GetProcKind(def_id, args.args()),
         |proc_spec: &ProcedureSpecification| kind_is_pure(&proc_spec.kind),
     )
-    .unwrap_or(is_function_pure_unstable(def_id, args))
+    .unwrap_or(false)
 }
 
 pub fn is_function_pure_unstable<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
@@ -102,6 +102,10 @@ pub fn is_function_pure_unstable<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool
         |proc_spec: &ProcedureSpecification| kind_is_pure_unstable(&proc_spec.kind),
     )
     .unwrap_or_default()
+}
+
+pub fn is_function_pure<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
+    is_function_pure_value(def_id, args) || is_function_pure_unstable(def_id, args)
 }
 
 /// `kind.is_pure()`, treating an invalid trait-to-impl kind refinement as

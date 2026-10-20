@@ -4,8 +4,8 @@ use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDepen
 use vir::{CastType, FunctionIdn, Reify};
 
 use crate::encoders::{
-    ImStateEnc, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask, MirSpecEnc, Pure,
-    PureKind, TyUsePureEnc,
+    ImCapEnc, ImStateEnc, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc, MirPureEncTask,
+    MirSpecEnc, Pure, PureKind, TyUsePureEnc,
     mir_fn::{CallTaskDescription, RustSignature},
     pure::spec::{MirSpecEncMode, MirSpecEncTask},
     ty::{
@@ -30,11 +30,22 @@ pub struct FunctionCallEncOutput<'vir> {
     arg_tys: Vec<TyUsePure<'vir>>,
     inputs: Vec<GArgCaster<'vir, Pure>>,
     output: GArgCaster<'vir, Pure>,
+    is_pure_unstable: bool,
 }
 
+// TODO IM I think there are some more cases that we add.
+// 1) you might call a function unchecked to encode trait axioms
+// 2) you might call a function with pre-conditions but no stab checks for a method spec
+// 3) you might call a function with both pre-conditions and stab check for stab/WD checks
+//
+//
+// is 2) necessary? if we have a pure-partial mode that checks stability/wd, then can we
+// do a total encoding for actual verification?
+// we might call a function in pure-partial context if we want to check stability
+
 impl<'vir> FunctionCallEncOutput<'vir> {
-    /// Calls the definitional function `f_`, used in pure/spec contexts.
-    pub fn call_pure<Curr, Next>(
+    /// Calls the definitional function `f_`, used in axioms.
+    pub fn call_total<Curr, Next>(
         &self,
         args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
@@ -42,7 +53,7 @@ impl<'vir> FunctionCallEncOutput<'vir> {
     }
 
     /// Calls the caller wrapper `cf_`, used when encoding impure assignments.
-    pub fn call_impure<Curr, Next>(
+    pub fn call_partial<Curr, Next>(
         &self,
         args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
@@ -54,7 +65,14 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         function: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
         mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
-        assert_eq!(self.inputs.len(), args.len());
+        assert_eq!(
+            self.inputs.len(),
+            if self.is_pure_unstable {
+                args.len() - 1
+            } else {
+                args.len()
+            }
+        );
         for ((arg, caster), ty) in args
             .iter_mut()
             .zip(self.inputs.iter())
@@ -120,6 +138,10 @@ impl TaskEncoder for FunctionCallEnc {
             inputs,
             output,
             arg_tys,
+            is_pure_unstable: crate::encoders::is_function_pure_unstable(
+                callee_def_id,
+                task_key.gargs,
+            ),
         }))
     }
 
@@ -190,16 +212,12 @@ impl TaskEncoder for FunctionEnc {
                 GArgs::new(params, params.rust_params()),
             );
             let im_state = deps.require_ref::<ImStateEnc>(())?;
-            let arg_types = if is_pure_unstable {
-                vcx.alloc_slice(
-                    &local_defs
-                        .snap_ty_args()
-                        .chain([vir::TYPE_IMSTATE.upcast_ty()])
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                vcx.alloc_slice(&local_defs.snap_ty_args().collect::<Vec<_>>())
-            };
+            let arg_types = vcx.alloc_slice(
+                &local_defs
+                    .snap_ty_args()
+                    .chain(is_pure_unstable.then(|| vir::TYPE_IMSTATE.upcast_ty()))
+                    .collect::<Vec<_>>(),
+            );
 
             let caller_ref = FunctionIdn::new(
                 caller_ident,
@@ -246,7 +264,7 @@ impl TaskEncoder for FunctionEnc {
                     kind: PureKind::Pure,
                     parent_def_id: def_id,
                     gargs: params.identity_args(),
-                    do_stability_checks: false,
+                    is_partial: false,
                     is_unstable: is_pure_unstable,
                 }) {
                     Ok(out) => {
@@ -280,7 +298,7 @@ impl TaskEncoder for FunctionEnc {
 
             // TODO do we need to add a precondition that checks for stability here?
             // and/or have a partial and total version of this. Maybe if we encode
-            // things with do_stability_checks on.
+            // things with is_partial on.
             //
             // In the impure stab encoding we should already have checked that the
             // function spec is stable, but we still need to encode the version of
@@ -300,75 +318,34 @@ impl TaskEncoder for FunctionEnc {
 
             let mut functions = Vec::new();
 
-            if false {
-                // NOTE: encode two versions of the function:
-                // 1) the *total* version which has no pre-conditions
-                // 2) the *partial* version which requires that each element of the reads-clause is stable in the current state
+            let func_params = local_defs
+                .local_decl_args()
+                .chain(is_pure_unstable.then(|| im_state.state_decl.upcast_ty()))
+                .collect::<Vec<_>>();
+            let func_args = func_params
+                .iter()
+                .map(|arg| vcx.mk_local_ex(arg))
+                .collect::<Vec<_>>();
 
-                // because we are precise (i.e. we require stab_read directly to the location being
-                // read from) we don't have to worry about transitive capability bs
-                // TODO forall l, t :: stab_read(s, l, t) iff (mk_thing(l, t) in reads_ex)
+            if is_pure_unstable {
+                // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
+                assert!(expr.is_none());
 
-                // TODO is this right? shouldn't we further restrict this set by what the signature implies is
-                // readable? Hmmmm
-                // Do we want to allow someone to write a specification where the pure-unstable function's result
-                // includes locations that the pre-condition might not be strong enough to guarantee readability for?
-                // Is it enough to *only* check (stability?)
-
-                // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
-                // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
-                // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
-                // interface this seems overly strict
-
-                // TODO what is the downside to having pure_unstable reads-clauses?
-
-                // TODO pre-condition contains stable_read for all elements of the reads-clause.
-
-                // TODO we need to encode the reads-clause of the function in such a way that we can
-                // ensure that only the locations that are in the reads-clause are read in the spec +
-                // that the expression that computes the reads clause doesn't read anything not in the
-                // reads-clause.
-                //
-                // TODO maybe for pure functions we don't assume capabilities for arguments? instead we
-                // would just assume stable_read for every element of the reads-clause?
-
-                // TODO generate
-
-                // TODO check that the frame is self-framing
-                // TODO check that the frame expression is stable
-                // TODO possibly? check that the pre-and postconditions are framed by the reads-set
-                // let reads_set_partial = spec.reads.iter().fold(
-                //     vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                //     |acc, (spec_ex, _)| {
-                //         let MirSpecExpr { total, partial } = *spec_ex;
-                //         vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, partial)
-                //             .downcast_ty()
-                //     },
-                // );
-
-                // // TODO is this right? shouldn't we further restrict this set by what the signature implies is
-                // // readable? Hmmmm
-                // // Do we want to allow someone to write a specification where the pure-unstable function's result
-                // // includes locations that the pre-condition might not be strong enough to guarantee readability for?
-                // // Is it enough to *only* check (stability?)
-
-                // // TODO do we need to make sure that the reads-clause is stable? or just that it depends on itself?
-                // // TODO we could even enforce that frames in general are `pure`, does this buy us anything?
-                // // TODO I'm skeptical of this, and if you have frames that grow when you call methods on the immutable
-                // // interface this seems overly strict
-
-                // // TODO what is the downside to having pure_unstable reads-clauses?
-
-                // // TODO check that the frame is self-framing
-                // // TODO check that the frame expression is stable
-                // // TODO possibly? check that the pre-and postconditions are framed by the reads-set
-
-                // let readable_pre_partial = vir::expr! {
-                //     forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, im_state_ex, l)) }
-                //     ((([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])) ==> ([im_caps.stable_read_idn](t, im_state_ex, l))) &&
-                //     (([im_caps.stable_read_idn](t, im_state_ex, l)) ==> (([im_state.mk_aloc_psnap](l, t)) in ([reads_set_partial])))
-                // };
-                // stab_pres.push(readable_pre_partial);
+                let frame_body = spec.reads.pure.iter().fold(
+                    vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                    |acc, spec_ex| {
+                        vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                            .downcast_ty()
+                    },
+                );
+                functions.push(vcx.mk_function(
+                    frame_ref.unwrap(),
+                    (&func_params, generics.ty_decls(), generics.const_decls()),
+                    &[],
+                    &[],
+                    None,
+                    Some(frame_body),
+                ));
             }
 
             let posts = spec
@@ -382,35 +359,34 @@ impl TaskEncoder for FunctionEnc {
                 })
                 .collect::<Vec<_>>();
             let posts = vcx.alloc_slice(&posts);
-
-            let func_args = if is_pure_unstable {
-                local_defs
-                    .local_decl_args()
-                    .chain([im_state.state_decl.upcast_ty()])
-                    .collect::<Vec<_>>()
-            } else {
-                local_defs.local_decl_args().collect::<Vec<_>>()
-            };
-            let wrapped_call_args = func_args
-                .iter()
-                .map(|arg| vcx.mk_local_ex(arg))
-                .collect::<Vec<_>>();
-            let wrapped_call = function_ref.call()(
-                &wrapped_call_args,
-                generics.ty_exprs(),
-                generics.const_exprs(),
+            let im_caps = deps.require_ref::<ImCapEnc>(())?;
+            let pres = vcx.alloc_slice(
+                &spec
+                    .pre_exprs()
+                    .chain(frame_ref.iter().map(|frame_ref| {
+                        let frame_ex = frame_ref.call()(&func_args, generics.ty_exprs(), generics.const_exprs());
+                        vir::expr! {
+                            forall t: Type, l: Ref ::
+                            { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
+                            (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
+                        }
+                    }))
+                    .collect::<Vec<_>>(),
             );
+
+            let wrapped_call =
+                function_ref.call()(&func_args, generics.ty_exprs(), generics.const_exprs());
             functions.push(vcx.mk_function(
                 caller_ref,
-                (&func_args, generics.ty_decls(), generics.const_decls()),
-                vcx.alloc_slice(&spec.pre_exprs().collect::<Vec<_>>()),
+                (&func_params, generics.ty_decls(), generics.const_decls()),
+                pres,
                 posts,
                 None,
                 Some(wrapped_call),
             ));
             functions.push(vcx.mk_function(
                 function_ref,
-                (&func_args, generics.ty_decls(), generics.const_decls()),
+                (&func_params, generics.ty_decls(), generics.const_decls()),
                 &[],
                 posts,
                 expr.is_none().then_some(&vir::DecreasesGenData::Star),

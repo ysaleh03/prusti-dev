@@ -231,7 +231,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
         curr_im_state: vir::ExprGen<'vir, Self::ExprCurr, Self::ExprNext, vir::ImState>,
         span: Span,
         ctxt: &Self::EncodePlaceCtxt,
-        do_stability_checks: bool,
+        is_partial: bool,
     ) -> EncodeResult<'vir, Option<ExprOutput<'vir, Self>>, Self::Encoder> {
         if matches!(builtin, PrustiBuiltin::Spec(_)) {
             return Ok(None);
@@ -245,7 +245,7 @@ pub(crate) trait PureRvalueEnc<'vir> {
                 args: gargs,
                 is_pure,
                 span,
-                do_stability_checks,
+                is_partial,
             })?;
         // TODO I *think* that in our case we don't want snapshots
         // in this way...

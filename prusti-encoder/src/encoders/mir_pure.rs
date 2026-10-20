@@ -88,9 +88,9 @@ pub struct MirPureEncTask<'vir> {
     /// The generic arguments the body is encoded with, together with the
     /// context whose parameters give them meaning.
     pub gargs: GArgs<'vir>,
-    /// (Interior Mutability) Whether to use the versions of IM primitives that
-    /// check capabilities in the current state.
-    pub do_stability_checks: bool,
+    /// Whether to encode the partial versions of operations e.g. preconditions, capability
+    /// checks for function calls
+    pub is_partial: bool,
     /// (Interior Mutability) Whether this expression has access to the current ImState
     pub is_unstable: bool,
 }
@@ -121,8 +121,8 @@ impl TaskEncoder for MirPureEnc {
             task.kind,
             task.parent_def_id,
             task.gargs,
-            task.do_stability_checks,
-            task.is_unstable
+            task.is_partial,
+            task.is_unstable,
         )
     }
 
@@ -134,7 +134,7 @@ impl TaskEncoder for MirPureEnc {
 
         deps.emit_output_ref(*task_key, ())?;
 
-        let (_, kind, def_id, gargs, do_stability_checks, is_unstable) = *task_key;
+        let (_, kind, def_id, gargs, is_partial, is_unstable) = *task_key;
 
         tracing::debug!("encoding {def_id:?}");
         let (inputs, expr) = vir::with_vcx(move |vcx| {
@@ -177,7 +177,7 @@ impl TaskEncoder for MirPureEnc {
                 gargs,
                 &body,
                 deps,
-                do_stability_checks,
+                is_partial,
                 is_unstable,
             );
             let expr_inner = vcx.with_span(body_span, |_| {
@@ -319,7 +319,7 @@ struct Enc<'vir: 'enc, 'enc> {
     rel1_mode: bool,
     before_expiry_mode: bool,
     impure_context: bool,
-    do_stability_checks: bool,
+    is_partial: bool,
     is_unstable: bool,
 }
 
@@ -401,7 +401,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         gargs: GArgs<'vir>,
         body: &'enc mir::Body<'vir>,
         deps: &'enc mut TaskEncoderDependencies<'vir, MirPureEnc>,
-        do_stability_checks: bool,
+        is_partial: bool,
         is_unstable: bool,
     ) -> Self {
         let rev_doms = rev_doms::ReverseDominators::new(&body.basic_blocks);
@@ -433,7 +433,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     ..
                 } | PureKind::SpecBlock(..)
             ),
-            do_stability_checks,
+            is_partial,
             is_unstable,
         }
     }
@@ -938,6 +938,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     // call to another pure function, or a call to a prusti
                     // builtin function.
                     let is_pure = crate::encoders::is_function_pure(def_id, self.gargs(arg_tys));
+                    let is_pure_unstable =
+                        crate::encoders::is_function_pure_unstable(def_id, self.gargs(arg_tys));
 
                     // TODO we need to do something slightly different if the function is pure_unstable, i.e. passing the im_state
                     // do we encode everything with im_state bound? or do we have a flag...
@@ -951,6 +953,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
+                        // TODO is there a pure_unstable case here?
                         let im_state_ex = self.mk_lazy_im_state_expr();
                         match self.encode_prusti_builtin(
                             builtin,
@@ -960,7 +963,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             im_state_ex,
                             term.source_info.span,
                             &new_curr_ver,
-                            self.do_stability_checks,
+                            self.is_partial,
                         )? {
                             Some(expr) => Ok(expr),
                             // The pure-only builtins (quantifiers, spec blocks,
@@ -976,6 +979,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                                 self.encode_pure_only_builtin(builtin, arg_tys, args, &new_curr_ver)
                             }
                         }
+                    // TODO pure_unstable case
                     } else if is_pure {
                         let pure_func = self
                             .deps
@@ -985,13 +989,40 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                                 def_id,
                             ))
                             .unwrap();
+                        let im_state_ex = self.mk_lazy_im_state_expr();
                         let snap_args = args
                             .iter()
                             .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
+                            .chain(is_pure_unstable.then(|| Ok(im_state_ex.upcast_ty())))
                             .collect::<Result<Vec<_>, _>>()?;
-                        Ok(pure_func.call_pure(snap_args))
+                        Ok(if self.is_partial {
+                            let name = self.vcx.tcx().def_path_str(def_id);
+                            let span = self.current_span();
+                            self.vcx.handle_error(
+                                "application.precondition:assertion.false",
+                                move |_| {
+                                    Some(vec![PrustiError::verification(
+                                        format!(
+                                            "call to function `{}` may not be well-defined",
+                                            name
+                                        ),
+                                        span.into(),
+                                    )])
+                                },
+                            );
+                            pure_func.call_partial(snap_args)
+                        } else {
+                            pure_func.call_total(snap_args)
+                        })
                     } else {
-                        panic!("call to unknown non-pure function in pure code ({def_id:?})");
+                        println!("pure unstable? {:?}", is_pure_unstable);
+                        return Err(self.unsupported_rvalue(
+                            format!(
+                                "call to non-pure function `{}` in pure code",
+                                self.vcx.tcx().def_path_str(def_id),
+                            ),
+                            self.current_span(),
+                        ));
                     }
                 };
 
@@ -1473,7 +1504,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 kind: PureKind::Closure,
                 parent_def_id: cl_def_id,
                 gargs: GParams::from(cl_def_id).identity_args(),
-                do_stability_checks: self.do_stability_checks,
+                is_partial: self.is_partial,
                 is_unstable: self.is_unstable,
             })?
             .expr;

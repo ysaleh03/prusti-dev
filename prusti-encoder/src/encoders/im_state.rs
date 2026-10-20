@@ -23,6 +23,7 @@ pub struct ImStateEncRef<'vir> {
     pub modifiable_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
     pub modifies_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
 
+    // TODO refactor these to use PSnap instead? and then generate axioims in interior_mut
     pub mk_rep_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::PSnap), vir::GRep>,
     pub rep_eq_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::GRep, vir::GRep), vir::Bool>,
 

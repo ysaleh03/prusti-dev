@@ -1732,7 +1732,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             parent_def_id: self.def_id,
             gargs: GParams::from(self.def_id).identity_args(),
             kind: PureKind::SpecBlock(spec_block),
-            do_stability_checks: true,
+            is_partial: true,
             is_unstable: true,
         })?;
         use vir::Reify;
@@ -2623,7 +2623,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     })
                 })
                 .collect::<Vec<_>>();
-            Some((true, pure_func.call_impure(snap_args)))
+            Some((true, pure_func.call_partial(snap_args)))
         } else {
             None
         })

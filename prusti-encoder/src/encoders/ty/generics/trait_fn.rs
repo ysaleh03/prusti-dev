@@ -304,7 +304,7 @@ impl TaskEncoder for TraitFnEnc {
                     CallTaskDescription::new(def_id, item_params.rust_params(), def_id)
                         .resolve_trait_calls(false),
                 )?;
-                let pure_func_app = pure_func.call_pure(func_arg_exprs.to_vec());
+                let pure_func_app = pure_func.call_total(func_arg_exprs.to_vec());
                 posts.push(vir::expr! {
                     ([func_ret]) == ([pure_func_app])
                 });

@@ -428,7 +428,7 @@ pub struct PrustiBuiltinTask<'vir> {
     pub is_pure: bool,
     /// (Interior Mutability) If the callsite is in a context in which we must
     /// check that its result is stable using implicit capabilities.
-    pub do_stability_checks: bool,
+    pub is_partial: bool,
     pub span: Span,
 }
 
@@ -525,7 +525,7 @@ impl PrustiBuiltinEnc {
             def_id,
             args,
             is_pure,
-            do_stability_checks,
+            is_partial,
             span,
         } = *task_key;
         // assert_eq!(is_pure, span.is_none());
@@ -565,7 +565,7 @@ impl PrustiBuiltinEnc {
             args,
             operands,
             curr_im_state,
-            do_stability_checks,
+            is_partial,
             is_pure,
             span,
         };
@@ -648,7 +648,7 @@ struct BuiltinCtxt<'enc, 'vir> {
     args: GArgs<'vir>,
     operands: &'enc [ExprRet<'vir, vir::Snap>],
     curr_im_state: ExprRet<'vir, vir::ImState>,
-    do_stability_checks: bool,
+    is_partial: bool,
     is_pure: bool,
     span: Span,
 }
@@ -1171,7 +1171,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let tyval = addr_ty.type_access(opand);
                 let addr = addr_ty.addr_access(opand);
                 // TODO is this an invariant?
-                let snap = if self.do_stability_checks {
+                let snap = if self.is_partial {
                     self.handle_partial_op_error(
                         "application.precondition:assertion.false",
                         "insufficient capability to guarantee that call to `to_ref` is stable",

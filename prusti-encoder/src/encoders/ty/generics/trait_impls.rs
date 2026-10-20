@@ -200,7 +200,7 @@ impl TaskEncoder for TraitImplEnc {
                         )
                         .resolve_trait_calls(false),
                     )?;
-                    let pure_func_app = pure_func.call_pure(
+                    let pure_func_app = pure_func.call_total(
                         local_defs
                             .args()
                             .map(|arg| arg.impure_snap)
@@ -247,7 +247,7 @@ impl TaskEncoder for TraitImplEnc {
                         )
                         .resolve_trait_calls(false),
                     )?;
-                    let pure_func_app = pure_func.call_pure(
+                    let pure_func_app = pure_func.call_total(
                         local_defs
                             .args()
                             .map(|arg| arg.impure_snap)
@@ -810,7 +810,7 @@ impl TaskEncoder for TraitImplItemEnc {
                             .iter()
                             .map(|arg| vcx.mk_local_ex(arg))
                             .collect::<Vec<_>>();
-                        let pure_func_app = pure_func.call_pure(raw_args);
+                        let pure_func_app = pure_func.call_total(raw_args);
                         posts.push(vir::expr! {
                             ([func_ret]) == ([pure_func_app])
                         });
