@@ -2353,6 +2353,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // TODO if there's an assignment we need to do a havoc and a snap equality.
                         self.stmt(assign_stmt);
 
+                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
+
                         let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
                         let dest_decomp = RustTyDecomposition::from_ty(dest_ty, self.def_id);
                         let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
