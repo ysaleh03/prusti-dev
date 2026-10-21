@@ -431,7 +431,7 @@ impl TaskEncoder for TraitFnEnc {
                     None,
                     None,
                 ));
-
+            } else {
                 if let Some(footprint_stub) = footprint_stub {
                     let curr_im_state =
                         im_state.get_idn.call()(vcx.mk_local_ex(im_state.state_ref_decl));
@@ -441,11 +441,6 @@ impl TaskEncoder for TraitFnEnc {
                             .map(|arg| arg.impure_snap)
                             .chain([curr_im_state.upcast_ty()])
                             .collect::<Vec<_>>(),
-                    );
-                    let modifies_set_total = footprint_stub.inner_ref.call()(
-                        pure_args,
-                        item_generics.ty_exprs(),
-                        item_generics.const_exprs(),
                     );
                     let footprint_inner_params = (1..=local_defs.arg_count)
                         .map(mir::Local::from)
@@ -469,7 +464,7 @@ impl TaskEncoder for TraitFnEnc {
                         &[],
                         &[],
                         None,
-                        Some(modifies_set_total),
+                        None,
                     ));
 
                     let footprint_caller_params = (1..=local_defs.arg_count)
@@ -480,6 +475,11 @@ impl TaskEncoder for TraitFnEnc {
                         })
                         .collect::<Vec<_>>();
 
+                    let modifies_set_total = footprint_stub.inner_ref.call()(
+                        pure_args,
+                        item_generics.ty_exprs(),
+                        item_generics.const_exprs(),
+                    );
                     funcs.push(
                         vcx.mk_function(
                             footprint_stub.caller_ref,
@@ -502,11 +502,11 @@ impl TaskEncoder for TraitFnEnc {
                             ),
                             &[],
                             None,
-                            None,
+                            Some(modifies_set_total),
                         ),
                     );
                 }
-            } else {
+
                 let mut stub_pres = Vec::new();
                 let mut stub_posts = Vec::new();
                 let mut args = Vec::with_capacity(arg_count + item_params.count());

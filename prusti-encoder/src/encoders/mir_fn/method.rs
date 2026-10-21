@@ -49,12 +49,17 @@ impl<'vir> MethodCallEncOutput<'vir> {
             .collect();
 
         // TODO modifies
-        // vir::with_vcx(|vcx| {
-        //     stmts.push(vcx.mk_inhale_stmt(
-        //         vcx.mk_eq_expr(self.im_state.modifies_idn.call()(self.im_state.get_idn.call()(im_state_ref)),
-        //                        self.method.footprint_ref.unwrap().call()())
-        //     ));
-        // });
+        vir::with_vcx(|vcx| {
+            stmts.push(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
+                self.im_state.modifies_idn.call()(self.im_state.get_idn.call()(im_state_ref)),
+                self.method.footprint_ref.unwrap().caller_ref.call()(
+                    im_state_ref,
+                    &args,
+                    self.ty_args.get_ty(),
+                    self.ty_args.get_const(),
+                ),
+            )));
+        });
 
         args.insert(0, ret);
         let call = (self.method.method_ref)(
