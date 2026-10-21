@@ -9,7 +9,7 @@ use vir::{CastType, FunctionIdn, MethodIdn, ViperIdent, vir_format_identifier};
 use crate::{
     encoders::{
         FunctionCallEnc, ImStateEnc, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
-        mir_fn::CallTaskDescription,
+        mir_fn::{CallTaskDescription, MethodEncFootprint},
         pure::spec::{MirSpecEncMode, MirSpecEncTask},
         ty::{
             RustTyDecomposition,
@@ -29,8 +29,7 @@ pub struct TraitFnEncOutputRef<'vir> {
     pub post_func:
         FunctionIdn<'vir, (vir::Snap, vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Bool>,
     // (Interior Mutability) the function that computes the footprint of a method
-    pub footprint_stub:
-        Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    pub footprint_stub: Option<MethodEncFootprint<'vir>>,
     // (Interior Mutability) the function that computes the frame of a pure_unstable function
     pub frame_stub:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
@@ -206,17 +205,28 @@ impl TaskEncoder for TraitFnEnc {
                     .chain([vir::TYPE_IMSTATE.upcast_ty()])
                     .collect::<Vec<_>>(),
             )[..];
-            let footprint_stub = (!(is_pure || is_pure_unstable)).then(|| {
-                let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
-                FunctionIdn::new(
-                    vir_format_identifier!(vcx, "{trait_name}_footprint_stub_{item_name}"),
+
+            let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
+            let footprint_stub = (!(is_pure || is_pure_unstable)).then(|| MethodEncFootprint {
+                caller_ref: vir::FunctionIdn::new(
+                    vir_format_identifier!(vcx, "{trait_name}_footprint_caller_stub_{item_name}"),
+                    (
+                        vir::TYPE_REF,
+                        vcx.alloc_slice(&vec![vir::TYPE_REF; local_defs.arg_count]),
+                        item_generics.ty_args(),
+                        item_generics.const_args(),
+                    ),
+                    set_ty,
+                ),
+                inner_ref: FunctionIdn::new(
+                    vir_format_identifier!(vcx, "{trait_name}_footprint_inner_stub_{item_name}"),
                     (
                         clause_fn_arg_tys,
                         item_generics.ty_args(),
                         item_generics.const_args(),
                     ),
                     set_ty,
-                )
+                ),
             });
             let frame_stub = is_pure_unstable.then(|| {
                 let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
@@ -398,6 +408,18 @@ impl TaskEncoder for TraitFnEnc {
                     Some(wrapped_call),
                 ));
                 funcs.push(vcx.mk_function(
+                    call_stub_pure_partial.unwrap(),
+                    (
+                        &func_args,
+                        item_generics.ty_decls(),
+                        item_generics.const_decls(),
+                    ),
+                    vcx.alloc_slice(&stub_pres),
+                    vcx.alloc_slice(&stub_posts),
+                    Some(&vir::DecreasesGenData::Star),
+                    Some(wrapped_call),
+                ));
+                funcs.push(vcx.mk_function(
                     call_stub_pure_total.unwrap(),
                     (
                         &func_args,
@@ -409,6 +431,81 @@ impl TaskEncoder for TraitFnEnc {
                     None,
                     None,
                 ));
+
+                if let Some(footprint_stub) = footprint_stub {
+                    let curr_im_state =
+                        im_state.get_idn.call()(vcx.mk_local_ex(im_state.state_ref_decl));
+                    let pure_args = vcx.alloc_slice(
+                        &local_defs
+                            .args()
+                            .map(|arg| arg.impure_snap)
+                            .chain([curr_im_state.upcast_ty()])
+                            .collect::<Vec<_>>(),
+                    );
+                    let modifies_set_total = footprint_stub.inner_ref.call()(
+                        pure_args,
+                        item_generics.ty_exprs(),
+                        item_generics.const_exprs(),
+                    );
+                    let footprint_inner_params = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| local_defs[local].local_snap)
+                        .chain([im_state.state_decl.upcast_ty()])
+                        .collect::<Vec<_>>();
+                    let footprint_inner_args = vcx.alloc_slice(
+                        &local_defs
+                            .args()
+                            .map(|arg| arg.impure_snap)
+                            .chain([curr_im_state.upcast_ty()])
+                            .collect::<Vec<_>>(),
+                    );
+                    funcs.push(vcx.mk_function(
+                        footprint_stub.inner_ref,
+                        (
+                            &footprint_inner_params,
+                            item_generics.ty_decls(),
+                            item_generics.const_decls(),
+                        ),
+                        &[],
+                        &[],
+                        None,
+                        Some(modifies_set_total),
+                    ));
+
+                    let footprint_caller_params = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| {
+                            let name_p = local_defs[local].local.name;
+                            vir::vir_local_decl! { vcx; [name_p] : Ref }
+                        })
+                        .collect::<Vec<_>>();
+
+                    funcs.push(
+                        vcx.mk_function(
+                            footprint_stub.caller_ref,
+                            (
+                                im_state.state_ref_decl,
+                                &footprint_caller_params,
+                                item_generics.ty_decls(),
+                                item_generics.const_decls(),
+                            ),
+                            vcx.alloc_slice(
+                                &(1..=local_defs.arg_count)
+                                    .map(mir::Local::from)
+                                    .map(|local| local_defs[local].impure_pred)
+                                    .chain([vcx.mk_predicate_app_expr((im_state.pred_idn)(
+                                        vcx.mk_local_ex(im_state.state_ref_decl),
+                                    )(
+                                        None
+                                    ))])
+                                    .collect::<Vec<_>>(),
+                            ),
+                            &[],
+                            None,
+                            None,
+                        ),
+                    );
+                }
             } else {
                 let mut stub_pres = Vec::new();
                 let mut stub_posts = Vec::new();

@@ -12,6 +12,7 @@ use vir::{CastType, Function, MethodIdn};
 use crate::encoders::{
     ImCapEnc, ImStateEnc, Impure, ImpureEncVisitor, MirLocalDefEnc, MirLocalDefEncTask, MirSpecEnc,
     WandEnc, WandEncTask,
+    im_state::ImStateEncRef,
     mir_fn::{CallTaskDescription, FunctionEnc, RustSignature, SpecBlocks, SpecBlocksEnc},
     mir_impure::ImpureImData,
     pure::spec::{MirSpecEncMode, MirSpecEncTask, MirSpecExpr},
@@ -26,6 +27,7 @@ pub struct MethodCallEnc;
 
 #[derive(Debug, Clone)]
 pub struct MethodCallEncOutput<'vir> {
+    im_state: ImStateEncRef<'vir>,
     method: MethodEncOutputRef<'vir>,
     ty_args: GArgsTy<'vir>,
     inputs: Vec<GArgCaster<'vir, Impure>>,
@@ -45,6 +47,14 @@ impl<'vir> MethodCallEncOutput<'vir> {
         let mut stmts: Vec<_> = generics
             .filter_map(|(arg, caster)| caster.cast_to_callee_ctx(arg))
             .collect();
+
+        // TODO modifies
+        // vir::with_vcx(|vcx| {
+        //     stmts.push(vcx.mk_inhale_stmt(
+        //         vcx.mk_eq_expr(self.im_state.modifies_idn.call()(self.im_state.get_idn.call()(im_state_ref)),
+        //                        self.method.footprint_ref.unwrap().call()())
+        //     ));
+        // });
 
         args.insert(0, ret);
         let call = (self.method.method_ref)(
@@ -103,11 +113,13 @@ impl TaskEncoder for MethodCallEnc {
             .output
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
+        let im_state = deps.require_ref::<ImStateEnc>(())?;
         Ok(((), MethodCallEncOutput {
             method: method_ref,
             ty_args,
             inputs,
             output,
+            im_state,
         }))
     }
 
@@ -120,6 +132,14 @@ impl TaskEncoder for MethodCallEnc {
 
 pub(super) struct MethodEnc;
 
+#[derive(Debug, Clone, Copy)]
+pub struct MethodEncFootprint<'vir> {
+    pub caller_ref:
+        vir::FunctionIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
+    pub inner_ref:
+        vir::FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>,
+}
+
 // TODO There should (always?) be a ref-argument for the p_ImState permission
 #[derive(Debug, Clone)]
 pub(super) struct MethodEncOutputRef<'vir> {
@@ -127,8 +147,7 @@ pub(super) struct MethodEncOutputRef<'vir> {
     method_ref: MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>,
     // If we are encoding a `pure_unstable` function, the footprint is the empty set. If we are encoding
     // a method with no modifies-clause provided by the user, the footprint is the set of all `s_Param`s.
-    footprint_ref:
-        Option<vir::FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
+    footprint_ref: Option<MethodEncFootprint<'vir>>,
 }
 
 impl<'vir> OutputRefAny for MethodEncOutputRef<'vir> {}
@@ -242,19 +261,35 @@ impl TaskEncoder for MethodEnc {
                     .snap_ty_args()
                     .chain([vir::TYPE_IMSTATE.upcast_ty()])
                     .collect::<Vec<_>>();
-                vir::FunctionIdn::new(
-                    vir::vir_format_identifier!(
-                        vcx,
-                        "footprint_{}",
-                        vir::ViperIdent::from_def_id(vcx, def_id)
+                MethodEncFootprint {
+                    caller_ref: vir::FunctionIdn::new(
+                        vir::vir_format_identifier!(
+                            vcx,
+                            "footprint_caller_{}",
+                            vir::ViperIdent::from_def_id(vcx, def_id)
+                        ),
+                        (
+                            vir::TYPE_REF,
+                            vcx.alloc_slice(&vec![vir::TYPE_REF; local_defs.arg_count]),
+                            generics.ty_args(),
+                            generics.const_args(),
+                        ),
+                        set_ty,
                     ),
-                    (
-                        &vcx.alloc(arg_types)[..],
-                        generics.ty_args(),
-                        generics.const_args(),
+                    inner_ref: vir::FunctionIdn::new(
+                        vir::vir_format_identifier!(
+                            vcx,
+                            "footprint_inner_{}",
+                            vir::ViperIdent::from_def_id(vcx, def_id)
+                        ),
+                        (
+                            vcx.alloc_slice(&arg_types),
+                            generics.ty_args(),
+                            generics.const_args(),
+                        ),
+                        set_ty,
                     ),
-                    set_ty,
-                )
+                }
             });
 
             // TODO generate a function idn for the frame
@@ -346,13 +381,13 @@ impl TaskEncoder for MethodEnc {
             let none_modifies_ex =
                 vcx.mk_eq_expr(modifies_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
 
-            let pure_args = &vcx.alloc(
-                local_defs
+            let pure_args = vcx.alloc_slice(
+                &local_defs
                     .args()
                     .map(|arg| arg.impure_snap)
                     .chain([curr_im_state.upcast_ty()])
                     .collect::<Vec<_>>(),
-            )[..];
+            );
 
             match proc_kind {
                 ProcKind::PureUnstable => {
@@ -429,18 +464,6 @@ impl TaskEncoder for MethodEnc {
                     assert!(spec.reads.pure.is_empty());
                     cap_pres.push(none_modifies_ex);
 
-                    let footprint_params = (1..=local_defs.arg_count)
-                        .map(mir::Local::from)
-                        .map(|local| local_defs[local].local_snap)
-                        .chain([im_state.state_decl.upcast_ty()])
-                        .collect::<Vec<_>>();
-
-                    let modifies_set_total = footprint_ref.unwrap().call()(
-                        pure_args,
-                        generics.ty_exprs(),
-                        generics.const_exprs(),
-                    );
-
                     let modifies_set_partial = (!spec.modifies.pure.is_empty())
                         .then(|| {
                             spec.modifies.impure.iter().fold(
@@ -468,6 +491,11 @@ impl TaskEncoder for MethodEnc {
                     // The method precondition requires the the modifies-clause to be a subset of the current
                     // set of modifiable locations, but the body is checked assuming that the modifiable locations
                     // are *exactly* the modifies-clause.
+                    let modifies_set_total = footprint_ref.unwrap().inner_ref.call()(
+                        pure_args,
+                        generics.ty_exprs(),
+                        generics.const_exprs(),
+                    );
                     let modifiable_pre_total = vcx.mk_inhale_exhale_expr(
                         vcx.mk_eq_expr(modifies_set_total, modifiable_ex),
                         vcx.mk_set_subset_expr(modifies_set_total, modifiable_ex),
@@ -489,10 +517,17 @@ impl TaskEncoder for MethodEnc {
                             )
                         })
                         .unwrap_or(im_state.top_set_idn.call()());
+
+                    let footprint_inner_params = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| local_defs[local].local_snap)
+                        .chain([im_state.state_decl.upcast_ty()])
+                        .collect::<Vec<_>>();
+
                     functions.push(vcx.mk_function(
-                        footprint_ref.unwrap(),
+                        footprint_ref.unwrap().inner_ref,
                         (
-                            &footprint_params,
+                            &footprint_inner_params,
                             generics.ty_decls(),
                             generics.const_decls(),
                         ),
@@ -501,6 +536,45 @@ impl TaskEncoder for MethodEnc {
                         None,
                         Some(modifies_set_pure),
                     ));
+
+                    let footprint_caller_params = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| {
+                            let name_p = local_defs[local].local.name;
+                            vir::vir_local_decl! { vcx; [name_p] : Ref }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let footprint_inner_args = (1..=local_defs.arg_count)
+                        .map(mir::Local::from)
+                        .map(|local| local_defs[local].impure_snap)
+                        .collect::<Vec<_>>();
+
+                    functions.push(
+                        vcx.mk_function(
+                            footprint_ref.unwrap().caller_ref,
+                            (
+                                im_state.state_ref_decl,
+                                &footprint_caller_params,
+                                generics.ty_decls(),
+                                generics.const_decls(),
+                            ),
+                            vcx.alloc_slice(
+                                &(1..=local_defs.arg_count)
+                                    .map(mir::Local::from)
+                                    .map(|local| local_defs[local].impure_pred)
+                                    .chain([vcx.mk_predicate_app_expr((im_state.pred_idn)(
+                                        vcx.mk_local_ex(im_state.state_ref_decl),
+                                    )(
+                                        None
+                                    ))])
+                                    .collect::<Vec<_>>(),
+                            ),
+                            &[],
+                            None,
+                            Some(modifies_set_total),
+                        ),
+                    );
                 }
                 ProcKind::Pure => {
                     assert!(spec.modifies.pure.is_empty() && spec.reads.pure.is_empty());

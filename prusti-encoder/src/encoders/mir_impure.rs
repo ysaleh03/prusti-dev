@@ -2104,6 +2104,11 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                               )));
                             }
 
+                            self.stmt(self.vcx.mk_inhale_stmt(self.vcx.mk_eq_expr(
+                                im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), proj_enc),
+                                generic_snap
+                            )));
+
                             self.stmts(rval_enc.post_fold_stmts(proj_enc));
                         }
                         Err(_) => {
@@ -2353,6 +2358,11 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // TODO if there's an assignment we need to do a havoc and a snap equality.
                         self.stmt(assign_stmt);
 
+                        // Non-method call assignments don't touch locally-shared state
+                        self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
+                            im_state.modifies_idn.call()(self.prev_im_state()),
+                            self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP)
+                        )));
                         self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
 
                         let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
@@ -2407,6 +2417,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             },
                         );
                         self.stmts(call);
+                        // TODO the modified locations are exactly the result of the frame function of the callee
+
                         // We assume that the resulting ImState was havocked from the pre-main state
                         self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
 
