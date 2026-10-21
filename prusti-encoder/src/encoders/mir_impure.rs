@@ -2062,7 +2062,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
                             // (Interior Mutability)
                             self.bump_im_state()?;
-
                             let current_fpcs = self.current_fpcs.take().unwrap();
                             let cfpcs = &current_fpcs.statements[location.statement_index];
                             let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
@@ -2185,14 +2184,13 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_phase_actions(location, phase)?;
         }
 
-        // not sure if here is where this should go..
-        if self.in_im_mode() {
-            let current_fpcs = self.current_fpcs.take().unwrap();
-            let cfpcs = &current_fpcs.statements[location.statement_index];
-            let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-            // self.mendel_local_post_main(before_label, pcg)?;
-            self.current_fpcs = Some(current_fpcs);
-        }
+        // (Interior Mutability)
+        self.bump_im_state()?;
+        let current_fpcs = self.current_fpcs.take().unwrap();
+        let cfpcs = &current_fpcs.statements[location.statement_index];
+        let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
+        self.inhale_im_place_capabilities(pcg)?;
+        self.current_fpcs = Some(current_fpcs);
 
         // A specification-only arm's `if false` switch is encoded as an
         // unconditional jump to the live target (the continuation, or the
@@ -2331,6 +2329,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 self.vcx.with_span(span, |vcx| {
                     let pure =
                         self.pure_call_result(func_def_id, caller_substs, args, is_pure, span)?;
+                    let im_state = self.deps.require_ref::<ImStateEnc>(())?;
                     if let Some((can_fail, pure)) = pure {
                         self.wandless_calls.insert(self.current_block.unwrap());
                         let return_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
@@ -2351,11 +2350,29 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                 },
                             );
                         }
+                        // TODO if there's an assignment we need to do a havoc and a snap equality.
                         self.stmt(assign_stmt);
+
+                        let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
+                        let dest_decomp = RustTyDecomposition::from_ty(dest_ty, self.def_id);
+                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
+                            Some(
+                                RustTyNormalized {
+                                    param: RustTyDecomposition::param(),
+                                    concrete: dest_decomp
+                                }
+                        ))?;
+                        let dest_tyval = self.get_tyval(dest_decomp)?;
+                        self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
+                            im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest),
+                            caster.cast_to_callee_ctx(pure).downcast_ty()
+                        )));
+                        
                         // The call returned a value of the return type, therefore
                         // it is inhabited.
                         self.stmt(vcx.mk_inhale_stmt(return_ty_use.inhabited()));
                     } else {
+                        // TODO IM somewhere here we also need to get the set of modified locations
                         let Ok(func_out) = self.deps.require_dep::<encoders::MethodCallEnc>(
                             CallTaskDescription::new(self.def_id, caller_substs, func_def_id),
                         ) else {
@@ -2388,6 +2405,29 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             },
                         );
                         self.stmts(call);
+                        // We assume that the resulting ImState was havocked from the pre-main state
+                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
+
+                        let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
+                        let dest_decomp = RustTyDecomposition::from_ty(dest_ty, self.def_id);
+                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
+                            Some(
+                                RustTyNormalized {
+                                    param: RustTyDecomposition::param(),
+                                    concrete: dest_decomp
+                                }
+                        ))?;
+                        let dest_tyval = self.get_tyval(dest_decomp)?;
+                        let dest_ty_use = self.ty_use_impure(dest_ty);
+                        self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
+                            im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest),
+                            caster.cast_to_callee_ctx(dest_ty_use.ref_to_snap(dest)).downcast_ty()
+                        )));
+
+                        // TODO encode the snap equality between the return value of the fn and the assigned-to place
+                        // TODO could we actuall just add the snap equality as a method postcondition? Since the method has access
+                        // to the address of the target & the 
+
                         let label_post = self.new_label("post");
                         self.call_labels
                             .insert(location.block, (label_pre, label_post));
@@ -2563,6 +2603,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         // `UnOp::PtrMetadata` in optimized MIR; do the lowering here.
         let intrinsic = self.vcx.tcx().intrinsic(func_def_id);
         let intrinsic = intrinsic.and_then(RustcIntrinsic::from_intrinsic);
+        let curr_im_state = *self.curr_im_state();
         Ok(if let Some(intrinsic) = intrinsic {
             Some((
                 false,
@@ -2592,7 +2633,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     span,
                 ));
             }
-            let curr_im_state = *self.curr_im_state();
             let expr = self
                 .encode_prusti_builtin(
                     builtin,
@@ -2621,7 +2661,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     self.vcx.with_span(arg.span, |_| {
                         self.encode_operand_snap(&arg.node, &None).unwrap()
                     })
-                })
+                }).chain(pure_func.is_pure_unstable().then(|| curr_im_state.upcast_ty()))
                 .collect::<Vec<_>>();
             Some((true, pure_func.call_partial(snap_args)))
         } else {
@@ -2669,38 +2709,36 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
 
         for p in pcg.places_with_capability(CapabilityKind::Read) {
-            // if p.prefix_place().is_some() {
-            //     continue;
-            // }
-            comment!(self, "[IM] shared capability to place {:?}", p);
+            if self.local_defs.get(p.local).is_some() {
+              comment!(self, "[IM] shared capability to place {:?}", p);
 
-            let place_enc = self.encode_place(p)?;
-            let addr_expr = place_enc.expr.address;
+              let place_enc = self.encode_place(p)?;
+              let addr_expr = place_enc.expr.address;
 
-            let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let tyval = self.get_tyval(ty_decomp)?;
-            
-            // TODO enumerate places??
-            let cap_expr = im_caps.shared_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+              let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+              let tyval = self.get_tyval(ty_decomp)?;
 
-            self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+              // TODO enumerate places??
+              let cap_expr = im_caps.shared_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+
+              self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+            }
         }
 
         for p in pcg.places_with_capability(CapabilityKind::Exclusive) {
-            // if p.prefix_place().is_some() {
-            //     continue;
-            // }
-            comment!(self, "[IM] exclusive capability to place {:?}", p);
+            if self.local_defs.get(p.local).is_some() {
+              comment!(self, "[IM] exclusive capability to place {:?}", p);
 
-            let place_enc = self.encode_place(p)?;
-            let addr_expr = place_enc.expr.address;
+              let place_enc = self.encode_place(p)?;
+              let addr_expr = place_enc.expr.address;
 
-            let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-            let tyval = self.get_tyval(ty_decomp)?;
-            
-            let cap_expr = im_caps.exclusive_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+              let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+              let tyval = self.get_tyval(ty_decomp)?;
 
-            self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+              let cap_expr = im_caps.exclusive_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+
+              self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+            }
         }
 
         Ok(())

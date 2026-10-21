@@ -236,7 +236,7 @@ impl<'a, 'vir> TyUseImpureWalker<'a, 'vir> {
             }
             TySpecifics::Builtin(..) => TySpecifics::mk_builtin(()),
             TySpecifics::Addr(..) => TySpecifics::mk_addr(()),
-            TySpecifics::AddrDyn(..) => TySpecifics::mk_addr(()),
+            TySpecifics::AddrDyn(..) => TySpecifics::mk_addrdyn(()),
             TySpecifics::Rep(..) => TySpecifics::mk_rep(()),
         };
         let data = TyUseImpureData {

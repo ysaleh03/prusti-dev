@@ -22,6 +22,7 @@ pub struct ImStateEncRef<'vir> {
     pub fresh_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
     pub modifiable_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
     pub modifies_idn: vir::FunctionIdn<'vir, vir::ImState, vir::Set>,
+    pub top_set_idn: vir::FunctionIdn<'vir, (), vir::Set>,
 
     // TODO refactor these to use PSnap instead? and then generate axioims in interior_mut
     pub mk_rep_idn: vir::FunctionIdn<'vir, (vir::ImState, vir::Ref, vir::PSnap), vir::GRep>,
@@ -104,7 +105,6 @@ impl TaskEncoder for ImStateEnc {
                 vir::TYPE_BOOL,
             );
 
-
             let modifiable_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_modifiable"),
                 vir::TYPE_IMSTATE,
@@ -114,6 +114,12 @@ impl TaskEncoder for ImStateEnc {
             let modifies_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_modifies"),
                 vir::TYPE_IMSTATE,
+                vcx.mk_ty_set(vir::TYPE_PSNAP),
+            );
+
+            let top_set_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_top_set"),
+                (),
                 vcx.mk_ty_set(vir::TYPE_PSNAP),
             );
 
@@ -182,6 +188,7 @@ impl TaskEncoder for ImStateEnc {
                 fresh_idn,
                 modifiable_idn,
                 modifies_idn,
+                top_set_idn,
                 mk_rep_idn,
                 rep_eq_idn,
                 get_idn,
@@ -204,6 +211,7 @@ impl TaskEncoder for ImStateEnc {
             domain_functions.push(vcx.mk_domain_function(fresh_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(modifiable_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(modifies_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(top_set_idn, true, None));
             domain_functions.push(vcx.mk_domain_function(mk_rep_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(rep_eq_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(addr_from_psnap_idn, false, None));
@@ -257,6 +265,13 @@ impl TaskEncoder for ImStateEnc {
                     ([modifiable_idn](s)) subset ([modifiable_idn](([next_idn](s))))
                 });
             axioms.push(modifiable_next);
+
+            let top_set_defn =
+                vcx.mk_domain_axiom(vir::ViperIdent::new("im_top_set_defn"), vir::expr! {
+                                forall p: PSnap ::
+                                { ((p) in ([top_set_idn]())) }
+                (p) in ([top_set_idn]())
+                            });
 
             let rep_eq_refl =
                 vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_eq_refl"), vir::expr! {

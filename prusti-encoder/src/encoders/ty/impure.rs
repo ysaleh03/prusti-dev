@@ -25,7 +25,7 @@ impl<'vir> TyDatas<'vir> for ImpureTyDatas {
     type StructData = TyImpureStructData<'vir>;
     type VariantData = TyImpureVariantData<'vir>;
     type EnumData = TyImpureEnumData<'vir>;
-    type AddrData = TyImpureAddrData;
+    // type AddrData = TyImpureAddrData;
 }
 
 pub type TyImpure<'vir> = Ty<'vir, ImpureTyDatas>;
@@ -37,6 +37,7 @@ pub type TyImpureMutRef<'vir> = <ImpureTyDatas as TyDatas<'vir>>::MutRefData;
 pub type TyImpureRaw<'vir> = <ImpureTyDatas as TyDatas<'vir>>::RawData;
 pub type TyImpureBuiltin<'vir> = <ImpureTyDatas as TyDatas<'vir>>::BuiltinData;
 pub type TyImpureAddr<'vir> = <ImpureTyDatas as TyDatas<'vir>>::AddrData;
+pub type TyImpureAddrDyn<'vir> = <ImpureTyDatas as TyDatas<'vir>>::AddrDynData;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TyImpureImmRefData {}
@@ -97,8 +98,8 @@ pub struct TyImpureVariantData<'vir> {
     pub predicate: PredicateIdn<'vir, (vir::Ref, vir::ManyTyVal, vir::ManyCSnap)>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TyImpureAddrData {}
+// #[derive(Debug, Clone, Copy)]
+// pub struct TyImpureAddrData {}
 
 /// You probably never want to use this, use `TyUseImpureEnc` instead.
 pub(super) type TyImpureEnc = super::TyEnc<Impure>;
@@ -219,10 +220,14 @@ impl TaskEncoder for TyImpureEnc {
                     super::kinds::builtin::ty_impure(builtin, deps, &mut builder)?,
                 ),
                 TySpecifics::Addr(addr) => {
-                    TySpecifics::mk_addr(super::kinds::addr::ty_impure(&mut builder)?)
+                    TySpecifics::mk_addr(super::kinds::addr::ty_impure_typed(&mut builder)?)
                 }
-                TySpecifics::AddrDyn(addr) => TySpecifics::mk_addr(super::kinds::addr::ty_impure(&mut builder)?),
-                TySpecifics::Rep(rep) => TySpecifics::mk_rep(super::kinds::rep::ty_impure(&mut builder)?),
+                TySpecifics::AddrDyn(addr) => {
+                    TySpecifics::mk_addrdyn(super::kinds::addr::ty_impure_dyn(&mut builder)?)
+                }
+                TySpecifics::Rep(rep) => {
+                    TySpecifics::mk_rep(super::kinds::rep::ty_impure(&mut builder)?)
+                }
             };
             let output = TyData::new(data, specifics).alloc();
 

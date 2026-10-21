@@ -1,12 +1,7 @@
 use crate::encoders::{
-    TyUsePureEnc,
     ty::{
-        LazyRustTy, RustAddr, RustAddrData, RustTyDatas, TySpecifics,
-        data::TyData,
-        impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrData, TyImpureEnc},
-        pure::{AdtBuilder, DomainBuilder, TyPureAddrCommon, TyPureAddrData, TyPureEnc},
-        use_pure::TyUsePure,
-    },
+        data::TyData, impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrDyn, TyImpureEnc}, pure::{AdtBuilder, DomainBuilder, TyPureAddrCommon, TyPureAddrData, TyPureEnc}, use_pure::TyUsePure, LazyRustTy, RustAddr, RustAddrData, RustTyDatas, TySpecifics
+    }, TyUsePureEnc
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::{CastType, VirCtxt};
@@ -67,10 +62,18 @@ pub(crate) fn ty_pure_typed<'vir>(
     })
 }
 
-pub(crate) fn ty_impure<'vir>(
+pub(crate) fn ty_impure_typed<'vir>(
     builder: &mut PredicateBuilder<'vir>,
 ) -> Result<TyImpureAddr<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
     super::primitive::set_primitive(builder);
     builder.mk_snap_function(None, &[]);
-    Ok(TyImpureAddrData {})
+    Ok(())
+}
+
+pub(crate) fn ty_impure_dyn<'vir>(
+    builder: &mut PredicateBuilder<'vir>,
+) -> Result<TyImpureAddrDyn<'vir>, EncodeFullError<'vir, TyImpureEnc>> {
+    super::primitive::set_primitive(builder);
+    builder.mk_snap_function(None, &[]);
+    Ok(())
 }

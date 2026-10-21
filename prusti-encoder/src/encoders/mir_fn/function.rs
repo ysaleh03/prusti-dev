@@ -66,12 +66,12 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         assert_eq!(
-            self.inputs.len(),
             if self.is_pure_unstable {
-                args.len() - 1
+                self.inputs.len() + 1
             } else {
-                args.len()
-            }
+                self.inputs.len()
+            },
+            args.len()
         );
         for ((arg, caster), ty) in args
             .iter_mut()
@@ -82,6 +82,10 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         }
         let call = function.call()(&args, self.ty_args.get_ty(), self.ty_args.get_const());
         self.output.cast_to_caller_ctx(call)
+    }
+
+    pub fn is_pure_unstable(&self) -> bool {
+        self.is_pure_unstable
     }
 }
 
@@ -326,29 +330,8 @@ impl TaskEncoder for FunctionEnc {
                 .iter()
                 .map(|arg| vcx.mk_local_ex(arg))
                 .collect::<Vec<_>>();
-
-            if is_pure_unstable {
-                // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
-                assert!(expr.is_none());
-
-                let frame_body = spec.reads.pure.iter().fold(
-                    vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                    |acc, spec_ex| {
-                        vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
-                            .downcast_ty()
-                    },
-                );
-                functions.push(vcx.mk_function(
-                    frame_ref.unwrap(),
-                    (&func_params, generics.ty_decls(), generics.const_decls()),
-                    &[],
-                    &[],
-                    None,
-                    Some(frame_body),
-                ));
-            }
-
-            let posts = spec
+            let mut pres = spec.pre_exprs().collect::<Vec<_>>();
+            let mut posts = spec
                 .posts
                 .iter()
                 .map(|(post, _)| {
@@ -358,24 +341,65 @@ impl TaskEncoder for FunctionEnc {
                     vcx.mk_inhale_exhale_expr(post.total, vcx.mk_bool::<true>())
                 })
                 .collect::<Vec<_>>();
-            let posts = vcx.alloc_slice(&posts);
-            let im_caps = deps.require_ref::<ImCapEnc>(())?;
-            let pres = vcx.alloc_slice(
-                &spec
-                    .pre_exprs()
-                    .chain(frame_ref.iter().map(|frame_ref| {
-                        let frame_ex = frame_ref.call()(&func_args, generics.ty_exprs(), generics.const_exprs());
-                        vir::expr! {
-                            forall t: Type, l: Ref ::
-                            { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
-                            (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
-                        }
-                    }))
-                    .collect::<Vec<_>>(),
-            );
-
             let wrapped_call =
                 function_ref.call()(&func_args, generics.ty_exprs(), generics.const_exprs());
+
+            if is_pure_unstable {
+                // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
+                assert!(expr.is_none());
+
+                // Encode function that calculates this function's frame
+                let frame_body = (!spec.reads.pure.is_empty())
+                    .then(|| {
+                        spec.reads.pure.iter().fold(
+                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                            |acc, spec_ex| {
+                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                                    .downcast_ty()
+                            },
+                        )
+                    })
+                    .unwrap_or(im_state.top_set_idn.call()());
+                functions.push(vcx.mk_function(
+                    frame_ref.unwrap(),
+                    (&func_params, generics.ty_decls(), generics.const_decls()),
+                    &[],
+                    &[],
+                    None,
+                    Some(frame_body),
+                ));
+
+                let frame_ex = frame_ref.unwrap().call()(
+                    &func_args,
+                    generics.ty_exprs(),
+                    generics.const_exprs(),
+                );
+                let im_caps = deps.require_ref::<ImCapEnc>(())?;
+                pres.push(vir::expr! {
+                    forall t: Type, l: Ref ::
+                    { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
+                    (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
+                });
+
+                // Encode the function's framing axiom as a post-condition
+                let future_decl = vcx.mk_local_decl("s_future", vir::TYPE_IMSTATE);
+                let future_args = local_defs
+                    .local_decl_args()
+                    .chain([future_decl.upcast_ty()])
+                    .map(|arg| vcx.mk_local_ex(arg))
+                    .collect::<Vec<_>>();
+                let future_call =
+                    function_ref.call()(&future_args, generics.ty_exprs(), generics.const_exprs());
+                posts.push(vir::expr! {
+                  forall [future_decl] :: { ([future_call]) }
+                  (forall t: Type, l: Ref :: { ([im_state.get_snap_idn](t, ([future_decl]), l)) }
+                  (([im_state.mk_aloc_psnap_idn](t, l)) in (frame_ex)) ==>
+                      (([im_state.get_snap_idn](t, ([im_state.state_decl]), l)) == ([im_state.get_snap_idn](t, ([future_decl]), l)))) ==>
+                          (([wrapped_call]) == ([future_call]))
+                });
+            }
+            let pres = vcx.alloc_slice(&pres);
+            let posts = vcx.alloc_slice(&posts);
             functions.push(vcx.mk_function(
                 caller_ref,
                 (&func_params, generics.ty_decls(), generics.const_decls()),

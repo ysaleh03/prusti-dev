@@ -437,83 +437,72 @@ impl TaskEncoder for MethodEnc {
                         .chain([im_state.state_decl.upcast_ty()])
                         .collect::<Vec<_>>();
 
-                    if spec.modifies.pure.is_empty() {
-                        // If the modifies clause is empty then we require every location to be modifiable.
-                        // As a result, the method can only be called by other methods with no modifies-clause.
-                        let all_modifiable_ex = vir::expr! {
-                            forall l: PSnap :: { ((l) in ([im_state.modifiable_idn](([im_state.get_idn](im_state_ref))))) }
-                            (l) in ([im_state.modifiable_idn](([im_state.get_idn](im_state_ref))))
-                        };
-                        pres.push(all_modifiable_ex);
-                        cap_pres.push(all_modifiable_ex);
+                    let modifies_set_total = footprint_ref.unwrap().call()(
+                        pure_args,
+                        generics.ty_exprs(),
+                        generics.const_exprs(),
+                    );
 
-                        functions.push(vcx.mk_function(
-                            footprint_ref.unwrap(),
-                            (
-                                &footprint_params,
-                                generics.ty_decls(),
-                                generics.const_decls(),
-                            ),
-                            &[],
-                            vcx.alloc_slice(&[vir::expr! {
-                                forall l: PSnap :: { ((l) in (result: [set_ty])) }
-                                (l) in (result: [set_ty])
-                            }]),
-                            None,
-                            None,
-                        ));
-                    } else {
-                        let modifies_set_total = footprint_ref.unwrap().call()(
-                            pure_args,
-                            generics.ty_exprs(),
-                            generics.const_exprs(),
-                        );
-
-                        let modifies_set_partial = spec.modifies.impure.iter().fold(
-                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                            |acc, (spec_ex, _)| {
-                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                    let modifies_set_partial = (!spec.modifies.pure.is_empty())
+                        .then(|| {
+                            spec.modifies.impure.iter().fold(
+                                vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                                |acc, (spec_ex, _)| {
+                                    vcx.mk_anyset_op_expr(
+                                        vir::CollectionBinOpKind::Union,
+                                        acc,
+                                        spec_ex,
+                                    )
                                     .downcast_ty()
-                            },
-                        );
+                                },
+                            )
+                        })
+                        .unwrap_or(im_state.top_set_idn.call()());
 
-                        let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
+                    let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
 
-                        // The method specification is checked assuming that the set of modifiable locations is
-                        // exactly the modifies-clause and the set of modified locations is empty.
-                        let modifiable_pre_partial =
-                            vcx.mk_eq_expr(modifies_set_partial, modifiable_ex);
-                        cap_pres.push(modifiable_pre_partial);
+                    // The method specification is checked assuming that the set of modifiable locations is
+                    // exactly the modifies-clause and the set of modified locations is empty.
+                    let modifiable_pre_partial =
+                        vcx.mk_eq_expr(modifies_set_partial, modifiable_ex);
+                    cap_pres.push(modifiable_pre_partial);
 
-                        // The method precondition requires the the modifies-clause to be a subset of the current
-                        // set of modifiable locations, but the body is checked assuming that the modifiable locations
-                        // are *exactly* the modifies-clause.
-                        let modifiable_pre_total = vcx.mk_inhale_exhale_expr(
-                            vcx.mk_eq_expr(modifies_set_total, modifiable_ex),
-                            vcx.mk_set_subset_expr(modifies_set_total, modifiable_ex),
-                        );
-                        pres.push(modifiable_pre_total);
+                    // The method precondition requires the the modifies-clause to be a subset of the current
+                    // set of modifiable locations, but the body is checked assuming that the modifiable locations
+                    // are *exactly* the modifies-clause.
+                    let modifiable_pre_total = vcx.mk_inhale_exhale_expr(
+                        vcx.mk_eq_expr(modifies_set_total, modifiable_ex),
+                        vcx.mk_set_subset_expr(modifies_set_total, modifiable_ex),
+                    );
+                    pres.push(modifiable_pre_total);
 
-                        let modifies_set_pure = spec.modifies.pure.iter().fold(
-                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                            |acc, spec_ex| {
-                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                    let modifies_set_pure = (!spec.modifies.pure.is_empty())
+                        .then(|| {
+                            spec.modifies.pure.iter().fold(
+                                vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                                |acc, spec_ex| {
+                                    vcx.mk_anyset_op_expr(
+                                        vir::CollectionBinOpKind::Union,
+                                        acc,
+                                        spec_ex,
+                                    )
                                     .downcast_ty()
-                            },
-                        );
-                        functions.push(vcx.mk_function(
-                            footprint_ref.unwrap(),
-                            (
-                                &footprint_params,
-                                generics.ty_decls(),
-                                generics.const_decls(),
-                            ),
-                            &[],
-                            &[],
-                            None,
-                            Some(modifies_set_pure),
-                        ));
-                    }
+                                },
+                            )
+                        })
+                        .unwrap_or(im_state.top_set_idn.call()());
+                    functions.push(vcx.mk_function(
+                        footprint_ref.unwrap(),
+                        (
+                            &footprint_params,
+                            generics.ty_decls(),
+                            generics.const_decls(),
+                        ),
+                        &[],
+                        &[],
+                        None,
+                        Some(modifies_set_pure),
+                    ));
                 }
                 ProcKind::Pure => {
                     assert!(spec.modifies.pure.is_empty() && spec.reads.pure.is_empty());
