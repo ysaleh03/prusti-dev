@@ -376,8 +376,6 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_bool::<true>(),
                     );
 
-                    // TODO encode self-stability
-
                     // A trivial precondition that checks stability of the reads-clause
                     cap_pres.push(frame_ex);
 

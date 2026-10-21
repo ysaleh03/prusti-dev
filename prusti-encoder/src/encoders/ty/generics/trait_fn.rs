@@ -36,11 +36,12 @@ pub struct TraitFnEncOutputRef<'vir> {
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
     pub call_stub_impure:
         Option<MethodIdn<'vir, (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap)>>,
-    pub call_stub_pure_caller:
+    pub call_stub_pure_partial:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
-    pub call_stub_pure_function:
+    pub call_stub_pure_total:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
-    // TODO do we need to add a stub for reads/modifies
+    pub call_stub_pure_impure:
+        Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>>,
 }
 
 impl<'vir> OutputRefAny for TraitFnEncOutputRef<'vir> {}
@@ -165,9 +166,9 @@ impl TaskEncoder for TraitFnEnc {
                     ),
                 )
             });
-            let call_stub_pure_caller = is_pure.then(|| {
+            let call_stub_pure_partial = is_pure.then(|| {
                 FunctionIdn::new(
-                    vir_format_identifier!(vcx, "{trait_name}_cfn_stub_{item_name}"),
+                    vir_format_identifier!(vcx, "{trait_name}_partial_fn_stub_{item_name}"),
                     (
                         arg_types,
                         item_generics.ty_args(),
@@ -176,9 +177,20 @@ impl TaskEncoder for TraitFnEnc {
                     return_type,
                 )
             });
-            let call_stub_pure_function = is_pure.then(|| {
+            let call_stub_pure_total = is_pure.then(|| {
                 FunctionIdn::new(
-                    vir_format_identifier!(vcx, "{trait_name}_fn_stub_{item_name}"),
+                    vir_format_identifier!(vcx, "{trait_name}_total_fn_stub_{item_name}"),
+                    (
+                        arg_types,
+                        item_generics.ty_args(),
+                        item_generics.const_args(),
+                    ),
+                    return_type,
+                )
+            });
+            let call_stub_pure_impure = is_pure.then(|| {
+                FunctionIdn::new(
+                    vir_format_identifier!(vcx, "{trait_name}_impure_fn_stub_{item_name}"),
                     (
                         arg_types,
                         item_generics.ty_args(),
@@ -224,8 +236,9 @@ impl TaskEncoder for TraitFnEnc {
                 footprint_stub,
                 frame_stub,
                 call_stub_impure,
-                call_stub_pure_caller,
-                call_stub_pure_function,
+                call_stub_pure_partial,
+                call_stub_pure_total,
+                call_stub_pure_impure,
             })?;
             // The stubs' semantics are given by the impls' axioms; require the
             // trait so that its impls' condition/axiom triggers are registered
@@ -367,13 +380,13 @@ impl TaskEncoder for TraitFnEnc {
                 stub_posts.push(deps.require_ref::<TyUseInhabitedEnc>(ret_ty)?.inhabited());
                 // stub_posts.push(local_defs.ret().inhabited);
 
-                let wrapped_call = call_stub_pure_function.unwrap().call()(
+                let wrapped_call = call_stub_pure_total.unwrap().call()(
                     func_arg_exprs,
                     item_generics.ty_exprs(),
                     item_generics.const_exprs(),
                 );
                 funcs.push(vcx.mk_function(
-                    call_stub_pure_caller.unwrap(),
+                    call_stub_pure_partial.unwrap(),
                     (
                         &func_args,
                         item_generics.ty_decls(),
@@ -385,7 +398,7 @@ impl TaskEncoder for TraitFnEnc {
                     Some(wrapped_call),
                 ));
                 funcs.push(vcx.mk_function(
-                    call_stub_pure_function.unwrap(),
+                    call_stub_pure_total.unwrap(),
                     (
                         &func_args,
                         item_generics.ty_decls(),

@@ -2663,7 +2663,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     })
                 }).chain(pure_func.is_pure_unstable().then(|| curr_im_state.upcast_ty()))
                 .collect::<Vec<_>>();
-            Some((true, pure_func.call_partial(snap_args)))
+            Some((true, pure_func.call_impure(snap_args)))
         } else {
             None
         })
