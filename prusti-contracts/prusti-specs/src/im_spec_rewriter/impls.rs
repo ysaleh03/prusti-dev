@@ -31,7 +31,7 @@ pub fn rewrite_im_spec(
                 new_trait
                     .items
                     .push(syn::TraitItem::Method(syn::TraitItemMethod {
-                        attrs: vec![],
+                        attrs: impl_method.attrs.clone(),
                         sig: impl_method.sig.clone(),
                         default: Some(impl_method.block.clone()),
                         semi_token: None,

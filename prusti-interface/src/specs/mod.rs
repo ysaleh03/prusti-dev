@@ -1,8 +1,10 @@
 use crate::{
     environment::Environment,
+    specs::{interior_mut::InteriorMutResolver, typed::CapabilitySpecification},
     utils::{
-        has_abstract_predicate_attr, has_extern_spec_attr, has_prusti_attr, has_to_model_fn_attr,
-        prusti_annotation_spans, read_prusti_attr, read_prusti_attrs,
+        has_abstract_predicate_attr, has_extern_spec_attr, has_im_model_attr,
+        has_im_model_field_attr, has_prusti_attr, has_to_model_fn_attr, prusti_annotation_spans,
+        read_prusti_attr, read_prusti_attrs,
     },
     PrustiError,
 };
@@ -26,6 +28,7 @@ pub mod cross_crate;
 pub mod decoder;
 pub mod encoder;
 pub mod external;
+pub mod interior_mut;
 pub mod typed;
 pub mod specifications;
 
@@ -80,7 +83,9 @@ struct ClosureSpecRefs {
 struct TypeSpecRefs {
     invariants: Vec<LocalDefId>,
     trusted: bool,
-    model: Option<(String, LocalDefId)>,
+    type_model: Option<(String, LocalDefId)>,
+    im_fields: Vec<LocalDefId>,
+    im_capabilities: Vec<(LocalDefId, LocalDefId, String)>,
     countexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
@@ -375,6 +380,11 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
         }
     }
 
+    // fn determine_im_models(&self, def_spec: &mut typed::DefSpecificationMap) {
+    //     self.im_resolver.check_errors(&self.env.diagnostics);
+    //     todo!()
+    // }
+
     fn determine_loop_specs(&self, def_spec: &mut typed::DefSpecificationMap) {
         for local_id in self.loop_specs.iter() {
             def_spec.loop_specs.insert(
@@ -413,12 +423,26 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                             .collect(),
                     ),
                     trusted: SpecificationItem::Inherent(refs.trusted),
-                    model: refs.model.clone(),
+                    type_model: refs.type_model.clone(),
+                    im_fields: refs.im_fields.clone(),
+                    im_capabilities: refs
+                        .im_capabilities
+                        .iter()
+                        .cloned()
+                        .map(|(side_conditions, addr_projection, capability_ident)| {
+                            CapabilitySpecification {
+                                side_conditions,
+                                addr_projection,
+                                capability_ident,
+                            }
+                        })
+                        .collect(),
                     counterexample_print: refs.countexample_print.clone(),
                 },
             );
         }
     }
+
     fn determine_prusti_assertions(&self, def_spec: &mut typed::DefSpecificationMap) {
         for local_id in self.prusti_assertions.iter() {
             def_spec.prusti_assertions.insert(
@@ -429,6 +453,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             );
         }
     }
+
     fn determine_prusti_assumptions(&self, def_spec: &mut typed::DefSpecificationMap) {
         for local_id in self.prusti_assumptions.iter() {
             def_spec.prusti_assumptions.insert(
@@ -439,6 +464,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             );
         }
     }
+
     fn determine_prusti_refutations(&self, def_spec: &mut typed::DefSpecificationMap) {
         for local_id in self.prusti_refutations.iter() {
             def_spec.prusti_refutations.insert(
@@ -449,6 +475,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             );
         }
     }
+
     fn ensure_local_mirs_fetched(&mut self, def_spec: &typed::DefSpecificationMap) {
         let (specs, pure_fns, predicates) = def_spec.defid_for_export();
         for def_id in &specs {
@@ -688,6 +715,28 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                     .push(local_id);
             }
 
+            if has_prusti_attr(attrs, "im_model_field") {
+                let self_id = fn_decl.inputs[0].hir_id;
+                let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
+                let type_id = get_type_id_from_impl_node(tcx.hir_node(impl_id)).unwrap();
+                self.type_specs
+                    .entry(type_id.as_local().unwrap())
+                    .or_default()
+                    .im_fields
+                    .push(local_id);
+            }
+
+            // if has_prusti_attr(attrs, "capability") {
+            //     let self_id = fn_decl.inputs[0].hir_id;
+            //     let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
+            //     let type_id = get_type_id_from_impl_node(tcx.hir_node(impl_id)).unwrap();
+            //     self.type_specs
+            //         .entry(type_id.as_local().unwrap())
+            //         .or_default()
+            //         .im_fields
+            //         .push(local_id);
+            // }
+
             // Collect trusted type flag
             if has_prusti_attr(attrs, "trusted_type") {
                 let self_id = fn_decl.inputs[0].hir_id;
@@ -699,7 +748,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                     .trusted = true;
             }
 
-            //collect counterexamples type flag
+            // Collect counterexamples type flag
             if has_prusti_attr(attrs, "counterexample_print") {
                 let self_id = fn_decl.inputs[0].hir_id;
                 let name = read_prusti_attr("counterexample_print", attrs);
@@ -754,7 +803,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                             let type_id =
                                 get_type_id_from_impl_node(tcx.hir_node(impl_id)).unwrap();
                             if let Some(local_id) = type_id.as_local() {
-                                self.type_specs.entry(local_id).or_default().model =
+                                self.type_specs.entry(local_id).or_default().type_model =
                                     Some((attr, model_ty_id));
                             }
                         }
