@@ -3,11 +3,14 @@ use std::cell::RefCell;
 use prusti_interface::specs::{
     specifications::SpecQuery,
     typed::{
-        self, DefSpecificationMap, ExternSpecKind, Pledge, ProcedureSpecification,
-        SpecificationItem,
+        self, CapabilitySpecification, DefSpecificationMap, ExternSpecKind, Pledge,
+        ProcedureSpecification, SpecificationItem,
     },
 };
-use prusti_rustc_interface::{middle::ty, span::def_id::DefId};
+use prusti_rustc_interface::{
+    hir::def_id::{DefId, LocalDefId},
+    middle::ty,
+};
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
 use crate::encoders::ty::generics::GArgs;
@@ -35,6 +38,58 @@ where
     F: FnOnce(&DefSpecificationMap) -> R,
 {
     vir::with_vcx(|vcx| f(vcx.specs.as_ref().unwrap().borrow().get_type_specs()))
+}
+
+#[derive(Clone, Debug)]
+pub struct AbstractField<'tcx> {
+    pub def_id: DefId,
+    pub name: String,
+    pub ty: ty::Ty<'tcx>,
+}
+
+pub fn with_type_im_spec<'tcx, F, R>(type_ty: ty::Ty<'tcx>, f: F) -> R
+where
+    F: FnOnce(&[AbstractField<'tcx>], &[CapabilitySpecification]) -> R,
+{
+    vir::with_vcx(|vcx| {
+        let ty::TyKind::Adt(adt_def, _) = type_ty.kind() else {
+            return f(&[], &[]);
+        };
+
+        let specs = vcx.specs.as_ref().unwrap().borrow();
+        let Some(type_spec) = specs.get_type_spec(&adt_def.did()) else {
+            return f(&[], &[]);
+        };
+
+        let fields: Vec<AbstractField<'tcx>> = type_spec
+            .im_fields
+            .iter()
+            .map(|field: &LocalDefId| {
+                let def_id = field.to_def_id();
+                let output = vcx
+                    .tcx()
+                    .fn_sig(def_id)
+                    .instantiate_identity()
+                    .skip_binder()
+                    .output();
+                let field_ty = match output.kind() {
+                    ty::TyKind::Adt(_, args) => args
+                        .types()
+                        .next()
+                        .expect("abstract field must return Addr<T>"),
+                    _ => panic!("abstract field must return Addr<T>"),
+                };
+
+                AbstractField {
+                    def_id,
+                    name: vcx.tcx().item_name(def_id).to_string(),
+                    ty: field_ty,
+                }
+            })
+            .collect();
+
+        f(&fields, &type_spec.im_capabilities)
+    })
 }
 
 pub fn with_proc_spec<'tcx, F, R>(query: SpecQuery<'tcx>, f: F) -> Option<R>

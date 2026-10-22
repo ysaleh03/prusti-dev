@@ -108,7 +108,7 @@ fn generate_empty_trait(item_impl: &syn::ItemImpl) -> syn::Result<syn::ItemTrait
     let ident = get_item_impl_ident(item_impl)?;
     // let uuid = uuid::Uuid::new_v4().simple();
     let trait_ident = generate_im_spec_ident(ident);
-    let model_ident = generate_im_model_ident(ident);
+    let model_ident = generate_im_spec_model_ident(ident);
 
     let (impl_generics, ty_generics, where_clause) = &item_impl.generics.split_for_impl();
 

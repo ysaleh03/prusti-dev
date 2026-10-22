@@ -1228,37 +1228,37 @@ pub fn extern_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
 }
 
 pub fn im_model(attr: TokenStream, tokens: TokenStream) -> TokenStream {
-    result_to_tokens!({
-        if !attr.is_empty() {
-            return Err(syn::Error::new(
-                attr.span(),
-                "`im_model` does not take parameters",
-            ));
-        }
-        let item: syn::ItemStruct = syn::parse2(tokens)?;
-        let (model_trait, model_impl) = im_model::rewrite(&item)?;
-
-        let mut rewriter = rewriter::AstRewriter::new();
-        let spec_id = rewriter.generate_spec_id();
-        let spec_id_str = spec_id.to_string();
-
-        Ok(quote_spanned! {item.span()=>
-            #[prusti::im_model_trait]
-            #[prusti::spec_id = #spec_id_str]
-            #[prusti::specs_version = #SPECS_VERSION]
-            #model_trait
-
-            #[prusti::im_model_impl]
-            #[prusti::spec_id = #spec_id_str]
-            #[prusti::specs_version = #SPECS_VERSION]
-            #model_impl
-        })
-    })
+    im_spec(attr, tokens)
 }
 
 pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
     result_to_tokens!({
         let item: syn::Item = syn::parse2(tokens)?;
+        if let syn::Item::Struct(item) = item {
+            if !attr.is_empty() {
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "`im_spec` does not take parameters on structs",
+                ));
+            }
+            let mut rewriter = rewriter::AstRewriter::new();
+            let spec_id = rewriter.generate_spec_id();
+            let spec_id_str = spec_id.to_string();
+            let (model_trait, model_impl) = im_model::rewrite(&item, &spec_id_str)?;
+
+            return Ok(quote_spanned! {item.span()=>
+                #[prusti::im_model_trait]
+                #[prusti::spec_id = #spec_id_str]
+                #[prusti::specs_version = #SPECS_VERSION]
+                #model_trait
+
+                #[prusti::im_model_impl]
+                #[prusti::spec_id = #spec_id_str]
+                #[prusti::specs_version = #SPECS_VERSION]
+                #model_impl
+            });
+        }
+
         let mod_path: syn::Path = Some(attr)
             .filter(|attr| !attr.is_empty())
             .map(syn::parse2)

@@ -1,4 +1,5 @@
 use crate::{
+    PrustiError,
     environment::Environment,
     specs::{interior_mut::InteriorMutResolver, typed::CapabilitySpecification},
     utils::{
@@ -6,16 +7,15 @@ use crate::{
         has_im_model_field_attr, has_prusti_attr, has_to_model_fn_attr, prusti_annotation_spans,
         read_prusti_attr, read_prusti_attrs,
     },
-    PrustiError,
 };
 use log::debug;
 use prusti_rustc_interface::{
     data_structures::fx::FxHashMap,
     errors::MultiSpan,
     hir::{
-        self,
+        self, FnRetTy,
         def_id::{DefId, LocalDefId},
-        intravisit, FnRetTy,
+        intravisit,
     },
     middle::ty,
     span::Span,
@@ -89,6 +89,14 @@ struct TypeSpecRefs {
     countexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
+#[derive(Debug)]
+struct CapabilitySpecRefs {
+    type_id: LocalDefId,
+    side_condition: Option<LocalDefId>,
+    addr_projection: Option<LocalDefId>,
+    capability_ident: Option<String>,
+}
+
 /// Specification collector, applied as a visitor over the crate HIR.
 ///
 /// After the visit, [SpecCollector::build_def_specs] can be used to get back
@@ -107,6 +115,7 @@ pub struct SpecCollector<'a, 'tcx> {
     loop_specs: Vec<LocalDefId>,
     loop_variants: Vec<LocalDefId>,
     type_specs: FxHashMap<LocalDefId, TypeSpecRefs>,
+    capability_specs: FxHashMap<SpecificationId, CapabilitySpecRefs>,
     prusti_assertions: Vec<LocalDefId>,
     prusti_assumptions: Vec<LocalDefId>,
     prusti_refutations: Vec<LocalDefId>,
@@ -123,6 +132,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             loop_specs: vec![],
             loop_variants: vec![],
             type_specs: FxHashMap::default(),
+            capability_specs: FxHashMap::default(),
             prusti_assertions: vec![],
             prusti_assumptions: vec![],
             prusti_refutations: vec![],
@@ -138,6 +148,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn build_def_specs(&mut self) -> typed::DefSpecificationMap {
+        self.finalize_capability_specs();
         let mut def_spec = typed::DefSpecificationMap::new();
         self.determine_procedure_specs(&mut def_spec);
         self.determine_closure_specs(&mut def_spec);
@@ -151,6 +162,26 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
         // Load all local spec MIR bodies, for export and later use
         self.ensure_local_mirs_fetched(&def_spec);
         def_spec
+    }
+
+    fn finalize_capability_specs(&mut self) {
+        for (_, capability) in self.capability_specs.drain() {
+            let Some(side_condition) = capability.side_condition else {
+                continue;
+            };
+            let Some(addr_projection) = capability.addr_projection else {
+                continue;
+            };
+            let Some(capability_ident) = capability.capability_ident else {
+                continue;
+            };
+
+            self.type_specs
+                .entry(capability.type_id)
+                .or_default()
+                .im_capabilities
+                .push((side_condition, addr_projection, capability_ident));
+        }
     }
 
     /// A trait implementation may only carry Prusti annotations if its `impl`
@@ -726,16 +757,40 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                     .push(local_id);
             }
 
-            // if has_prusti_attr(attrs, "capability") {
-            //     let self_id = fn_decl.inputs[0].hir_id;
-            //     let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
-            //     let type_id = get_type_id_from_impl_node(tcx.hir_node(impl_id)).unwrap();
-            //     self.type_specs
-            //         .entry(type_id.as_local().unwrap())
-            //         .or_default()
-            //         .im_fields
-            //         .push(local_id);
-            // }
+            if has_prusti_attr(attrs, "capable_side_condition")
+                || has_prusti_attr(attrs, "capable_addr")
+            {
+                let self_id = fn_decl.inputs[0].hir_id;
+                let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
+                let Some(type_id) =
+                    get_type_id_from_impl_node(tcx.hir_node(impl_id)).and_then(|id| id.as_local())
+                else {
+                    return;
+                };
+
+                let capability_id = parse_spec_id(
+                    read_prusti_attr("spec_id", attrs)
+                        .expect("capability functions must have a spec_id"),
+                    def_id,
+                );
+                let capability = self
+                    .capability_specs
+                    .entry(capability_id)
+                    .or_insert_with(|| CapabilitySpecRefs {
+                        type_id,
+                        side_condition: None,
+                        addr_projection: None,
+                        capability_ident: None,
+                    });
+
+                if has_prusti_attr(attrs, "capable_side_condition") {
+                    capability.side_condition = Some(local_id);
+                }
+                if has_prusti_attr(attrs, "capable_addr") {
+                    capability.addr_projection = Some(local_id);
+                    capability.capability_ident = read_prusti_attr("capability", attrs);
+                }
+            }
 
             // Collect trusted type flag
             if has_prusti_attr(attrs, "trusted_type") {

@@ -1,7 +1,7 @@
 use super::common::*;
 use crate::{
     environment::{EnvQuery, Environment},
-    utils::{has_im_model_field_attr, has_im_model_impl_attr},
+    utils::{has_im_model_attr, has_im_model_field_attr, has_im_model_impl_attr},
     PrustiError,
 };
 use log::debug;
@@ -126,6 +126,23 @@ impl<'tcx> intravisit::Visitor<'tcx> for CollectModelledTypes<'tcx> {
     }
 
     fn visit_item(&mut self, item: &'tcx hir::Item<'tcx>) {
+        if let hir::ItemKind::Struct(_, _, variant_data) = &item.kind {
+            let attrs = self.env_query.get_local_attributes(item.hir_id());
+            if has_im_model_attr(attrs) {
+                let fields = match variant_data {
+                    hir::VariantData::Struct { fields, .. } => *fields,
+                    hir::VariantData::Tuple(..) | hir::VariantData::Unit(..) => &[],
+                };
+                self.abstract_fields.insert(
+                    item.hir_id(),
+                    fields
+                        .iter()
+                        .map(|field| (field.hir_id, field.ty))
+                        .collect(),
+                );
+            }
+        }
+
         if let hir::ItemKind::Impl(_impl) = &item.kind {
             let impl_id = _impl.self_ty.hir_id;
             let attrs = self.env_query.get_local_attributes(item.hir_id());
