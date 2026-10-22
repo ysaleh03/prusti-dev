@@ -3,6 +3,7 @@
 mod common;
 mod predicate_checks;
 mod type_model_checks;
+mod im_model_checks;
 mod version_checks;
 
 use crate::environment::Environment;

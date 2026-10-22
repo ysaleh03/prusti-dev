@@ -1,5 +1,8 @@
-use prusti_rustc_interface::{serialize::Decodable, session::config::OutputType, span::DUMMY_SP};
-use rustc_hash::FxHashMap;
+use prusti_rustc_interface::{
+    data_structures::fx::FxHashMap, serialize::Decodable, session::config::OutputType,
+    span::DUMMY_SP,
+};
+// use rustc_hash::FxHashMap;
 use std::{fs, io, path};
 
 use crate::{

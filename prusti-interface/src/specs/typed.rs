@@ -4,12 +4,13 @@ use crate::{
 };
 pub use common::{SpecIdRef, SpecType, SpecificationId};
 use prusti_rustc_interface::{
+    data_structures::fx::FxHashMap,
     hir::def_id::{DefId, LocalDefId},
     macros::{TyDecodable, TyEncodable},
 };
 use prusti_specs::specifications::common;
 use regex::Regex;
-use rustc_hash::FxHashMap;
+// use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display, Formatter};
 
 /// A map of specifications keyed by crate-local DefIds.
@@ -309,8 +310,9 @@ pub struct TypeSpecification {
     pub source: DefId,
     pub invariant: SpecificationItem<Vec<DefId>>,
     pub trusted: SpecificationItem<bool>,
-    pub model: Option<(String, LocalDefId)>,
-    // pub im_model: Option<FxHashMap<String, LocalDefId>>,
+    pub type_model: Option<(String, LocalDefId)>,
+    pub im_fields: Vec<LocalDefId>,
+    pub im_capabilities: Vec<CapabilitySpecification>,
     pub counterexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
@@ -320,8 +322,9 @@ impl TypeSpecification {
             source,
             invariant: SpecificationItem::Empty,
             trusted: SpecificationItem::Inherent(false),
-            model: None,
-            // TODO im_model
+            type_model: None,
+            im_fields: vec![],
+            im_capabilities: vec![],
             counterexample_print: vec![],
         }
     }
@@ -340,6 +343,13 @@ pub struct PrustiAssumption {
 #[derive(Debug, Clone)]
 pub struct PrustiRefutation {
     pub refutation: LocalDefId,
+}
+
+#[derive(Debug, Clone, TyEncodable, TyDecodable)]
+pub struct CapabilitySpecification {
+    pub side_conditions: LocalDefId,
+    pub addr_projection: LocalDefId,
+    pub capability_ident: String,
 }
 
 /// The base container to store a contract of a procedure.

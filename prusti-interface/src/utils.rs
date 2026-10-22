@@ -133,6 +133,21 @@ pub fn has_spec_only_attr(attrs: &[hir::Attribute]) -> bool {
     has_prusti_attr(attrs, "spec_only")
 }
 
+/// Check if `prusti::im_model` is among the attributes.
+pub fn has_im_model_attr(attrs: &[hir::Attribute]) -> bool {
+    has_prusti_attr(attrs, "im_model")
+}
+
+/// Check if `prusti::im_spec_trait` is among the attributes.
+pub fn has_im_spec_trait_attr(attrs: &[hir::Attribute]) -> bool {
+    has_prusti_attr(attrs, "im_spec_trait")
+}
+
+/// Check if `prusti::im_spec_impl` is among the attributes.
+pub fn has_im_spec_impl_attr(attrs: &[hir::Attribute]) -> bool {
+    has_prusti_attr(attrs, "im_spec_impl")
+}
+
 /// Check if `prusti::extern_spec` is among the attributes.
 pub fn has_extern_spec_attr(attrs: &[hir::Attribute]) -> bool {
     has_prusti_attr(attrs, "extern_spec")
@@ -152,6 +167,14 @@ pub fn has_to_model_fn_attr(attrs: &[hir::Attribute]) -> bool {
 
 pub fn has_to_model_impl_attr(attrs: &[hir::Attribute]) -> bool {
     has_prusti_attr(attrs, "type_models_to_model_impl")
+}
+
+pub fn has_im_model_field_attr(attrs: &[hir::Attribute]) -> bool {
+    has_prusti_attr(attrs, "im_model_field")
+}
+
+pub fn has_im_model_impl_attr(attrs: &[hir::Attribute]) -> bool {
+    has_prusti_attr(attrs, "im_model_impl")
 }
 
 pub fn has_trait_bounds_type_cond_spec(attrs: &[hir::Attribute]) -> bool {

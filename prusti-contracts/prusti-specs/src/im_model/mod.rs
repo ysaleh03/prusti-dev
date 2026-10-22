@@ -50,13 +50,13 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
     trait_items.push(parse_quote! {
         #[trusted]
         #[pure_memory]
-        #[prusti::im_model_fn]
+        #[prusti::im_model_field]
         fn this<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #self_ty>;
     });
     impl_items.push(parse_quote! {
-        #[trusted]
-        #[pure_memory]
-        #[prusti::im_model_fn = #trait_name]
+        // #[trusted]
+        // #[pure_memory]
+        #[prusti::im_model_field = #trait_name]
         fn this<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #self_ty> {
             unimplemented!("ImModels can only be used in specifications")
         }
@@ -69,13 +69,13 @@ pub fn rewrite(item_struct: &syn::ItemStruct) -> syn::Result<(syn::ItemTrait, sy
         trait_items.push(parse_quote_spanned! {field.span()=>
             #[trusted]
             #[pure_memory]
-            #[prusti::im_model_fn]
+            #[prusti::im_model_field]
             fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty>;
         });
         impl_items.push(parse_quote_spanned! {field.span()=>
-            #[trusted]
-            #[pure_memory]
-            #[prusti::im_model_fn = #trait_name]
+            // #[trusted]
+            // #[pure_memory]
+            #[prusti::im_model_field = #trait_name]
             fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty> {
                 unimplemented!("ImModels can only be used in specifications")
             }
