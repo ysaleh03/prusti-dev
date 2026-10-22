@@ -2358,7 +2358,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // TODO if there's an assignment we need to do a havoc and a snap equality.
                         self.stmt(assign_stmt);
 
-                        // Non-method call assignments don't touch locally-shared state
+                        // Pure function calls don't touch locally-shared state
                         self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
                             im_state.modifies_idn.call()(self.prev_im_state()),
                             self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP)

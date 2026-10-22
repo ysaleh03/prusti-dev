@@ -1,6 +1,8 @@
 use prusti_interface::PrustiError;
 use prusti_rustc_interface::span::def_id::DefId;
-use task_encoder::{EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies};
+use task_encoder::{
+    EncodeFullError, EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies,
+};
 use vir::{CastType, FunctionIdn, Reify};
 
 use crate::encoders::{
@@ -369,18 +371,24 @@ impl TaskEncoder for FunctionEnc {
                 // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
                 assert!(expr.is_none());
 
+                if spec.reads.pure.is_empty() {
+                    vcx.emit_early_error(PrustiError::incorrect(
+                        format!(
+                            "`pure_unstable` function `{}` has no reads-clause",
+                            vcx.tcx().def_path_str(def_id)
+                        ),
+                        vcx.tcx().def_span(def_id).into(),
+                    ));
+                }
+
                 // Encode function that calculates this function's frame
-                let frame_body = (!spec.reads.pure.is_empty())
-                    .then(|| {
-                        spec.reads.pure.iter().fold(
-                            vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                            |acc, spec_ex| {
-                                vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
-                                    .downcast_ty()
-                            },
-                        )
-                    })
-                    .unwrap_or(im_state.top_set_idn.call()());
+                let frame_body = spec.reads.pure.iter().fold(
+                    vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                    |acc, spec_ex| {
+                        vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                            .downcast_ty()
+                    },
+                );
                 functions.push(vcx.mk_function(
                     frame_ref.unwrap(),
                     (&func_params, generics.ty_decls(), generics.const_decls()),
