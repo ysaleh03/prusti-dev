@@ -44,7 +44,7 @@ pub struct ImTyEncRef<'vir> {
 #[derive(Debug, Clone, Copy)]
 pub struct StructLikeData<'vir> {
     // NOTE: index 0 is always `this`
-    abs_fields: &'vir [vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref, vir::PSnap), vir::CSnap>],
+    pub abs_fields: &'vir [vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref, vir::Snap), vir::CSnap>],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -208,7 +208,7 @@ impl TaskEncoder for ImTyEnc {
                                                     self_name,
                                                     idx
                                                 ),
-                                                (vir::TYPE_TYVAL, vir::TYPE_REF, vir::TYPE_PSNAP),
+                                                (vir::TYPE_TYVAL, vir::TYPE_REF, self_ty_pure.snapshot),
                                                 aloc_t_ty.snapshot.downcast_ty(),
                                             );
                                             functions.push(
@@ -221,11 +221,11 @@ impl TaskEncoder for ImTyEnc {
                                             let ref_ex = vcx
                                                 .mk_local_ex(vcx.mk_local_decl("l", vir::TYPE_REF));
                                             let snap_ex = vcx.mk_local_ex(
-                                                vcx.mk_local_decl("p", vir::TYPE_PSNAP),
+                                                vcx.mk_local_decl("p", self_ty_pure.snapshot),
                                             );
                                             let field_ex = field_ref.call()(ty_ex, ref_ex, snap_ex);
                                             let type_access =
-                                                aloc_t_ty.expect_addr().type_access(field_ex);
+                                                aloc_t_ty.expect_addr().type_access(field_ex.upcast_ty());
                                             axioms.push(vcx.mk_domain_axiom(
                                                 vir::vir_format_identifier!(
                                                     vcx,
@@ -234,7 +234,7 @@ impl TaskEncoder for ImTyEnc {
                                                     idx
                                                 ),
                                                 vir::expr! {
-                                                forall t: Type, l: Ref, p: PSnap :: { [field_ex] }
+                                                forall t: Type, l: Ref, p: [self_ty_pure.snapshot] :: { [field_ex] }
                                                 ([type_access]) == (t)
                                             }));
                                             // TODO at callsite (possibly in a abstractfieldcall encoder)
@@ -555,15 +555,27 @@ impl TaskEncoder for ImTyEnc {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImTyUseResult<'vir> {
-    abs_fields: &'vir [vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref, vir::PSnap), vir::CSnap>],
-    field_tyvals: &'vir [vir::ExprTyVal<'vir>],
+    pub abs_fields: &'vir [vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref, vir::Snap), vir::CSnap>],
+    pub field_tyvals: &'vir [vir::ExprTyVal<'vir>],
 }
 
-impl<'vir> ImTyUseResult<'vir> {
-    fn get_field_loc(&self, idx: usize, addr: vir::ExprRef<'vir>, snap: vir::ExprPSnap<'vir>) -> vir::ExprCSnap<'vir> {
-        self.abs_fields[idx].call()(self.field_tyvals[idx], addr, snap)
-    }
-}
+// impl<'vir> ImTyUseResult<'vir> {
+//     fn get_field_loc<Curr, Next>(
+//         &self,
+//         idx: usize,
+//         addr: vir::ExprGenRef<'vir, Curr, Next>,
+//         snap: vir::ExprGenCSnap<'vir, Curr, Next>,
+//     ) -> vir::ExprGenCSnap<'vir, Curr, Next> {
+//         vir::with_vcx(|vcx| {
+//             let field_ty: vir::ExprGenTyVal<'_, Curr, Next> = vcx.mk_lazy_expr(
+//                 "field ty",
+//                 vir::TYPE_TYVAL,
+//                 Box::new(move |_, _| self.field_tyvals[idx].kind),
+//             );
+//             self.abs_fields[idx].call()(field_ty, addr, snap)
+//         })
+//     }
+// }
 
 pub struct ImTyUseEnc;
 
@@ -595,6 +607,9 @@ impl TaskEncoder for ImTyUseEnc {
                                         .iter()
                                         .map(|field| {
                                             let field_sig = RustSignature::new(field.def_id);
+                                            println!("params: {:?}", field_sig.gparams);
+                                            println!("field sig: {:?}", field_sig.output);
+                                            println!("args: {:?}", task_key.args);
                                             let field_ty =
                                                 field_sig.output.decompose_normalize(task_key.args);
                                             deps.require_dep::<TyExprEnc>(field_ty).unwrap()

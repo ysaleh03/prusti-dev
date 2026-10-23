@@ -1,7 +1,15 @@
 use crate::encoders::{
-    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature, SpecBlocksEnc}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, pure::spec::MirSpecEncMode, spec::get_abstract_field_idx, ty::{
-        generics::{GArgs, GParams}, use_pure::{TyUsePure, TyUsePureEnc}, RustTy, RustTyDecomposition
-    }, FunctionCallEnc, Mode, PrustiBuiltin, SpecBuiltin, ViperTupleEnc
+    FunctionCallEnc, ImTyEnc, Mode, PrustiBuiltin, SpecBuiltin, ViperTupleEnc,
+    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature, SpecBlocksEnc},
+    mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic},
+    pure::spec::MirSpecEncMode,
+    spec::get_abstract_field_idx,
+    ty::{
+        RustTy, RustTyDecomposition,
+        generics::{GArgs, GParams, TyExprEnc},
+        interior_mut::{ImTySpecifics, ImTyUseEnc},
+        use_pure::{TyUsePure, TyUsePureEnc},
+    },
 };
 use itertools::Itertools;
 use pcg::utils::Place;
@@ -947,25 +955,41 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
                     } else if let Some(idx) = get_abstract_field_idx(def_id) {
-                        println!("abstract field idx {:?}", idx);
+                        let parent_ty =
+                            RustTyDecomposition::from_ty(arg_tys[0].expect_ty(), self.context()).ty;
+                        let idx_ = idx;
 
-                        let parent_ty = RustTyDecomposition::from_ty(arg_tys[0].expect_ty(), self.context());
-                        // TODO do we need a ty_use equivalent for interior-mut? at this point we always
-                        // know that the parent is a concrete type, but the type of the field might be
-                        // generic...
-
-
-                        // TODO workflow is:
-                        // with the def_id of the function, we can determine if its an abstract field
-                        // if so, and if this is spec-mode, we should be able to get a functionidn for
-                        // the field that we want.
-                        //
-                        // Maybe the right workflow would be to obtain the parent type (so we can do the
-                        // interior mutability encoding) and get an index that allows us to get the right
-                        // field accessor.
-                        //
-                        // In the process, we might end up calling
-                        todo!()
+                        let return_ty = RustTyDecomposition::from_ty(
+                            destination.ty(&self.body.local_decls, self.vcx.tcx()).ty,
+                            self.context(),
+                        );
+                        let target_ty = RustTyDecomposition::from_ty(
+                            return_ty.args.args()[1].expect_ty(),
+                            self.context(),
+                        );
+                        let tyval = self.deps.require_dep::<TyExprEnc>(target_ty)?;
+                        let tyval = self.vcx.mk_lazy_expr(
+                            "field ty",
+                            vir::TYPE_TYVAL,
+                            Box::new(move |_, _| tyval.kind),
+                        );
+                        let im_ty = self.deps.require_ref::<ImTyEnc>(parent_ty)?;
+                        let ImTySpecifics::StructLike(struct_data) = im_ty.specifics else {
+                            panic!()
+                        };
+                        let reciever_ty = self
+                            .ty_use(match args[0].node {
+                                mir::Operand::Move(place) => place.ty(self.body, self.vcx.tcx()).ty,
+                                _ => unreachable!(),
+                            })
+                            .expect_immref();
+                        let opand = self.encode_operand_snap(&args[0].node, &new_curr_ver)?;
+                        Ok(struct_data.abs_fields[idx].call()(
+                            tyval,
+                            reciever_ty.addr_access(opand.downcast_ty()),
+                            reciever_ty.value_access(opand.downcast_ty()),
+                        )
+                        .upcast_ty())
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
                         let im_state_ex = self.mk_lazy_im_state_expr();
                         match self.encode_prusti_builtin(
