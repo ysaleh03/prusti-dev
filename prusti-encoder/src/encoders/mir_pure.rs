@@ -1,13 +1,7 @@
 use crate::encoders::{
-    FunctionCallEnc, Mode, PrustiBuiltin, SpecBuiltin, ViperTupleEnc,
-    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature, SpecBlocksEnc},
-    mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic},
-    pure::spec::MirSpecEncMode,
-    ty::{
-        RustTyDecomposition,
-        generics::{GArgs, GParams},
-        use_pure::{TyUsePure, TyUsePureEnc},
-    },
+    mir_fn::{CallTaskDescription, GhostBlocks, RustSignature, SpecBlocksEnc}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, pure::spec::MirSpecEncMode, spec::get_abstract_field_idx, ty::{
+        generics::{GArgs, GParams}, use_pure::{TyUsePure, TyUsePureEnc}, RustTy, RustTyDecomposition
+    }, FunctionCallEnc, Mode, PrustiBuiltin, SpecBuiltin, ViperTupleEnc
 };
 use itertools::Itertools;
 use pcg::utils::Place;
@@ -952,8 +946,27 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     let intrinsic = intrinsic.and_then(RustcIntrinsic::from_intrinsic);
                     if let Some(intrinsic) = intrinsic {
                         self.encode_intrinsic(intrinsic, arg_tys, args, &new_curr_ver)
+                    } else if let Some(idx) = get_abstract_field_idx(def_id) {
+                        println!("abstract field idx {:?}", idx);
+
+                        let parent_ty = RustTyDecomposition::from_ty(arg_tys[0].expect_ty(), self.context());
+                        // TODO do we need a ty_use equivalent for interior-mut? at this point we always
+                        // know that the parent is a concrete type, but the type of the field might be
+                        // generic...
+
+
+                        // TODO workflow is:
+                        // with the def_id of the function, we can determine if its an abstract field
+                        // if so, and if this is spec-mode, we should be able to get a functionidn for
+                        // the field that we want.
+                        //
+                        // Maybe the right workflow would be to obtain the parent type (so we can do the
+                        // interior mutability encoding) and get an index that allows us to get the right
+                        // field accessor.
+                        //
+                        // In the process, we might end up calling
+                        todo!()
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
-                        // TODO is there a pure_unstable case here?
                         let im_state_ex = self.mk_lazy_im_state_expr();
                         match self.encode_prusti_builtin(
                             builtin,
@@ -1015,7 +1028,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             pure_func.call_total(snap_args)
                         })
                     } else {
-                        println!("pure unstable? {:?}", is_pure_unstable);
                         return Err(self.unsupported_rvalue(
                             format!(
                                 "call to non-pure function `{}` in pure code",

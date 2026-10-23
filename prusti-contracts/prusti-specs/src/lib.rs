@@ -1368,7 +1368,13 @@ struct CapabilityAnnotation {
 
 impl syn::parse::Parse for CapabilityAnnotation {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let capability = input.parse()?;
+        let capability: syn::Ident = input.parse()?;
+        match capability.to_string().as_str() {
+            "read" | "write" | "exclusive" | "shared" | "local" => (),
+            _ => {
+                return Err(syn::Error::new(capability.span(), "unknown capability"));
+            }
+        }
         input.parse::<syn::Token![,]>()?;
 
         let side_condition = input.parse()?;

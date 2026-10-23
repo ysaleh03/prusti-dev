@@ -188,7 +188,7 @@ impl PrustiTokenStream {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::RepEq)
                     }
                     (TokenTree::Punct(punct), _, _, _)
-                        if punct.as_char() == '@' && punct.spacing() == Alone =>
+                        if punct.as_char() == '@' =>
                     {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::Addr)
                     }
@@ -427,6 +427,16 @@ impl PrustiTokenStream {
 
                 None => break,
             };
+            if op == PrustiBinaryOp::Addr {
+                self.tokens.pop_front();
+                let rhs = match self.tokens.pop_front() {
+                    Some(PrustiToken::Token(token)) => token.to_token_stream(),
+                    Some(token) => return err(token.span(), "expected field name after `@`"),
+                    None => return err(span, "expected field name after `@`"),
+                };
+                lhs = op.translate(span, lhs, rhs);
+                continue;
+            }
             let (l_bp, r_bp) = op.binding_power();
             if l_bp < min_bp {
                 break;
@@ -915,6 +925,10 @@ impl PrustiToken {
                 PrustiBinaryOp::Implies
             } else if operator2("..", p1, p2) {
                 PrustiBinaryOp::Rust(RustOp::Range)
+            } else if operator2("==", p1, p2) {
+                PrustiBinaryOp::Rust(RustOp::Eq)
+            } else if operator2("!=", p1, p2) {
+                PrustiBinaryOp::Rust(RustOp::Ne)
             } else if operator2("+=", p1, p2) {
                 PrustiBinaryOp::Rust(RustOp::AddAssign)
             } else if operator2("-=", p1, p2) {
@@ -1021,8 +1035,11 @@ impl PrustiBinaryOp {
     fn binding_power(&self) -> (u8, u8) {
         // TODO: should <== and ==> have the same binding power? === and !==?
         match self {
+            Self::Rust(RustOp::Eq | RustOp::Ne) => (11, 12),
             Self::Rust(_) => (0, 0),
-            Self::Addr => (17, 17),
+            // Address projection must consume only its immediate operands,
+            // before any other Prusti binary operator is considered.
+            Self::Addr => (u8::MAX, u8::MAX),
             Self::Iff => (4, 3),
             Self::Implies => (6, 5),
             Self::ImpliesReverse => (5, 6),
@@ -1089,6 +1106,8 @@ impl PrustiBinaryOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RustOp {
     RangeInclusive,
+    Eq,
+    Ne,
     LeftShiftAssign,
     RightShiftAssign,
     Range,
@@ -1116,6 +1135,8 @@ impl RustOp {
     fn to_tokens(self, span: Span) -> TokenStream {
         match self {
             Self::RangeInclusive => quote_spanned! { span => ..= },
+            Self::Eq => quote_spanned! { span => == },
+            Self::Ne => quote_spanned! { span => != },
             Self::LeftShiftAssign => quote_spanned! { span => <<= },
             Self::RightShiftAssign => quote_spanned! { span => >>= },
             Self::Range => quote_spanned! { span => .. },
@@ -1164,6 +1185,30 @@ mod tests {
 
     #[test]
     fn test_preparser() {
+        assert_eq!(
+            parse_prusti("self@inner".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "((self)) . inner ()",
+        );
+        assert_eq!(
+            parse_prusti("self@inner == value".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "((self)) . inner () == value",
+        );
+        assert_eq!(
+            parse_prusti("self@inner == self@inner".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "((self)) . inner () == ((self)) . inner ()",
+        );
+        assert_eq!(
+            parse_prusti("self === other@inner".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "(:: prusti_contracts :: Ghost :: new_ref (& (self)) == :: prusti_contracts :: Ghost :: new_ref (& (((other)) . inner ())))",
+        );
         assert_eq!(
             parse_prusti("a ==> b".parse().unwrap())
                 .unwrap()

@@ -1,7 +1,10 @@
 use std::ops::Deref;
 
-use prusti_interface::environment::EnvQuery;
+use pcg::pcg::CapabilityKind;
+use prusti_interface::{environment::EnvQuery, specs::typed::CapabilitySpecification};
 use prusti_rustc_interface::{abi, hir, index, middle::ty, span::symbol};
+
+use crate::encoders::spec::AbstractField;
 
 use super::{
     data::*,
@@ -226,7 +229,7 @@ impl<'tcx> TyDatas<'tcx> for RustTyDatas {
     /// encoded conservatively as their own `Raw` kind: the snapshot exposes the
     /// address and pointer metadata without reasoning about the pointee.
     type RawData = RefData<'tcx>;
-    type StructData = ();
+    type StructData = Option<hir::def_id::DefId>;
     type FieldData = RustFieldData<'tcx>;
     type EnumData = RustEnumData<'tcx>;
     type VariantData = RustVariantData;
@@ -302,6 +305,7 @@ pub struct RustFieldData<'tcx> {
     pub fid: abi::FieldIdx,
     ty: LazyRustTy<'tcx>,
     pub address: RustFieldAddress,
+    pub is_public: bool,
 }
 
 /// How the address of a field is obtained from that of the containing struct.
@@ -589,9 +593,10 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                         fid: abi::FieldIdx::from_usize(i),
                         ty: LazyRustTy(Self::new_param_ty(i as u32)),
                         address: RustFieldAddress::Constant,
+                        is_public: true,
                     })
                     .collect::<Vec<_>>();
-                TySpecifics::mk_structlike((), fields)
+                TySpecifics::mk_structlike(None, fields)
             }
             ty::TyKind::Array(_, _) => TySpecifics::ArrayLike(ArrayData {
                 slice: false,
@@ -642,10 +647,11 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                             fid: abi::FieldIdx::from_usize(i),
                             ty: LazyRustTy(vcx.tcx().erase_regions(ty)),
                             address: RustFieldAddress::Constant,
+                            is_public: false,
                         })
                         .collect::<Vec<_>>()
                 });
-                TySpecifics::mk_structlike((), fields)
+                TySpecifics::mk_structlike(None, fields)
             }
             ty::TyKind::Never => {
                 let data = vir::with_vcx(|vcx| RustEnumData {
@@ -699,8 +705,9 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                         fid: abi::FieldIdx::from_usize(0),
                         ty: LazyRustTy(Self::new_param_ty(0)),
                         address: RustFieldAddress::Constant,
+                        is_public: true,
                     }];
-                    TySpecifics::mk_structlike((), fields)
+                    TySpecifics::mk_structlike(None, fields)
                 }
                 // `Rep<T>` is encoded as if it were `struct Rep<T>(T)`:
                 // the Rep wraps the value of `T`.
@@ -714,7 +721,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 //     TySpecifics::mk_structlike((), fields)
                 // }
                 "Addr" => {
-                    let data = Self::from_struct(adt.non_enum_variant());
+                    let data = Self::from_struct(None, adt.non_enum_variant());
                     let dyn_ty = data.fields[1].ty;
                     TySpecifics::mk_addr(RustAddrData {
                         param: LazyRustTy(Self::new_param_ty(1)),
@@ -728,7 +735,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
         } else {
             match adt.adt_kind() {
                 ty::AdtKind::Struct => {
-                    let mut data = Self::from_struct(adt.non_enum_variant());
+                    let mut data = Self::from_struct(Some(adt.did()), adt.non_enum_variant());
                     if adt.is_box() {
                         // The hardcoded value slot for the boxed `T` is
                         // appended as a regular field; only its (heap-dependent)
@@ -739,6 +746,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                             fid: abi::FieldIdx::from_usize(data.fields.len()),
                             ty: LazyRustTy(Self::new_param_ty(0)),
                             address: RustFieldAddress::Dynamic,
+                            is_public: false,
                         });
                     }
                     Self::StructLike(data)
@@ -755,9 +763,9 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
         }
     }
 
-    fn from_struct(variant: &ty::VariantDef) -> StructData<'tcx, RustTyDatas> {
+    fn from_struct(def_id: Option<hir::def_id::DefId>, variant: &ty::VariantDef) -> StructData<'tcx, RustTyDatas> {
         let fields = Self::from_fields(&variant.fields);
-        StructData::new((), fields)
+        StructData::new(def_id, fields)
     }
 
     fn from_enum(adt: ty::AdtDef<'tcx>) -> EnumData<'tcx, RustTyDatas> {
@@ -776,7 +784,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                             vid,
                             discr_val: discr.val,
                         },
-                        StructData::new((), fields),
+                        StructData::new(None, fields),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -796,6 +804,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                     fid,
                     ty: LazyRustTy(ty),
                     address: RustFieldAddress::Constant,
+                    is_public: field.vis.is_public(),
                 }
             })
             .collect::<Vec<_>>()

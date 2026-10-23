@@ -188,8 +188,7 @@ impl syn::parse::Parse for CapableInput {
 
         let capability: syn::Ident = input.parse()?;
         match capability.to_string().as_str() {
-            "exclusive" | "shared" | "local_read" | "local_write" | "atomic_read"
-            | "atomic_write" => (),
+            "read" | "write" | "exclusive" | "shared" | "local" => (),
             _ => {
                 return Err(syn::Error::new(capability.span(), "unknown capability"));
             }

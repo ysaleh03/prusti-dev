@@ -1,5 +1,4 @@
 use crate::{
-    PrustiError,
     environment::Environment,
     specs::{interior_mut::InteriorMutResolver, typed::CapabilitySpecification},
     utils::{
@@ -7,15 +6,16 @@ use crate::{
         has_im_model_field_attr, has_prusti_attr, has_to_model_fn_attr, prusti_annotation_spans,
         read_prusti_attr, read_prusti_attrs,
     },
+    PrustiError,
 };
 use log::debug;
 use prusti_rustc_interface::{
     data_structures::fx::FxHashMap,
     errors::MultiSpan,
     hir::{
-        self, FnRetTy,
+        self,
         def_id::{DefId, LocalDefId},
-        intravisit,
+        intravisit, FnRetTy,
     },
     middle::ty,
     span::Span,
@@ -85,7 +85,7 @@ struct TypeSpecRefs {
     trusted: bool,
     type_model: Option<(String, LocalDefId)>,
     im_fields: Vec<LocalDefId>,
-    im_capabilities: Vec<(LocalDefId, LocalDefId, String)>,
+    im_capabilities: Vec<(LocalDefId, LocalDefId, typed::CapabilityKind)>,
     countexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
@@ -94,7 +94,7 @@ struct CapabilitySpecRefs {
     type_id: LocalDefId,
     side_condition: Option<LocalDefId>,
     addr_projection: Option<LocalDefId>,
-    capability_ident: Option<String>,
+    capability: Option<typed::CapabilityKind>,
 }
 
 /// Specification collector, applied as a visitor over the crate HIR.
@@ -165,22 +165,22 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
     }
 
     fn finalize_capability_specs(&mut self) {
-        for (_, capability) in self.capability_specs.drain() {
-            let Some(side_condition) = capability.side_condition else {
+        for (_, capability_spec) in self.capability_specs.drain() {
+            let Some(side_condition) = capability_spec.side_condition else {
                 continue;
             };
-            let Some(addr_projection) = capability.addr_projection else {
+            let Some(addr_projection) = capability_spec.addr_projection else {
                 continue;
             };
-            let Some(capability_ident) = capability.capability_ident else {
+            let Some(capability) = capability_spec.capability else {
                 continue;
             };
 
             self.type_specs
-                .entry(capability.type_id)
+                .entry(capability_spec.type_id)
                 .or_default()
                 .im_capabilities
-                .push((side_condition, addr_projection, capability_ident));
+                .push((side_condition, addr_projection, capability));
         }
     }
 
@@ -442,6 +442,18 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                 .emit(&self.env.diagnostic);
             }
 
+            for (idx, field) in refs.im_fields.iter().enumerate() {
+                let def_id = field.to_def_id();
+                let canonical_def_id = self
+                    .env
+                    .tcx()
+                    .opt_associated_item(def_id)
+                    .and_then(|item| item.trait_item_def_id)
+                    .unwrap();
+
+                def_spec.abstract_field_idx.insert(canonical_def_id, idx);
+            }
+
             def_spec.type_specs.insert(
                 type_id.to_def_id(),
                 typed::TypeSpecification {
@@ -460,11 +472,11 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                         .im_capabilities
                         .iter()
                         .cloned()
-                        .map(|(side_conditions, addr_projection, capability_ident)| {
+                        .map(|(side_conditions, addr_projection, capability)| {
                             CapabilitySpecification {
                                 side_conditions,
                                 addr_projection,
-                                capability_ident,
+                                capability,
                             }
                         })
                         .collect(),
@@ -715,8 +727,23 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
     ) {
         intravisit::walk_fn(self, fn_kind, fn_decl, body_id, local_id);
 
+        let tcx = self.env.tcx();
         let def_id = local_id.to_def_id();
         let attrs = self.env.query.get_local_attributes(local_id);
+
+        if has_prusti_attr(attrs, "im_model_field") {
+            let self_id = fn_decl.inputs[0].hir_id;
+            let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
+            if let Some(type_id) =
+                get_type_id_from_impl_node(tcx.hir_node(impl_id)).and_then(|id| id.as_local())
+            {
+                self.type_specs
+                    .entry(type_id)
+                    .or_default()
+                    .im_fields
+                    .push(local_id);
+            }
+        }
 
         // Collect spec functions
         if let Some(raw_spec_id) = read_prusti_attr("spec_id", attrs) {
@@ -733,7 +760,6 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
 
             // TODO: (invariants and trusted flag) visit the struct itself?
             // For now, a method is used to mark the type as "trusted".
-            let tcx = self.env.tcx();
             // Collect type invariants
             if has_prusti_attr(attrs, "type_invariant_spec") {
                 let self_id = fn_decl.inputs[0].hir_id;
@@ -743,17 +769,6 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                     .entry(type_id.as_local().unwrap())
                     .or_default()
                     .invariants
-                    .push(local_id);
-            }
-
-            if has_prusti_attr(attrs, "im_model_field") {
-                let self_id = fn_decl.inputs[0].hir_id;
-                let impl_id = tcx.parent_hir_id(tcx.parent_hir_id(self_id));
-                let type_id = get_type_id_from_impl_node(tcx.hir_node(impl_id)).unwrap();
-                self.type_specs
-                    .entry(type_id.as_local().unwrap())
-                    .or_default()
-                    .im_fields
                     .push(local_id);
             }
 
@@ -780,7 +795,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                         type_id,
                         side_condition: None,
                         addr_projection: None,
-                        capability_ident: None,
+                        capability: None,
                     });
 
                 if has_prusti_attr(attrs, "capable_side_condition") {
@@ -788,7 +803,18 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                 }
                 if has_prusti_attr(attrs, "capable_addr") {
                     capability.addr_projection = Some(local_id);
-                    capability.capability_ident = read_prusti_attr("capability", attrs);
+                    capability.capability =
+                        read_prusti_attr("capability", attrs).and_then(|value| {
+                            let parsed = typed::CapabilityKind::parse(&value);
+                            if parsed.is_none() {
+                                PrustiError::incorrect(
+                                    format!("unknown capability `{value}`"),
+                                    MultiSpan::from_span(self.env.query.get_def_span(local_id)),
+                                )
+                                .emit(&self.env.diagnostic);
+                            }
+                            parsed
+                        });
                 }
             }
 

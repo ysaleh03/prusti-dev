@@ -13,6 +13,28 @@ use regex::Regex;
 // use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display, Formatter};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TyEncodable, TyDecodable)]
+pub enum CapabilityKind {
+    Read,
+    Write,
+    Exclusive,
+    Shared,
+    Local,
+}
+
+impl CapabilityKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "read" => Self::Read,
+            "write" => Self::Write,
+            "exclusive" => Self::Exclusive,
+            "shared" => Self::Shared,
+            "local" => Self::Local,
+            _ => return None,
+        })
+    }
+}
+
 /// A map of specifications keyed by crate-local DefIds.
 #[derive(Default, Debug, Clone)]
 pub struct DefSpecificationMap {
@@ -22,6 +44,7 @@ pub struct DefSpecificationMap {
     pub prusti_assertions: FxHashMap<DefId, PrustiAssertion>,
     pub prusti_assumptions: FxHashMap<DefId, PrustiAssumption>,
     pub prusti_refutations: FxHashMap<DefId, PrustiRefutation>,
+    pub abstract_field_idx: FxHashMap<DefId, usize>,
 }
 
 impl DefSpecificationMap {
@@ -39,6 +62,10 @@ impl DefSpecificationMap {
 
     pub fn get_type_spec(&self, def_id: &DefId) -> Option<&TypeSpecification> {
         self.type_specs.get(def_id)
+    }
+
+    pub fn get_abstract_field_idx(&self, def_id: &DefId) -> Option<usize> {
+        self.abstract_field_idx.get(def_id).map(|idx| *idx)
     }
 
     pub fn get_assertion(&self, def_id: &DefId) -> Option<&PrustiAssertion> {
@@ -355,7 +382,7 @@ pub struct PrustiRefutation {
 pub struct CapabilitySpecification {
     pub side_conditions: LocalDefId,
     pub addr_projection: LocalDefId,
-    pub capability_ident: String,
+    pub capability: CapabilityKind,
 }
 
 /// The base container to store a contract of a procedure.

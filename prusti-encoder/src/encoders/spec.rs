@@ -47,17 +47,13 @@ pub struct AbstractField<'tcx> {
     pub ty: ty::Ty<'tcx>,
 }
 
-pub fn with_type_im_spec<'tcx, F, R>(type_ty: ty::Ty<'tcx>, f: F) -> R
+pub fn with_type_im_spec<'tcx, F, R>(adt_did: DefId, f: F) -> R
 where
     F: FnOnce(&[AbstractField<'tcx>], &[CapabilitySpecification]) -> R,
 {
     vir::with_vcx(|vcx| {
-        let ty::TyKind::Adt(adt_def, _) = type_ty.kind() else {
-            return f(&[], &[]);
-        };
-
         let specs = vcx.specs.as_ref().unwrap().borrow();
-        let Some(type_spec) = specs.get_type_spec(&adt_def.did()) else {
+        let Some(type_spec) = specs.get_type_spec(&adt_did) else {
             return f(&[], &[]);
         };
 
@@ -161,6 +157,13 @@ pub fn is_function_pure_unstable<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool
 
 pub fn is_function_pure<'tcx>(def_id: DefId, args: GArgs<'tcx>) -> bool {
     is_function_pure_value(def_id, args) || is_function_pure_unstable(def_id, args)
+}
+
+pub fn get_abstract_field_idx<'tcx>(def_id: DefId) -> Option<usize> {
+    vir::with_vcx(|vcx| {
+        let specs = vcx.specs.as_ref().unwrap().borrow();
+        specs.get_abstract_field_idx(&def_id)
+    })
 }
 
 /// `kind.is_pure()`, treating an invalid trait-to-impl kind refinement as

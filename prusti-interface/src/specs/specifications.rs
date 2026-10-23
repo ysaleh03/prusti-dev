@@ -124,6 +124,11 @@ impl<'tcx> Specifications<'tcx> {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
+    pub fn get_abstract_field_idx(&self, def_id: &DefId) -> Option<usize> {
+        self.user_typed_specs.get_abstract_field_idx(def_id)
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_assertion(&self, def_id: &DefId) -> Option<&PrustiAssertion> {
         self.user_typed_specs.get_assertion(def_id)
     }
