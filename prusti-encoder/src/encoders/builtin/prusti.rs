@@ -8,10 +8,10 @@ use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDe
 use vir::{CastType, FunctionIdn, TyVal};
 
 use crate::encoders::{
-    ImCapEnc, ImStateEnc, im_state,
+    ImCapEnc, ImStateEnc, Pure, im_state,
     ty::{
-        RustTyDecomposition,
-        generics::{GArgs, TyExprEnc},
+        RustTyDecomposition, RustTyNormalized,
+        generics::{GArgs, GArgsCastEnc, TyExprEnc},
         interpretation::float::FloatDomain,
         use_pure::{TyUsePure, TyUsePureEnc, TyUsePureImmRef},
     },
@@ -129,11 +129,6 @@ pub enum FloatOp {
 pub enum AddrOp {
     ToId,
     ToRef,
-    ToRep,
-    Unique,
-    Shared,
-    LocalUnique,
-    AtomicUnique,
 }
 
 /// Rep builtin operations
@@ -292,19 +287,17 @@ impl PrustiBuiltin {
                 },
                 Some("Int") => Self::Int(Self::num_op(item)),
                 Some("Real") => Self::Real(Self::num_op(item)),
-                Some("Addr") => match item {
+                Some("ALocT") => match item {
                     "to_ref" => Self::Addr(AddrOp::ToRef),
-                    "to_id" => Self::Addr(AddrOp::ToId),
-                    "to_rep" => Self::Addr(AddrOp::ToRep),
-                    "unique" => Self::Addr(AddrOp::Unique),
-                    "shared" => Self::Addr(AddrOp::Shared),
-                    "local_unique" => Self::Addr(AddrOp::LocalUnique),
-                    "atomic_unique" => Self::Addr(AddrOp::AtomicUnique),
-                    other => todo!("unsupported capability {other}"),
+                    other => todo!("unsupported `ALocT` function {other}"),
+                },
+                Some("ALoc") => match item {
+                    "new" => Self::Addr(AddrOp::ToId),
+                    other => todo!("unsupported `ALoc` function {other}"),
                 },
                 Some("Rep") => match item {
-                    "new_ref" => Self::Rep(RepOp::FromRef),
-                    "new_addr" => Self::Rep(RepOp::FromAddr),
+                    "from_ref" => Self::Rep(RepOp::FromRef),
+                    "from_loc" => Self::Rep(RepOp::FromAddr),
                     other => todo!("unsupported `Rep` function {other}"),
                 },
                 Some(other) => todo!("unsupported `prusti_contracts` function {other}::{item}"),
@@ -439,9 +432,10 @@ type PrustiBuiltinOperands<'vir> = (&'vir [vir::ExprSnap<'vir>], vir::Expr<'vir,
 /// A snapshot expression with one hole (`Lazy` node) per operand; the holes
 /// are filled with [`PrustiBuiltinExpr::apply`].
 #[derive(Clone, Copy, Debug)]
-pub struct PrustiBuiltinExpr<'vir>(
-    vir::ExprGenSnap<'vir, PrustiBuiltinOperands<'vir>, vir::ExprKind<'vir>>,
-);
+pub struct PrustiBuiltinExpr<'vir> {
+    snap: vir::ExprGenSnap<'vir, PrustiBuiltinOperands<'vir>, vir::ExprKind<'vir>>,
+    frame: Option<vir::ExprGenSet<'vir, PrustiBuiltinOperands<'vir>, vir::ExprKind<'vir>>>,
+}
 
 impl<'vir> PrustiBuiltinExpr<'vir> {
     /// Fills the operand holes with `operands`, in the caller's
@@ -474,10 +468,44 @@ impl<'vir> PrustiBuiltinExpr<'vir> {
                     vir::ExprKindGen<'vir, Curr, Next>,
                     vir::Snap,
                 >,
-            >(self.0)
+            >(self.snap)
         };
         use vir::Reify;
         expr.reify(vcx, (vcx.alloc_slice(operands), curr_im_state))
+    }
+
+    pub fn apply_frame<Curr: 'vir, Next: 'vir>(
+        self,
+        vcx: &'vir vir::VirCtxt<'vir>,
+        operands: &[vir::ExprGenSnap<'vir, Curr, Next>],
+        curr_im_state: vir::ExprGen<'vir, Curr, Next, vir::ImState>,
+    ) -> Option<vir::ExprGenSet<'vir, Curr, Next>> {
+        // SAFETY: reinterpret the kind of the operand holes (and thus of the
+        // expression itself) from hole-free operands to operands in the
+        // caller's domain: the `Lazy` operand holes only index into the
+        // operand slice and splice the operand's `kind` verbatim, so they are
+        // oblivious to any holes the operands themselves may carry.
+        let expr = unsafe {
+            std::mem::transmute::<
+                vir::ExprGen<
+                    'vir,
+                    (&'vir [vir::ExprSnap<'vir>], vir::Expr<'vir, vir::ImState>),
+                    vir::ExprKind<'vir>,
+                    vir::Set,
+                >,
+                vir::ExprGen<
+                    'vir,
+                    (
+                        &'vir [vir::ExprGenSnap<'vir, Curr, Next>],
+                        vir::ExprGen<'vir, Curr, Next, vir::ImState>,
+                    ),
+                    vir::ExprKindGen<'vir, Curr, Next>,
+                    vir::Set,
+                >,
+            >(self.frame?)
+        };
+        use vir::Reify;
+        Some(expr.reify(vcx, (vcx.alloc_slice(operands), curr_im_state)))
     }
 }
 
@@ -569,68 +597,83 @@ impl PrustiBuiltinEnc {
             is_pure,
             span,
         };
-        let res: ExprRet<'vir, vir::Snap> = match builtin {
-            PrustiBuiltin::Spec(_) => {
-                unreachable!("pure-only builtin in `PrustiBuiltinEnc`: {builtin:?}")
-            }
-            PrustiBuiltin::Ghost(op) => ctxt.encode_ghost(op)?,
-            PrustiBuiltin::SnapEq | PrustiBuiltin::SnapNe => {
-                let bin_op = match builtin {
-                    PrustiBuiltin::SnapEq => vir::BinOpKind::CmpEq,
-                    PrustiBuiltin::SnapNe => vir::BinOpKind::CmpNe,
-                    _ => unreachable!(),
-                };
-                let (lhs, rhs) = ctxt.deref_operands::<vir::Snap>()?;
-                ctxt.native_cmp(bin_op, lhs, rhs).upcast_ty()
-            }
-            PrustiBuiltin::SnapClone => ctxt.deref_operand(0)?,
-            PrustiBuiltin::RepEq => {
-                let (lhs, rhs) = ctxt.deref_operands::<vir::GRep>()?;
-                let rep_ty = BuiltinCtxt::deref(sig.inputs()[0]);
-                let ty = RustTyDecomposition::from_ty(
-                    BuiltinCtxt::adt_type_arg(rep_ty, 0),
-                    args.context(),
-                );
-
-                let tyval = deps.require_dep::<TyExprEnc>(ty)?;
-                let tyval = vcx.mk_lazy_expr(
-                    vir::vir_format!(vcx, "prusti_builtin_rep_eq_tyval"),
-                    vir::TYPE_TYVAL,
-                    Box::new(move |vcx, lctx: PrustiBuiltinOperands<'vir>| tyval.kind),
-                );
-
-                let im_state = deps.require_ref::<ImStateEnc>(())?;
-                im_state.rep_eq_idn.call()(tyval, lhs, rhs).upcast_ty()
-            }
-            PrustiBuiltin::Seq(op) => ctxt.encode_seq(op)?,
-            PrustiBuiltin::AnySet { multiset, op } => ctxt.encode_any_set(multiset, op)?,
-            PrustiBuiltin::Map(op) => ctxt.encode_map(op)?,
-            // `From` differs structurally between the numeric types; the
-            // shared operations are handled by `encode_num`.
-            PrustiBuiltin::Int(NumOp::From) => {
-                let prim = *ctxt.e_input(0)?.expect_primitive();
-                let val = prim.snap_to_prim(ctxt.operands[0].downcast_ty());
-                val.downcast_ty::<vir::Int>().upcast_ty()
-            }
-            PrustiBuiltin::Int(op) => ctxt.encode_num::<vir::Int>(op, false)?,
-            PrustiBuiltin::Real(NumOp::From) => {
-                let fp_to_real = ctxt.e_input(0)?.expect_float().fp_to_real;
-                fp_to_real.call()(ctxt.operands[0].downcast_ty()).upcast_ty()
-            }
-            PrustiBuiltin::Real(op) => ctxt.encode_num::<vir::Perm>(op, true)?,
-            PrustiBuiltin::Float(op, fl) => {
-                let domain = ctxt.float_domain(fl)?;
-                let operand = ctxt.operands[0].downcast_ty();
-                match op {
-                    FloatOp::IsNan => domain.fp_is_nan.call()(operand).upcast_ty(),
-                    FloatOp::IsInfinite => domain.fp_is_infinite.call()(operand).upcast_ty(),
-                    FloatOp::Abs => domain.fp_abs.call()(operand).upcast_ty(),
+        let (snap, frame): (ExprRet<'vir, vir::Snap>, Option<ExprRet<'vir, vir::Set>>) =
+            match builtin {
+                PrustiBuiltin::Spec(_) => {
+                    unreachable!("pure-only builtin in `PrustiBuiltinEnc`: {builtin:?}")
                 }
-            }
-            PrustiBuiltin::Addr(op) => ctxt.encode_addr_op(op)?,
-            PrustiBuiltin::Rep(op) => ctxt.encode_rep_op(op)?,
-        };
-        Ok(((), PrustiBuiltinExpr(res)))
+                PrustiBuiltin::Ghost(op) => (ctxt.encode_ghost(op)?, None),
+                PrustiBuiltin::SnapEq | PrustiBuiltin::SnapNe => {
+                    let bin_op = match builtin {
+                        PrustiBuiltin::SnapEq => vir::BinOpKind::CmpEq,
+                        PrustiBuiltin::SnapNe => vir::BinOpKind::CmpNe,
+                        _ => unreachable!(),
+                    };
+                    let (lhs, rhs) = ctxt.deref_operands::<vir::Snap>()?;
+                    (ctxt.native_cmp(bin_op, lhs, rhs).upcast_ty(), None)
+                }
+                PrustiBuiltin::SnapClone => (ctxt.deref_operand(0)?, None),
+                PrustiBuiltin::RepEq => {
+                    let (lhs, rhs) = ctxt.deref_operands::<vir::GRep>()?;
+                    let rep_ty = BuiltinCtxt::deref(sig.inputs()[0]);
+                    let ty = RustTyDecomposition::from_ty(
+                        BuiltinCtxt::adt_type_arg(rep_ty, 0),
+                        args.context(),
+                    );
+
+                    let tyval = deps.require_dep::<TyExprEnc>(ty)?;
+                    let tyval = vcx.mk_lazy_expr(
+                        vir::vir_format!(vcx, "prusti_builtin_rep_eq_tyval"),
+                        vir::TYPE_TYVAL,
+                        Box::new(move |vcx, lctx: PrustiBuiltinOperands<'vir>| tyval.kind),
+                    );
+
+                    let im_state = deps.require_ref::<ImStateEnc>(())?;
+                    (
+                        im_state.rep_eq_idn.call()(tyval, lhs, rhs).upcast_ty(),
+                        None,
+                    )
+                }
+                PrustiBuiltin::Seq(op) => (ctxt.encode_seq(op)?, None),
+                PrustiBuiltin::AnySet { multiset, op } => {
+                    (ctxt.encode_any_set(multiset, op)?, None)
+                }
+                PrustiBuiltin::Map(op) => (ctxt.encode_map(op)?, None),
+                // `From` differs structurally between the numeric types; the
+                // shared operations are handled by `encode_num`.
+                PrustiBuiltin::Int(NumOp::From) => {
+                    let prim = *ctxt.e_input(0)?.expect_primitive();
+                    let val = prim.snap_to_prim(ctxt.operands[0].downcast_ty());
+                    (val.downcast_ty::<vir::Int>().upcast_ty(), None)
+                }
+                PrustiBuiltin::Int(op) => (ctxt.encode_num::<vir::Int>(op, false)?, None),
+                PrustiBuiltin::Real(NumOp::From) => {
+                    let fp_to_real = ctxt.e_input(0)?.expect_float().fp_to_real;
+                    (
+                        fp_to_real.call()(ctxt.operands[0].downcast_ty()).upcast_ty(),
+                        None,
+                    )
+                }
+                PrustiBuiltin::Real(op) => (ctxt.encode_num::<vir::Perm>(op, true)?, None),
+                PrustiBuiltin::Float(op, fl) => {
+                    let domain = ctxt.float_domain(fl)?;
+                    let operand = ctxt.operands[0].downcast_ty();
+                    (
+                        match op {
+                            FloatOp::IsNan => domain.fp_is_nan.call()(operand).upcast_ty(),
+                            FloatOp::IsInfinite => {
+                                domain.fp_is_infinite.call()(operand).upcast_ty()
+                            }
+                            FloatOp::Abs => domain.fp_abs.call()(operand).upcast_ty(),
+                        },
+                        None,
+                    )
+                }
+                PrustiBuiltin::Addr(op) => ctxt.encode_addr_op(op)?,
+                PrustiBuiltin::Rep(op) => (ctxt.encode_rep_op(op)?, None),
+            };
+        // TODO IM frame should be filled with SOMETHING
+        Ok(((), PrustiBuiltinExpr { snap, frame }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -1161,13 +1204,15 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
         });
     }
 
-    fn encode_addr_op(&mut self, op: AddrOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
+    fn encode_addr_op(
+        &mut self,
+        op: AddrOp,
+    ) -> EncResult<'vir, (ExprRet<'vir, vir::Snap>, Option<ExprRet<'vir, vir::Set>>)> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
         let addr_ty = self.e_input(0)?.expect_addr();
         let opand = self.operands[0].downcast_ty::<vir::CSnap>();
         Ok(match op {
             AddrOp::ToRef => {
-                // TODO this is the source of the issues - I think we can't encode both ALoc and ALocT literally identicaly
                 let tyval = addr_ty.type_access(opand);
                 let addr = addr_ty.addr_access(opand);
                 // TODO is this an invariant?
@@ -1182,11 +1227,32 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 } else {
                     im_state.get_snap_idn.call()(tyval, self.curr_im_state, addr)
                 };
-                // TODO it's a bit unfortunate that we have to do this given that the immref
-                // snapshot takes a generic s_Param
-                self.wrap_in_immref(addr_ty.mk_referent_concrete(snap), Some(addr))?
+                let ref_snap =
+                    self.wrap_in_immref(addr_ty.mk_referent_concrete(snap), Some(addr))?;
+                let frame = self.vcx.mk_set_literal_expr(
+                    self.vcx.alloc_slice(&[im_state.mk_aloc_psnap_idn.call()(tyval, addr)]),
+                    vir::TYPE_PSNAP,
+                );
+                (ref_snap, Some(frame))
             }
-            _ => todo!(), // TODO to_rep, to_id
+            AddrOp::ToId => {
+                let output_decomp =
+                    RustTyDecomposition::from_ty(self.sig.output(), self.args.context());
+                let output_caster =
+                    self.deps
+                        .require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                            param: RustTyDecomposition::param(),
+                            concrete: output_decomp,
+                        }))?;
+                let tyval = addr_ty.type_access(opand);
+                let addr = addr_ty.addr_access(opand);
+                (
+                    output_caster.cast_to_caller_ctx(
+                        im_state.mk_aloc_psnap_idn.call()(tyval, addr).upcast_ty(),
+                    ),
+                    None,
+                )
+            }
         })
     }
 
@@ -1417,11 +1483,42 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
     // (Interior Mutability)
 
     // TODO should this reutrn a snap or a rep?
-    fn encode_rep_op(&mut self, op: RepOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
+    fn encode_rep_op(
+        &mut self,
+        op: RepOp,
+    ) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
         Ok(match op {
             RepOp::FromAddr => {
-                todo!()
+                let arg = self.operands[0];
+                let arg_addr_ty = self.e_input(0)?.expect_addr();
+                let arg_addr = arg_addr_ty.addr_access(arg.downcast_ty());
+                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+                let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+                if self.is_partial {
+                    self.handle_partial_op_error(
+                        "application.precondition:assertion.false",
+                        "insufficient capability to guarantee mutable access to target",
+                        self.span,
+                    );
+                    im_caps.get_rep_partial_idn.call()(
+                        arg_addr_ty.type_access(arg.downcast_ty()),
+                        self.curr_im_state,
+                        arg_addr_ty.addr_access(arg.downcast_ty()),
+                    )
+                    .upcast_ty()
+                } else {
+                    im_state.mk_rep_idn.call()(
+                        self.curr_im_state,
+                        arg_addr,
+                        im_state.get_snap_idn.call()(
+                            arg_addr_ty.type_access(arg.downcast_ty()),
+                            self.curr_im_state,
+                            arg_addr,
+                        ),
+                    )
+                    .upcast_ty()
+                }
             }
             RepOp::FromRef => {
                 let arg = self.operands[0].downcast_ty();

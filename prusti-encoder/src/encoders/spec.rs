@@ -72,8 +72,8 @@ where
                     ty::TyKind::Adt(_, args) => args
                         .types()
                         .next()
-                        .expect("abstract field must return Addr<T>"),
-                    _ => panic!("abstract field must return Addr<T>"),
+                        .expect("abstract field must return ALocT"),
+                    _ => panic!("abstract field must return ALocT"),
                 };
 
                 AbstractField {

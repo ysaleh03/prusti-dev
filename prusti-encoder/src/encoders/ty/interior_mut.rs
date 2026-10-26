@@ -407,9 +407,10 @@ impl TaskEncoder for ImTyEnc {
 
                     if let Some(def_id) = data.data {
                         with_type_im_spec(def_id, |abs_fields, capabilities| {
-
                             // TODO encode capability axioms
                             // TODO encode non-aliasing axiom (we can maybe skip non-aliasing between abstract & public fields)
+                            //
+                            // TODO what checks do we assume have already occured for the condition?
                         })
                     }
                 }

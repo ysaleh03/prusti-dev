@@ -720,7 +720,7 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
                 //     }];
                 //     TySpecifics::mk_structlike((), fields)
                 // }
-                "Addr" => {
+                "ALocT" => {
                     let data = Self::from_struct(None, adt.non_enum_variant());
                     let dyn_ty = data.fields[1].ty;
                     TySpecifics::mk_addr(RustAddrData {

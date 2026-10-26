@@ -536,8 +536,8 @@ impl<'vir, D: TyDatas<'vir>> Debug for TySpecifics<'vir, D> {
             Self::StructLike(arg0) => f.debug_tuple("StructLike").field(arg0).finish(),
             Self::EnumLike(arg0) => f.debug_tuple("EnumLike").field(arg0).finish(),
             Self::Builtin(arg0) => f.debug_tuple("Builtin").field(arg0).finish(),
-            Self::Addr(arg0) => f.debug_tuple("Addr").field(arg0).finish(),
-            Self::AddrDyn(arg0) => f.debug_tuple("AddrDyn").field(arg0).finish(),
+            Self::Addr(arg0) => f.debug_tuple("ALocT").field(arg0).finish(),
+            Self::AddrDyn(arg0) => f.debug_tuple("ALoc").field(arg0).finish(),
             Self::Rep(arg0) => f.debug_tuple("Rep").field(arg0).finish(),
         }
     }

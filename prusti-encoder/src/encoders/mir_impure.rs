@@ -2583,7 +2583,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     span,
                 ));
             }
-            let expr = self
+            let (expr, _) = self
                 .encode_prusti_builtin(
                     builtin,
                     func_def_id,

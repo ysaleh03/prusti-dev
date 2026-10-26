@@ -443,53 +443,29 @@ mod private_shared {
 
     /// A type to represent abstract addresses on the heap of type `T`,
     /// usable only in mendel specifications and ghost code.
-    pub struct Addr<'a, T: ?Sized>(PhantomData<&'a T>, ALoc);
+    pub struct ALocT<'a, T: ?Sized>(PhantomData<&'a T>, ALoc);
 
-    impl<'a, T: ?Sized> Clone for Addr<'a, T> {
+    impl<'a, T: ?Sized> Clone for ALocT<'a, T> {
         fn clone(&self) -> Self {
             unimplemented!()
         }
     }
-    impl<'a, T: ?Sized> Copy for Addr<'a, T> {}
+    impl<'a, T: ?Sized> Copy for ALocT<'a, T> {}
 
-    impl<'a, T: ?Sized> Addr<'a, T> {
-        pub fn exclusive(l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-
-        pub fn shared(l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-
-        pub fn local_read(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-
-        pub fn local_write(l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-
-        pub fn atomic_read(ld: Addr<'a, T>, l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-
-        pub fn atomic_write(l: Addr<'a, T>) -> bool {
-            unimplemented!()
-        }
-    }
-
-    impl<'a, T: ?Sized> Addr<'a, T> {
+    impl<'a, T: ?Sized> ALocT<'a, T> {
         pub fn to_ref(self) -> &'a T {
-            unimplemented!()
-        }
-
-        pub fn to_dyn(self) -> ALoc {
             unimplemented!()
         }
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub struct ALoc;
+
+    impl ALoc {
+        pub fn new<'a, T>(_: ALocT<'a, T>) -> Self {
+            unimplemented!()
+        }
+    }
 
     pub trait DropFrame<T: ?Sized> {
         fn drop_frame(&self) -> Set<ALoc>;
@@ -505,11 +481,11 @@ mod private_shared {
     impl<T: ?Sized> Copy for Rep<T> {}
 
     impl<T: ?Sized> Rep<T> {
-        pub fn new_ref(_: &mut T) -> Self {
+        pub fn from_ref(_: &mut T) -> Self {
             unimplemented!()
         }
 
-        pub fn new_addr<'a>(_: Addr<'a, T>) -> Self {
+        pub fn from_loc<'a>(_: ALocT<'a, T>) -> Self {
             unimplemented!()
         }
     }
@@ -734,15 +710,15 @@ mod private {
         }
     }
 
-    // Addr
+    // ALocT
 
-    /// Addr equality
-    impl<'a, T> PartialEq for Addr<'a, T> {
+    /// ALocT equality
+    impl<'a, T> PartialEq for ALocT<'a, T> {
         fn eq(&self, _: &Self) -> bool {
             panic!()
         }
     }
-    impl<'a, T> Eq for Addr<'a, T> {}
+    impl<'a, T> Eq for ALocT<'a, T> {}
 
     // Rep
 

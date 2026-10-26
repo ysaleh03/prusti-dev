@@ -46,6 +46,29 @@ pub struct FunctionCallEncOutput<'vir> {
 // we might call a function in pure-partial context if we want to check stability
 
 impl<'vir> FunctionCallEncOutput<'vir> {
+    pub fn call_frame<Curr, Next>(
+        &self,
+        mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
+    ) -> Option<vir::ExprGen<'vir, Curr, Next, vir::Set>> {
+        let frame_ref = self.function.frame_ref?;
+        assert_eq!(
+            self.inputs.len() + usize::from(self.is_pure_unstable),
+            args.len()
+        );
+        for ((arg, caster), ty) in args
+            .iter_mut()
+            .zip(self.inputs.iter())
+            .zip(self.arg_tys.iter())
+        {
+            *arg = caster.cast_to_callee_ctx(*arg);
+        }
+        Some(frame_ref.call()(
+            &args,
+            self.ty_args.get_ty(),
+            self.ty_args.get_const(),
+        ))
+    }
+
     /// Calls the definitional function `f_`, used in axioms.
     pub fn call_total<Curr, Next>(
         &self,
@@ -77,11 +100,7 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         mut args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         assert_eq!(
-            if self.is_pure_unstable {
-                self.inputs.len() + 1
-            } else {
-                self.inputs.len()
-            },
+            self.inputs.len() + usize::from(self.is_pure_unstable()),
             args.len()
         );
         for ((arg, caster), ty) in args
@@ -89,7 +108,12 @@ impl<'vir> FunctionCallEncOutput<'vir> {
             .zip(self.inputs.iter())
             .zip(self.arg_tys.iter())
         {
-            *arg = caster.cast_to_callee_ctx(ty.dummy_ref_address(*arg));
+            // TODO this is going to become a problem for pure_unstable calls
+            *arg = caster.cast_to_callee_ctx(if self.is_pure_unstable() {
+                ty.dummy_ref_address(*arg)
+            } else {
+                *arg
+            });
         }
         let call = function.call()(&args, self.ty_args.get_ty(), self.ty_args.get_const());
         self.output.cast_to_caller_ctx(call)
@@ -369,6 +393,8 @@ impl TaskEncoder for FunctionEnc {
             // This means that we can't always require the stability-check version of the function for impure contexts
             if is_pure_unstable {
                 // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
+                // TODO we could make the syntactic check similar to pure functions, but simply calculate the footpritn of
+                // the function body and check that the reads-clause is a superset
                 assert!(expr.is_none());
 
                 if spec.reads.pure.is_empty() {

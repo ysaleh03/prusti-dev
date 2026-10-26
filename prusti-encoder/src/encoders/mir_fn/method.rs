@@ -396,6 +396,25 @@ impl TaskEncoder for MethodEnc {
 
             match proc_kind {
                 ProcKind::PureUnstable => {
+                    // TODO to encode/check capability annotation conditions, we need to be able to
+                    // generate the methods to do the relevant checks while supplying a frame that is
+                    // computed from the body
+                    //
+                    // there are a few ways I imagine we could do this.
+                    //
+                    // 1) add a special annotation on pure-unstable functions that tells the verifier to
+                    // compute the frame of a function from its body and label stability conditions with this
+                    //
+                    // 2) force manual annotation of frames for stability conditions/force the stability condition
+                    //    to be a pure-unstable function rather than an arbitrary expression
+                    //
+                    // 3) do some kind of ad-hoc check for stability conditions
+                    //
+                    // TODO each pure-unstable function should have a check in its precondition that succeeds only if the
+                    // footprint computed from the function body (if there is one) is a subset of the result of calling
+                    // the reads-clause computing function
+                    // NOTE computing the footprint would be done by the function encoder?
+
                     assert!(spec.modifies.pure.is_empty());
                     let none_modifiable_ex = vcx
                         .mk_eq_expr(modifiable_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
@@ -416,7 +435,10 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_bool::<true>(),
                     );
 
-                    // A trivial precondition that checks stability of the reads-clause
+                    // A trivial precondition that checks stability of the reads-clause w.r.t. the
+                    // function precondition and argument types
+                    // TODO this would be replaced with the encoding of the reads-clause as its own pure-unstable
+                    // function
                     cap_pres.push(frame_ex);
 
                     let function_enc = deps.require_ref::<FunctionEnc>(def_id)?;
@@ -451,19 +473,28 @@ impl TaskEncoder for MethodEnc {
 
                     // This method forces Viper to check that the reads-clause is self-framing, i.e. that it only
                     // reads from unstable memory locations that are themselves described by the reads-clause
-                    methods.push(vcx.mk_method(
-                        self_frame_idn,
-                        (
-                            im_state.state_ref_decl,
-                            &args,
-                            generics.ty_decls(),
-                            generics.const_decls(),
+                    // TODO replace this check with a subset check
+                    methods.push(
+                        vcx.mk_method(
+                            self_frame_idn,
+                            (
+                                im_state.state_ref_decl,
+                                &args,
+                                generics.ty_decls(),
+                                generics.const_decls(),
+                            ),
+                            &[],
+                            vcx.alloc_slice(
+                                &pres
+                                    .iter()
+                                    .map(|pre| *pre)
+                                    .chain([im_state_owned, reads_stable, frame_ex])
+                                    .collect::<Vec<_>>(),
+                            ),
+                            &[],
+                            None,
                         ),
-                        &[],
-                        &vcx.alloc([im_state_owned, reads_stable, frame_ex])[..],
-                        &[],
-                        None,
-                    ));
+                    );
                 }
                 ProcKind::Method => {
                     assert!(spec.reads.pure.is_empty());

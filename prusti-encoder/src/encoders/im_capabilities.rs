@@ -89,7 +89,7 @@ impl TaskEncoder for ImCapEnc {
                     vir::TYPE_IMSTATE,
                     vir::TYPE_INT,
                     vir::TYPE_REF,
-                    vir::TYPE_PSNAP
+                    vir::TYPE_PSNAP,
                 ),
                 vir::TYPE_BOOL,
             );
@@ -334,7 +334,11 @@ impl TaskEncoder for ImCapEnc {
                 vcx.alloc_slice(&[stable_write_idn.call()(tyval_ex, state_ex, addr_ex)]),
                 &[],
                 None,
-                None,
+                Some(im_state.mk_rep_idn.call()(
+                    state_ex,
+                    addr_ex,
+                    im_state.get_snap_idn.call()(tyval_ex, state_ex, addr_ex),
+                )),
             ));
 
             // Domain

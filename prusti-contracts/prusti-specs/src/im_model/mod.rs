@@ -3,7 +3,7 @@
 //! Usage documentation can be found in the corresponding macro definition.
 //!
 //! Given a `#[im_model]` attributed type `T` with fields `f0: Tf0`, `f1: Tf1`,
-//! ... `fn: Tfn`, generates a function of type Addr<T> -> Addr<Tf0> for each
+//! ... `fn: Tfn`, generates a function of type ALocT<T> -> ALocT<Tf0> for each
 //! field. The implementation is `unimplemented!()`, `#[pure]` and `#[trusted]`
 use super::parse_quote_spanned;
 use crate::specifications::preparser::parse_prusti;
@@ -57,12 +57,12 @@ pub fn rewrite(
         #[trusted]
         #[pure_memory]
         #[prusti::im_model_field]
-        fn this<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #self_ty>;
+        fn this<#new_lifetime>(&self) -> ::prusti_contracts::ALocT<#new_lifetime, #self_ty>;
     });
     impl_items.push(parse_quote! {
         #[prusti::spec_only]
         #[prusti::im_model_field = #trait_name]
-        fn this<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #self_ty> {
+        fn this<#new_lifetime>(&self) -> ::prusti_contracts::ALocT<#new_lifetime, #self_ty> {
             unimplemented!("ImModels can only be used in specifications")
         }
     });
@@ -75,12 +75,12 @@ pub fn rewrite(
             #[trusted]
             #[pure_memory]
             #[prusti::im_model_field]
-            fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty>;
+            fn #name<#new_lifetime>(&self) -> ::prusti_contracts::ALocT<#new_lifetime, #field_ty>;
         });
         impl_items.push(parse_quote_spanned! {field.span()=>
             #[prusti::spec_only]
             #[prusti::im_model_field = #trait_name]
-            fn #name<#new_lifetime>(&self) -> ::prusti_contracts::Addr<#new_lifetime, #field_ty> {
+            fn #name<#new_lifetime>(&self) -> ::prusti_contracts::ALocT<#new_lifetime, #field_ty> {
                 unimplemented!("ImModels can only be used in specifications")
             }
 
@@ -122,7 +122,7 @@ pub fn rewrite(
             #[prusti::capable_addr]
             #[prusti::capability = #capability_attr]
             #[prusti::spec_id = #spec_id]
-            fn #addr_name<'a>(&'a self) -> ::prusti_contracts::Addr<'a, #ty>;
+            fn #addr_name<'a>(&'a self) -> ::prusti_contracts::ALocT<'a, #ty>;
         })?);
         impl_items.push(syn::parse2(quote! {
             #[prusti::spec_only]
@@ -137,7 +137,7 @@ pub fn rewrite(
             #[prusti::capable_addr]
             #[prusti::capability = #capability_attr]
             #[prusti::spec_id = #spec_id]
-            fn #addr_name<'a>(&'a self) -> ::prusti_contracts::Addr<'a, #ty> {
+            fn #addr_name<'a>(&'a self) -> ::prusti_contracts::ALocT<'a, #ty> {
                 #addr
             }
         })?);

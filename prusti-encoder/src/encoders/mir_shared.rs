@@ -24,6 +24,10 @@ use prusti_rustc_interface::{
 type ExprOutput<'vir, Enc: PureRvalueEnc<'vir>> =
     vir::ExprGenSnap<'vir, Enc::ExprCurr, Enc::ExprNext>;
 
+#[allow(type_alias_bounds)]
+type ExprOutputSet<'vir, Enc: PureRvalueEnc<'vir>> =
+    vir::ExprGenSet<'vir, Enc::ExprCurr, Enc::ExprNext>;
+
 pub(crate) type EncodeResult<'vir, T, E> = Result<T, EncodeFullError<'vir, E>>;
 
 #[allow(type_alias_bounds)]
@@ -221,18 +225,22 @@ pub(crate) trait PureRvalueEnc<'vir> {
     /// Encodes a call to a `prusti_contracts` builtin. Returns `None` for the
     /// pure-only builtins (`forall`/`exists`/`spec_block`/mode markers), which
     /// the pure encoder handles itself.
+    /// TODO should this return a frame (if there is one)?
     fn encode_prusti_builtin(
         &mut self,
         builtin: PrustiBuiltin,
         def_id: DefId,
         gargs: GArgs<'vir>,
         args: &[Spanned<mir::Operand<'vir>>],
-        // TODO make this not an option and rely on laziness instead??
         curr_im_state: vir::ExprGen<'vir, Self::ExprCurr, Self::ExprNext, vir::ImState>,
         span: Span,
         ctxt: &Self::EncodePlaceCtxt,
         is_partial: bool,
-    ) -> EncodeResult<'vir, Option<ExprOutput<'vir, Self>>, Self::Encoder> {
+    ) -> EncodeResult<
+        'vir,
+        Option<(ExprOutput<'vir, Self>, Option<ExprOutputSet<'vir, Self>>)>,
+        Self::Encoder,
+    > {
         if matches!(builtin, PrustiBuiltin::Spec(_)) {
             return Ok(None);
         }
@@ -255,7 +263,10 @@ pub(crate) trait PureRvalueEnc<'vir> {
             .iter()
             .map(|arg| self.encode_operand_snap(&arg.node, ctxt))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(expr.apply(self.vcx(), &operands, curr_im_state)))
+        Ok(Some((
+            expr.apply(self.vcx(), &operands, curr_im_state),
+            expr.apply_frame(self.vcx(), &operands, curr_im_state),
+        )))
     }
 
     fn encode_aggregate_snap(

@@ -36,7 +36,7 @@ pub enum MirPureEncError {
     // UnsupportedTerminator,
 }
 
-// TODO do we fold the interior mutability spec encoder into here?
+// TODO do we want this encoder to also compute the footprint of the expression?
 
 pub type ExprInput<'vir> = (
     DefId,
@@ -59,6 +59,7 @@ type SpecClosure<'vir> = (
 pub struct MirPureEncOutput<'vir> {
     pub inputs: Vec<mir::Local>,
     pub expr: ExprRet<'vir>,
+    pub frame: ExprRetAny<'vir, vir::Set>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -139,7 +140,7 @@ impl TaskEncoder for MirPureEnc {
         let (_, kind, def_id, gargs, is_partial, is_unstable) = *task_key;
 
         tracing::debug!("encoding {def_id:?}");
-        let (inputs, expr) = vir::with_vcx(move |vcx| {
+        let (inputs, expr, frame) = vir::with_vcx(move |vcx| {
             // The bodies are encoded generically, so they are fetched at the
             // compiler's identity arguments. The one exception is a trait's
             // specification encoded for an `impl` of that trait, which is
@@ -182,7 +183,7 @@ impl TaskEncoder for MirPureEnc {
                 is_partial,
                 is_unstable,
             );
-            let expr_inner = vcx.with_span(body_span, |_| {
+            let (expr_inner, frame) = vcx.with_span(body_span, |_| {
                 if let PureKind::SpecBlock(block) = kind {
                     enc.encode_spec_block(block)
                 } else {
@@ -232,17 +233,22 @@ impl TaskEncoder for MirPureEnc {
                 )
             });
             add_debug_note!(expr.debug_info, "Inner expr: {}", expr_inner.debug_info);
-            Ok((inputs, expr))
+            Ok((inputs, expr, frame))
         })?;
         tracing::debug!("finished {def_id:?}");
 
-        Ok(((), MirPureEncOutput { inputs, expr }))
+        Ok(((), MirPureEncOutput {
+            inputs,
+            expr,
+            frame,
+        }))
     }
 }
 
 #[derive(Debug, Default)]
 struct Update<'vir> {
     binds: Vec<UpdateBind<'vir>>,
+    frame: Vec<ExprRetAny<'vir, vir::Set>>,
     versions: FxHashMap<mir::Local, Version<'vir>>,
 }
 
@@ -290,6 +296,7 @@ impl<'vir> Update<'vir> {
     fn merge_inner(self, newer: Self) -> Self {
         Self {
             binds: self.binds.into_iter().chain(newer.binds).collect(),
+            frame: self.frame.into_iter().chain(newer.frame).collect(),
             versions: self.versions.into_iter().chain(newer.versions).collect(),
         }
     }
@@ -300,6 +307,8 @@ impl<'vir> Update<'vir> {
         }
     }
 }
+
+// TODO we could add the footprint as a vec here and then pull it out to compute the footprint
 
 struct Enc<'vir: 'enc, 'enc> {
     vcx: &'vir vir::VirCtxt<'vir>,
@@ -395,6 +404,20 @@ impl<'vir: 'enc, 'enc> PureRvalueEnc<'vir> for Enc<'vir, 'enc> {
 }
 
 impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
+    fn empty_frame(&self) -> ExprRetAny<'vir, vir::Set> {
+        self.vcx
+            .mk_set_literal_expr(&[], vir::TYPE_PSNAP)
+            .upcast_ty()
+    }
+
+    fn frame_expr(&self, frame: &[ExprRetAny<'vir, vir::Set>]) -> ExprRetAny<'vir, vir::Set> {
+        frame.iter().cloned().fold(self.empty_frame(), |acc, expr| {
+            self.vcx
+                .mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, expr)
+                .downcast_ty()
+        })
+    }
+
     fn new(
         vcx: &'vir vir::VirCtxt<'vir>,
         encoding_depth: usize,
@@ -548,7 +571,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
 
     fn reify_binds<T: CompType>(
         &self,
-        update: Update<'vir>,
+        update: &Update<'vir>,
         expr: ExprRetAny<'vir, T>,
     ) -> ExprRetAny<'vir, T> {
         update.binds.iter().rfold(expr, |expr, bind| match bind {
@@ -597,7 +620,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         self.mk_local_ex(*local, version)
                     })
                     .collect::<Vec<_>>();
-                self.reify_binds(update, tuple_ref.mk_cons(self.vcx, tuple_args))
+                self.reify_binds(&update, tuple_ref.mk_cons(self.vcx, tuple_args))
             })
             .unwrap_or_else(|| tuple_ref.mk_unreachable(self.vcx))
     }
@@ -608,7 +631,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         end: mir::BasicBlock,
         local_count: usize,
         result_local: mir::Local,
-    ) -> EncodeResult<'vir, ExprRet<'vir>, MirPureEnc> {
+    ) -> EncodeResult<'vir, (ExprRet<'vir>, ExprRetAny<'vir, vir::Set>), MirPureEnc> {
         let mut init = Update::new();
         let v0 = Version::default();
         // TODO: what about locals which never have StorageLive (i.e. always_live)?
@@ -629,16 +652,22 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         // `match` on an uninhabited type): its result is the unreachable snapshot.
         let Some(res) = init.merge(update) else {
             let result_ty = self.body.local_decls[result_local].ty;
-            return Ok(self.ty_use(result_ty).unreachable_to_snap());
+            return Ok((
+                self.ty_use(result_ty).unreachable_to_snap(),
+                self.empty_frame(),
+            ));
         };
         let ret_version = res.versions.get(&result_local).copied().unwrap_or(v0);
         self.versions_used.insert((result_local, ret_version.index));
 
         let ex = self.mk_local_ex(result_local, ret_version);
-        Ok(self.reify_binds(res, ex))
+        let frame = self.reify_binds(&res, self.frame_expr(&res.frame));
+        Ok((self.reify_binds(&res, ex), frame))
     }
 
-    fn encode_body(&mut self) -> EncodeResult<'vir, ExprRet<'vir>, MirPureEnc> {
+    fn encode_body(
+        &mut self,
+    ) -> EncodeResult<'vir, (ExprRet<'vir>, ExprRetAny<'vir, vir::Set>), MirPureEnc> {
         assert!(
             !graph::is_cyclic(&self.body.basic_blocks),
             "MIR pure encoding does not support loops"
@@ -654,7 +683,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
     fn encode_spec_block(
         &mut self,
         block: mir::BasicBlock,
-    ) -> EncodeResult<'vir, ExprRet<'vir>, MirPureEnc> {
+    ) -> EncodeResult<'vir, (ExprRet<'vir>, ExprRetAny<'vir, vir::Set>), MirPureEnc> {
         let Some(mir::TerminatorKind::Call { destination, .. }) = self.body.basic_blocks[block]
             .terminator
             .as_ref()
@@ -696,6 +725,8 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             stmt_update = stmt_update.merge_inner(newer);
         }
 
+        // TODO I think this is the only thing that will have a stability condition as far as we are
+        // concerned.
         // then walk terminator
         let term = self.body[curr].terminator.as_ref().unwrap();
         let location = mir::Location {
@@ -775,7 +806,18 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     .deps
                     .require_dep::<ViperTupleEnc>((self.def_id, mod_tys))
                     .unwrap();
+                let mut branch_frames = updates
+                    .iter()
+                    .map(|update| {
+                        update
+                            .as_ref()
+                            .map(|update| self.frame_expr(&update.frame))
+                            .unwrap_or_else(|| self.empty_frame())
+                    })
+                    .collect::<Vec<_>>();
                 let otherwise_update = updates.pop().unwrap();
+                let otherwise_frame = branch_frames.pop().unwrap();
+
                 let phi_expr = targets.iter().zip(updates).fold(
                     self.reify_branch(&tuple_ref, &mod_locals, &new_curr_ver, otherwise_update),
                     |expr, ((cond_val, _target), branch_update)| {
@@ -794,6 +836,19 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         )
                     },
                 );
+                let frame_expr = targets.iter().zip(branch_frames).fold(
+                    otherwise_frame,
+                    |expr, ((cond_val, _target), branch_frame)| {
+                        self.vcx.mk_ternary_expr(
+                            self.vcx.mk_eq_expr(
+                                discr_ty_out.snap_to_prim(discr_expr),
+                                discr_ty_out.expr_from_bits(discr_ty, cond_val).lift(),
+                            ),
+                            branch_frame,
+                            expr,
+                        )
+                    },
+                );
 
                 // assign tuple into a `phi` variable
                 let mut phi_idx = Version {
@@ -808,6 +863,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 self.phi_ctr += 1;
                 let mut phi_update = Update::new();
                 phi_update.binds.push(UpdateBind::Phi(phi_idx, phi_expr));
+                phi_update.frame.push(frame_expr);
 
                 // update locals by destructuring `phi` variable
                 // TODO: maybe this is unnecessary, we could instead use tuple
@@ -935,6 +991,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
 
                 let func_ty = func.ty(self.body, self.vcx.tcx());
                 let (def_id, arg_tys) = RustSignature::get_def_id_and_caller_substs(func_ty);
+                let mut call_frame = None;
                 let expr = {
                     // A fn call in pure can only be one of two kinds: a
                     // call to another pure function, or a call to a prusti
@@ -957,8 +1014,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     } else if let Some(idx) = get_abstract_field_idx(def_id) {
                         let parent_ty =
                             RustTyDecomposition::from_ty(arg_tys[0].expect_ty(), self.context()).ty;
-                        let idx_ = idx;
-
                         let return_ty = RustTyDecomposition::from_ty(
                             destination.ty(&self.body.local_decls, self.vcx.tcx()).ty,
                             self.context(),
@@ -991,6 +1046,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         )
                         .upcast_ty())
                     } else if let Some(builtin) = PrustiBuiltin::new(def_id, self.gargs(arg_tys)) {
+                        // TODO IM compute frame from e.g. to_ref call
                         let im_state_ex = self.mk_lazy_im_state_expr();
                         match self.encode_prusti_builtin(
                             builtin,
@@ -1002,7 +1058,10 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             &new_curr_ver,
                             self.is_partial,
                         )? {
-                            Some(expr) => Ok(expr),
+                            Some((expr, frame)) => {
+                                call_frame = frame;
+                                Ok(expr)
+                            }
                             // The pure-only builtins (quantifiers, spec blocks,
                             // mode markers).
                             None => {
@@ -1032,6 +1091,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                             .map(|arg| self.encode_operand_snap(&arg.node, &new_curr_ver))
                             .chain(is_pure_unstable.then(|| Ok(im_state_ex.upcast_ty())))
                             .collect::<Result<Vec<_>, _>>()?;
+                        call_frame = pure_func.call_frame(snap_args.clone());
                         Ok(if self.is_partial {
                             let name = self.vcx.tcx().def_path_str(def_id);
                             let span = self.current_span();
@@ -1063,6 +1123,9 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 };
 
                 let mut term_update = Update::new();
+                if let Some(frame) = call_frame {
+                    term_update.frame.push(frame);
+                }
                 assert!(destination.projection.is_empty());
                 self.bump_version(&mut term_update, destination.local, expr?, location);
                 term_update.add_to_map(&mut new_curr_ver);

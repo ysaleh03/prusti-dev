@@ -266,8 +266,8 @@ impl AstRewriter {
             #[prusti::capable_addr]
             #[prusti::capability = #capability]
             #[prusti::spec_id = #spec_id_str]
-            fn #addr_name<'a>(&'a self) -> Addr<'a, #addr_ty> {
-                let val: Addr<'a, #addr_ty> = #addr;
+            fn #addr_name<'a>(&'a self) -> ALocT<'a, #addr_ty> {
+                let val: ALocT<'a, #addr_ty> = #addr;
                 val
             }
         };
