@@ -822,7 +822,6 @@ impl TaskEncoder for ImTyEnc {
                                     rhs_capability_ex,
                                 )
                                 .downcast_ty();
-                            println!("capability idx {:?}", cap_idx);
                             axioms.push(vcx.mk_domain_axiom(
                                 vir::vir_format_identifier!(
                                     vcx,
@@ -1059,9 +1058,6 @@ impl TaskEncoder for ImTyUseEnc {
                                         .iter()
                                         .map(|field| {
                                             let field_sig = RustSignature::new(field.def_id);
-                                            println!("params: {:?}", field_sig.gparams);
-                                            println!("field sig: {:?}", field_sig.output);
-                                            println!("args: {:?}", task_key.args);
                                             let field_ty =
                                                 field_sig.output.decompose_normalize(task_key.args);
                                             deps.require_dep::<TyExprEnc>(field_ty).unwrap()

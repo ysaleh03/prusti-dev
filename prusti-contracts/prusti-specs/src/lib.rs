@@ -1246,8 +1246,6 @@ pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
             let spec_id_str = spec_id.to_string();
             let (model_trait, model_impl, wd_impl) = im_model::rewrite(&item)?;
 
-            println!("wd_impl {:?}", wd_impl.to_token_stream().to_string());
-
             return Ok(quote_spanned! {item.span()=>
                 #[prusti::im_model_trait]
                 #[prusti::spec_id = #spec_id_str]
