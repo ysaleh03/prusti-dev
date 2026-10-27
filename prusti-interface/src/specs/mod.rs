@@ -85,7 +85,7 @@ struct TypeSpecRefs {
     trusted: bool,
     type_model: Option<(String, LocalDefId)>,
     im_fields: Vec<LocalDefId>,
-    im_capabilities: Vec<(LocalDefId, LocalDefId, typed::CapabilityKind)>,
+    im_capabilities: Vec<(LocalDefId, LocalDefId, typed::CapabilityKind, bool)>,
     countexample_print: Vec<(Option<String>, LocalDefId)>,
 }
 
@@ -95,6 +95,7 @@ struct CapabilitySpecRefs {
     side_condition: Option<LocalDefId>,
     addr_projection: Option<LocalDefId>,
     capability: Option<typed::CapabilityKind>,
+    implied_by_mut_self: bool,
 }
 
 /// Specification collector, applied as a visitor over the crate HIR.
@@ -115,7 +116,7 @@ pub struct SpecCollector<'a, 'tcx> {
     loop_specs: Vec<LocalDefId>,
     loop_variants: Vec<LocalDefId>,
     type_specs: FxHashMap<LocalDefId, TypeSpecRefs>,
-    capability_specs: FxHashMap<SpecificationId, CapabilitySpecRefs>,
+    capability_specs: Vec<(SpecificationId, CapabilitySpecRefs)>,
     prusti_assertions: Vec<LocalDefId>,
     prusti_assumptions: Vec<LocalDefId>,
     prusti_refutations: Vec<LocalDefId>,
@@ -132,7 +133,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             loop_specs: vec![],
             loop_variants: vec![],
             type_specs: FxHashMap::default(),
-            capability_specs: FxHashMap::default(),
+            capability_specs: Vec::new(),
             prusti_assertions: vec![],
             prusti_assumptions: vec![],
             prusti_refutations: vec![],
@@ -165,7 +166,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
     }
 
     fn finalize_capability_specs(&mut self) {
-        for (_, capability_spec) in self.capability_specs.drain() {
+        for (_, capability_spec) in self.capability_specs.drain(..) {
             let Some(side_condition) = capability_spec.side_condition else {
                 continue;
             };
@@ -180,7 +181,12 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                 .entry(capability_spec.type_id)
                 .or_default()
                 .im_capabilities
-                .push((side_condition, addr_projection, capability));
+                .push((
+                    side_condition,
+                    addr_projection,
+                    capability,
+                    capability_spec.implied_by_mut_self,
+                ));
         }
     }
 
@@ -472,13 +478,16 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                         .im_capabilities
                         .iter()
                         .cloned()
-                        .map(|(side_conditions, addr_projection, capability)| {
-                            CapabilitySpecification {
-                                side_conditions,
-                                addr_projection,
-                                capability,
-                            }
-                        })
+                        .map(
+                            |(side_conditions, addr_projection, capability, if_exclusive)| {
+                                CapabilitySpecification {
+                                    side_conditions,
+                                    addr_projection,
+                                    capability,
+                                    if_exclusive,
+                                }
+                            },
+                        )
                         .collect(),
                     counterexample_print: refs.countexample_print.clone(),
                 },
@@ -788,15 +797,36 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
                         .expect("capability functions must have a spec_id"),
                     def_id,
                 );
-                let capability = self
+                let capability = if let Some((_, capability)) = self
                     .capability_specs
-                    .entry(capability_id)
-                    .or_insert_with(|| CapabilitySpecRefs {
-                        type_id,
-                        side_condition: None,
-                        addr_projection: None,
-                        capability: None,
+                    .iter_mut()
+                    .find(|(spec_id, _)| *spec_id == capability_id)
+                {
+                    capability
+                } else {
+                    self.capability_specs.push((
+                        capability_id,
+                        CapabilitySpecRefs {
+                            type_id,
+                            side_condition: None,
+                            addr_projection: None,
+                            capability: None,
+                            implied_by_mut_self: false,
+                        },
+                    ));
+                    &mut self.capability_specs.last_mut().unwrap().1
+                };
+
+                let is_mut_self = tcx
+                    .fn_sig(local_id.to_def_id())
+                    .instantiate_identity()
+                    .skip_binder()
+                    .inputs()
+                    .get(0)
+                    .is_some_and(|ty| {
+                        matches!(ty.kind(), ty::TyKind::Ref(_, _, ty::Mutability::Mut))
                     });
+                capability.implied_by_mut_self = is_mut_self;
 
                 if has_prusti_attr(attrs, "capable_side_condition") {
                     capability.side_condition = Some(local_id);

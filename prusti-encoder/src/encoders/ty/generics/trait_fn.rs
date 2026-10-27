@@ -240,16 +240,19 @@ impl TaskEncoder for TraitFnEnc {
                     set_ty,
                 )
             });
-            deps.emit_output_ref(*task_key, TraitFnEncOutputRef {
-                pre_func,
-                post_func,
-                footprint_stub,
-                frame_stub,
-                call_stub_impure,
-                call_stub_pure_partial,
-                call_stub_pure_total,
-                call_stub_pure_impure,
-            })?;
+            deps.emit_output_ref(
+                *task_key,
+                TraitFnEncOutputRef {
+                    pre_func,
+                    post_func,
+                    footprint_stub,
+                    frame_stub,
+                    call_stub_impure,
+                    call_stub_pure_partial,
+                    call_stub_pure_total,
+                    call_stub_pure_impure,
+                },
+            )?;
             // The stubs' semantics are given by the impls' axioms; require the
             // trait so that its impls' condition/axiom triggers are registered
             // (foreign traits are not encoded by `encode_all_in_crate`).

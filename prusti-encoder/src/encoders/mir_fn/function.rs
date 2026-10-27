@@ -172,17 +172,20 @@ impl TaskEncoder for FunctionCallEnc {
                 deps.require_dep::<TyUsePureEnc>(ty_task)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(((), FunctionCallEncOutput {
-            function: total_ref,
-            ty_args,
-            inputs,
-            output,
-            arg_tys,
-            is_pure_unstable: crate::encoders::is_function_pure_unstable(
-                callee_def_id,
-                task_key.gargs,
-            ),
-        }))
+        Ok((
+            (),
+            FunctionCallEncOutput {
+                function: total_ref,
+                ty_args,
+                inputs,
+                output,
+                arg_tys,
+                is_pure_unstable: crate::encoders::is_function_pure_unstable(
+                    callee_def_id,
+                    task_key.gargs,
+                ),
+            },
+        ))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -286,12 +289,15 @@ impl TaskEncoder for FunctionEnc {
                 )
             });
 
-            deps.emit_output_ref(def_id, FunctionEncOutputRef {
-                partial_ref,
-                total_ref,
-                impure_ref,
-                frame_ref,
-            })?;
+            deps.emit_output_ref(
+                def_id,
+                FunctionEncOutputRef {
+                    partial_ref,
+                    total_ref,
+                    impure_ref,
+                    frame_ref,
+                },
+            )?;
 
             let spec = deps.require_dep::<MirSpecEnc>(MirSpecEncTask {
                 def_id,

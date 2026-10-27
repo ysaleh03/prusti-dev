@@ -1,7 +1,11 @@
 use task_encoder::{EncodeFullError, EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 
 use super::{
-    generics::{GArgsTy, GenericParamsEnc}, lifted::TyConstructorEnc, pure::TyPureEnc, use_inhabited::TyUseInhabitedEnc, ImTyEnc, RustParamData, RustTy, RustTyDecomposition, TySpecifics
+    ImTyEnc, RustParamData, RustTy, RustTyDecomposition, TySpecifics,
+    generics::{GArgsTy, GenericParamsEnc},
+    lifted::TyConstructorEnc,
+    pure::TyPureEnc,
+    use_inhabited::TyUseInhabitedEnc,
 };
 
 type EncResult<'vir, T> = Result<T, EncodeFullError<'vir, TyInhabitedEnc>>;

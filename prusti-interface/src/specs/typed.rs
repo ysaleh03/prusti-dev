@@ -383,6 +383,9 @@ pub struct CapabilitySpecification {
     pub side_conditions: LocalDefId,
     pub addr_projection: LocalDefId,
     pub capability: CapabilityKind,
+    /// Whether this capability is implied by a mutable receiver (`&mut self`)
+    /// rather than an immutable receiver (`&self`).
+    pub if_exclusive: bool,
 }
 
 /// The base container to store a contract of a procedure.

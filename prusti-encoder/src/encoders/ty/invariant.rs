@@ -63,11 +63,6 @@ impl TaskEncoder for TyInvariantEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-
-        // TODO remove
-        let _ = deps.require_dep::<ImTyEnc>(task_key)?;
-
-
         vir::with_vcx(|vcx| {
             let invariant = Self::invariant_fn();
             let ty = if matches!(
@@ -122,8 +117,12 @@ impl TaskEncoder for TyInvariantEnc {
                 axiom_expr,
             );
 
+            // TODO remove
+            let _ = deps.require_dep::<ImTyEnc>(task_key)?;
+
             Ok((Some(axiom), ()))
         })
+
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -244,7 +243,6 @@ impl TaskEncoder for TyUseInvariantEnc {
         task_key: &Self::TaskKey<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
     ) -> EncodeFullResult<'vir, Self> {
-
         let invariant = deps.require_ref::<TyInvariantEnc>(task_key.ty)?;
         let args = deps.require_dep::<GArgsTyEnc>(task_key.args)?;
 
@@ -263,23 +261,6 @@ impl TaskEncoder for TyUseInvariantEnc {
             snap_caster,
         };
         deps.emit_output_ref(*task_key, output_ref)?;
-
-        // No axiom should be emitted for fully generic parameters
-        if matches!(
-            task_key.ty.specifics,
-            TySpecifics::Param(RustParamData::Generic)
-        ) {
-            return Ok(((), ()));
-        }
-
-        // Ensure the relevant axioms are emitted for all nested types, e.g., if
-        // the input type is `Pair<u32, T>`, this will encode invariants for
-        // `u32` and `T` (the latter being a no-op).
-        for arg in task_key.args.args().iter().filter_map(|arg| arg.as_type()) {
-            let arg = RustTyDecomposition::from_ty(arg, task_key.args.context());
-            deps.require_ref::<TyUseInvariantEnc>(arg)?;
-        }
-
         Ok(((), ()))
     }
 }

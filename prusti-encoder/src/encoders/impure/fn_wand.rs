@@ -1,7 +1,11 @@
 use crate::encoders::{
-    pure::spec::{EncodedPledge, MirSpecEncMode, MirSpecEncTask, PledgeArgs, PledgeExpr}, ty::{
-        generics::{GArgs, GArgsTyEnc, GParams, GenericParamsEnc}, indirect::{projection_for_generalized_idx, IndirectCapsEnc, IndirectPredicatesEnc}, RustTyDecomposition
-    }, EncodeResult, ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc
+    EncodeResult, ImpureEncVisitor, MirLocalDefEncOutput, MirSpecEnc,
+    pure::spec::{EncodedPledge, MirSpecEncMode, MirSpecEncTask, PledgeArgs, PledgeExpr},
+    ty::{
+        RustTyDecomposition,
+        generics::{GArgs, GArgsTyEnc, GParams, GenericParamsEnc},
+        indirect::{IndirectCapsEnc, IndirectPredicatesEnc, projection_for_generalized_idx},
+    },
 };
 use pcg::borrow_pcg::{
     FunctionData, FunctionShape, FunctionShapeInput, FunctionShapeNode, FunctionShapeOutput,
@@ -560,12 +564,15 @@ impl TaskEncoder for WandEnc {
             })?;
             if coupled_edges.is_empty() {
                 assert!(spec.pledges.is_empty());
-                return Ok(((), WandEncOutput {
-                    function_data: task_key.data,
-                    inputs,
-                    outputs,
-                    wands: vec![],
-                }));
+                return Ok((
+                    (),
+                    WandEncOutput {
+                        function_data: task_key.data,
+                        inputs,
+                        outputs,
+                        wands: vec![],
+                    },
+                ));
             }
             let pledges = spec.pledges;
             let wands: Vec<WandData<'vir>> = coupled_edges

@@ -6,7 +6,7 @@
 //! ... `fn: Tfn`, generates a function of type ALocT<T> -> ALocT<Tf0> for each
 //! field. The implementation is `unimplemented!()`, `#[pure]` and `#[trusted]`
 use super::parse_quote_spanned;
-use crate::specifications::preparser::parse_prusti;
+use crate::specifications::{common::SpecificationIdGenerator, preparser::parse_prusti};
 use proc_macro2::TokenTree;
 use quote::quote;
 use syn::{parse_quote, spanned::Spanned};
@@ -15,8 +15,7 @@ use uuid::Uuid;
 /// See module level documentation
 pub fn rewrite(
     item_struct: &syn::ItemStruct,
-    spec_id: &str,
-) -> syn::Result<(syn::ItemTrait, syn::ItemImpl)> {
+) -> syn::Result<(syn::ItemTrait, syn::ItemImpl, syn::ItemImpl)> {
     let item_ident = &item_struct.ident;
     let new_lifetime = generate_lifetime(item_struct);
 
@@ -37,13 +36,13 @@ pub fn rewrite(
             return Err(syn::Error::new(
                 item_struct.span(),
                 "im_model fields must be named",
-            ))
+            ));
         }
         _ => {
             return Err(syn::Error::new(
                 item_struct.span(),
                 "im_model must have at least one field",
-            ))
+            ));
         }
     };
 
@@ -52,6 +51,8 @@ pub fn rewrite(
 
     let mut trait_items = vec![];
     let mut impl_items = vec![];
+    let mut wd_items = vec![];
+    let mut capability_spec_ids = SpecificationIdGenerator::new();
 
     trait_items.push(parse_quote! {
         #[trusted]
@@ -98,6 +99,7 @@ pub fn rewrite(
         })
         .enumerate()
     {
+        let capability_spec_id = capability_spec_ids.generate().to_string();
         let input = parse_capable(attr)?;
         let capability = input.capability.to_string();
         let side_condition = input
@@ -109,25 +111,26 @@ pub fn rewrite(
         );
         let side_name = syn::Ident::new(&format!("{name}_side_condition"), attr.span());
         let addr_name = syn::Ident::new(&format!("{name}_addr"), attr.span());
+        let wd_name = syn::Ident::new(&format!("{name}_side_condition_wd"), attr.span());
         let ty = input.ty;
         let addr = input.addr;
         let capability_attr = syn::LitStr::new(&capability, attr.span());
 
         trait_items.push(syn::parse2(quote! {
             #[prusti::capable_side_condition]
-            #[prusti::spec_id = #spec_id]
+            #[prusti::spec_id = #capability_spec_id]
             fn #side_name(&self) -> bool;
         })?);
         trait_items.push(syn::parse2(quote! {
             #[prusti::capable_addr]
             #[prusti::capability = #capability_attr]
-            #[prusti::spec_id = #spec_id]
+            #[prusti::spec_id = #capability_spec_id]
             fn #addr_name<'a>(&'a self) -> ::prusti_contracts::ALocT<'a, #ty>;
         })?);
         impl_items.push(syn::parse2(quote! {
             #[prusti::spec_only]
             #[prusti::capable_side_condition]
-            #[prusti::spec_id = #spec_id]
+            #[prusti::spec_id = #capability_spec_id]
             fn #side_name(&self) -> bool {
                 #side_condition
             }
@@ -136,17 +139,32 @@ pub fn rewrite(
             #[prusti::spec_only]
             #[prusti::capable_addr]
             #[prusti::capability = #capability_attr]
-            #[prusti::spec_id = #spec_id]
+            #[prusti::spec_id = #capability_spec_id]
             fn #addr_name<'a>(&'a self) -> ::prusti_contracts::ALocT<'a, #ty> {
                 #addr
+            }
+        })?);
+        // This is a bit of a hack to force Prusti to check the stability & well-definedness
+        // of capable! annotations.
+        wd_items.push(syn::parse2(quote! {
+            #[trusted]
+            #[requires(#side_condition)]
+            #[requires(#addr == #addr)]
+            #[modifies(Set::new())]
+            fn #wd_name(&self) {
+                unimplemented!("well-definedness check for capable! annotation")
             }
         })?);
     }
 
     new_trait.items = trait_items;
     new_impl.items = impl_items;
+    let mut wd_impl: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
+        impl #impl_generics #item_ident #ty_generics #where_clause {}
+    };
+    wd_impl.items = wd_items;
 
-    Ok((new_trait, new_impl))
+    Ok((new_trait, new_impl, wd_impl))
 }
 
 fn parse_capable(attr: &syn::Attribute) -> syn::Result<CapableInput> {

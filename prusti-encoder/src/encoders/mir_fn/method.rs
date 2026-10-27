@@ -119,13 +119,16 @@ impl TaskEncoder for MethodCallEnc {
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
         let im_state = deps.require_ref::<ImStateEnc>(())?;
-        Ok(((), MethodCallEncOutput {
-            method: method_ref,
-            ty_args,
-            inputs,
-            output,
-            im_state,
-        }))
+        Ok((
+            (),
+            MethodCallEncOutput {
+                method: method_ref,
+                ty_args,
+                inputs,
+                output,
+                im_state,
+            },
+        ))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -216,6 +219,8 @@ impl TaskEncoder for MethodEnc {
             // method can return data to the caller without a copy--it directly
             // modifies a place provided by the caller.
             //
+            // TODO IM check if ^^^ messes with our `shallow` annotations
+            //
             // TODO: type parameters: for generic methods we will want to pass
             //   values of type `Type` as well`
             let arg_count = arg_defs.arg_count + 1;
@@ -298,10 +303,13 @@ impl TaskEncoder for MethodEnc {
             });
 
             // TODO generate a function idn for the frame
-            deps.emit_output_ref(def_id, MethodEncOutputRef {
-                method_ref,
-                footprint_ref,
-            })?;
+            deps.emit_output_ref(
+                def_id,
+                MethodEncOutputRef {
+                    method_ref,
+                    footprint_ref,
+                },
+            )?;
 
             // Method contract. We will need to emit pre- and postconditions for
             // the permissions, the functional spec, and (in the postcondition)
@@ -359,6 +367,7 @@ impl TaskEncoder for MethodEnc {
                     if matches!(proc_kind, ProcKind::Method | ProcKind::PureUnstable) {
                         cap_pres.push(local_defs[arg_idx].impure_cap)
                     }
+                    pres.push(vcx.mk_eq_expr(local_defs[arg_idx].spec_snap, local_defs[arg_idx].im_state_snap));
                 }
             }
             posts.push(local_defs[mir::RETURN_PLACE].impure_pred);
@@ -394,8 +403,22 @@ impl TaskEncoder for MethodEnc {
                     .collect::<Vec<_>>(),
             );
 
+            let mut stab_pres = pres.clone();
+            stab_pres.append(&mut cap_pres);
+            let mut stab_posts = posts.clone();
+            stab_posts.append(&mut cap_pres);
+
             match proc_kind {
                 ProcKind::PureUnstable => {
+                    // When encoding a pure-unstable function, we need to check the following:
+                    // - the reads-clause is well-defined (+ all reads are safe)
+                    // - the reads-clause is self-framing
+                    // - the pre/post-conditions are well-defined (+ all reads are safe)
+                    // - everything read in the pre/post-conditions is framed by the reads-clause
+                    // - no panics in the function body
+                    // - everything read in the body is safe to read (that is, if we check pure-unstable function bodies)
+                    // - everything read in the body is framed by the reads-clause
+
                     // TODO to encode/check capability annotation conditions, we need to be able to
                     // generate the methods to do the relevant checks while supplying a frame that is
                     // computed from the body
@@ -415,11 +438,33 @@ impl TaskEncoder for MethodEnc {
                     // the reads-clause computing function
                     // NOTE computing the footprint would be done by the function encoder?
 
+                    // TODO IM if time permits, it would be good to simplify this encoding:
+                    // - the well-definedness
+
+                    // NEW STRATEGY
+
+                    // TODO make sure that the reads-clause gets an impure encoding to check it is well-defined? (doesn't work unless
+                    // we manually add pre-conditions)
+                    //
+                    // Add a pre-condition that checks that the frame is a superset of the frame calculated for the clause &
+                    // handle the post-condition with an error message that states that the reads-clause is not self-framing
+                    // Ensures that the reads-clause is well-defined and self-framing
+
+                    // TODO compute the frame of the
+
+                    let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
+                        MirLocalDefEncTask::Local {
+                            def_id,
+                            all_locals: false,
+                        },
+                        span,
+                    )?;
+
                     assert!(spec.modifies.pure.is_empty());
+                    cap_pres.push(none_modifies_ex);
                     let none_modifiable_ex = vcx
                         .mk_eq_expr(modifiable_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
                     cap_pres.push(none_modifiable_ex);
-                    cap_pres.push(none_modifies_ex);
 
                     let frame_partial = spec.reads.impure.iter().fold(
                         vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
@@ -435,10 +480,8 @@ impl TaskEncoder for MethodEnc {
                         vcx.mk_bool::<true>(),
                     );
 
-                    // A trivial precondition that checks stability of the reads-clause w.r.t. the
+                    // A trivial precondition that checks stability and well-definedness of the reads-clause w.r.t. the
                     // function precondition and argument types
-                    // TODO this would be replaced with the encoding of the reads-clause as its own pure-unstable
-                    // function
                     cap_pres.push(frame_ex);
 
                     let function_enc = deps.require_ref::<FunctionEnc>(def_id)?;
@@ -448,11 +491,6 @@ impl TaskEncoder for MethodEnc {
                         generics.const_exprs(),
                     );
                     let im_caps = deps.require_ref::<ImCapEnc>(())?;
-                    let reads_stable = vir::expr! {
-                        forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, ([curr_im_state]), l)) }
-                        (([im_state.mk_aloc_psnap_idn](t, l)) in (frame_total)) ==>
-                            ([im_caps.stable_read_idn](t, ([curr_im_state]), l))
-                    };
 
                     let self_frame_idn: MethodIdn<
                         '_,
@@ -473,7 +511,16 @@ impl TaskEncoder for MethodEnc {
 
                     // This method forces Viper to check that the reads-clause is self-framing, i.e. that it only
                     // reads from unstable memory locations that are themselves described by the reads-clause
-                    // TODO replace this check with a subset check
+                    //
+                    // TODO IM if time permits, we might want to use the frame calculated by MirPure instead which
+                    // would let us generate a more helpful error message.
+                    let reads_stable = vir::expr! {
+                        forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, ([curr_im_state]), l)) }
+                        (([im_state.mk_aloc_psnap_idn](t, l)) in (frame_total)) ==>
+                            ([im_caps.stable_read_idn](t, ([curr_im_state]), l))
+                    };
+                    // TODO IM should we add the pre/post-conditions of the pure-unstable function here to check
+                    // that they are also framed by the reads-clause?
                     methods.push(
                         vcx.mk_method(
                             self_frame_idn,
@@ -516,8 +563,6 @@ impl TaskEncoder for MethodEnc {
                         })
                         .unwrap_or(im_state.top_set_idn.call()());
 
-                    let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
-
                     // The method specification is checked assuming that the set of modifiable locations is
                     // exactly the modifies-clause and the set of modified locations is empty.
                     let modifiable_pre_partial =
@@ -532,6 +577,7 @@ impl TaskEncoder for MethodEnc {
                         generics.ty_exprs(),
                         generics.const_exprs(),
                     );
+
                     let modifiable_pre_total = vcx.mk_inhale_exhale_expr(
                         vcx.mk_eq_expr(modifies_set_total, modifiable_ex),
                         vcx.mk_set_subset_expr(modifies_set_total, modifiable_ex),
@@ -793,16 +839,13 @@ impl TaskEncoder for MethodEnc {
                 None
             };
 
-            let mut stab_pres = pres.clone();
-            stab_pres.append(&mut cap_pres);
-            let mut stab_posts = posts.clone();
-            stab_posts.append(&mut cap_pres);
-
             // NOTE: be careful about the order in which we add pre/post-conditions.
 
-            // Extend stab pres/posts with the non-functional part of the pres/posts
+            // Extend stab pres/posts with the partial pre/post-conditions
             stab_pres.extend(spec.pres.iter().map(|(cond, _)| cond.partial));
             stab_posts.extend(spec.posts.iter().map(|(cond, _)| cond.partial));
+            // TODO IM if time permits, should we enforce that the frame of the pres/posts
+            // is a subset of the set calculated by the reads-clause?
 
             // Add functional specification as the last pre- and postconditions.
             pres.extend(spec.pres.iter().map(|(cond, _)| cond.total));

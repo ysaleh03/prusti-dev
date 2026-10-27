@@ -18,8 +18,8 @@ pub mod interpretation;
 
 pub use data::TySpecifics;
 pub use inhabited::TyInhabitedEnc;
-pub use invariant::TyInvariantEnc;
 pub use interior_mut::ImTyEnc;
+pub use invariant::TyInvariantEnc;
 pub use rust_ty::*;
 
 /// Defines the collection of datas which are output by the Viper type encoders.

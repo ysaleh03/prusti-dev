@@ -1,7 +1,12 @@
 use crate::encoders::{
+    TyUsePureEnc,
     ty::{
-        data::TyData, impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrDyn, TyImpureEnc}, pure::{AdtBuilder, DomainBuilder, TyPureAddrCommon, TyPureAddrData, TyPureEnc}, use_pure::TyUsePure, LazyRustTy, RustAddr, RustAddrData, RustTyDatas, TySpecifics
-    }, TyUsePureEnc
+        LazyRustTy, RustAddr, RustAddrData, RustTyDatas, TySpecifics,
+        data::TyData,
+        impure::{PredicateBuilder, TyImpureAddr, TyImpureAddrDyn, TyImpureEnc},
+        pure::{AdtBuilder, DomainBuilder, TyPureAddrCommon, TyPureAddrData, TyPureEnc},
+        use_pure::TyUsePure,
+    },
 };
 use task_encoder::{EncodeFullError, TaskEncoderDependencies};
 use vir::{CastType, VirCtxt};
@@ -9,8 +14,7 @@ use vir::{CastType, VirCtxt};
 pub(crate) fn ty_pure_dyn<'vir>(
     builder: &mut AdtBuilder<'vir>,
 ) -> Result<TyPureAddrCommon<'vir>, EncodeFullError<'vir, TyPureEnc>> {
-    let (mk_addr, destructors) =
-        builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
+    let (mk_addr, destructors) = builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
 
     Ok(TyPureAddrCommon {
         mk_addr,
@@ -25,8 +29,7 @@ pub(crate) fn ty_pure_typed<'vir>(
     data: &RustAddrData<'vir>,
     builder: &mut AdtBuilder<'vir>,
 ) -> Result<TyPureAddrData<'vir>, EncodeFullError<'vir, TyPureEnc>> {
-    let (mk_addr, destructors) =
-        builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
+    let (mk_addr, destructors) = builder.constructor("mk", (vir::TYPE_REF, vir::TYPE_TYVAL), None);
 
     let addr_access = destructors[0].downcast_ty();
     let type_access = destructors[1].downcast_ty();

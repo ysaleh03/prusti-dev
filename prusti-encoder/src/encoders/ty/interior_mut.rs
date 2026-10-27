@@ -1,13 +1,17 @@
-use std::borrow::Borrow;
+use std::{borrow::Borrow, collections::HashMap};
 
+use prusti_interface::specs::typed::{CapabilityKind, CapabilitySpecification};
+use prusti_rustc_interface::middle::mir;
+use rustc_hash::FxHashMap;
 use task_encoder::{
     EncodeFullError, EncodeFullResult, OutputRefAny, TaskEncoder, TaskEncoderDependencies,
 };
 
-use vir::{CastType, Domain, DomainIdn, FunctionIdn, TypeData};
+use vir::{CastType, Domain, DomainIdn, FunctionIdn, Reify, TypeData};
 
 use crate::encoders::{
-    ImCapEnc, ImStateEnc, ImTyNameEnc, Pure, TyUsePureEnc,
+    ImCapEnc, ImStateEnc, ImTyNameEnc, MirLocalDefEnc, MirLocalDefEncTask, MirPureEnc,
+    MirPureEncTask, Pure, PureKind, TyUsePureEnc,
     mir_fn::RustSignature,
     spec::with_type_im_spec,
     ty::{
@@ -18,7 +22,7 @@ use crate::encoders::{
 
 use super::{
     RustFieldData, RustTy, RustTyDecomposition, RustTyNormalized, TySpecifics,
-    generics::{GArgsCastEnc, GenericParamsEnc, TyExprEnc},
+    generics::{GArgsCastEnc, GParams, GenericParamsEnc, TyExprEnc},
     pure::TyPureFieldRef,
 };
 
@@ -104,6 +108,7 @@ impl TaskEncoder for ImTyEnc {
             //
 
             let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let im_caps = deps.require_ref::<ImCapEnc>(())?;
             let self_ty_pure = deps.require_dep::<TyPureEnc>(*task_key)?;
 
             let self_decomp = RustTyDecomposition::identity(*task_key);
@@ -125,42 +130,129 @@ impl TaskEncoder for ImTyEnc {
                     })?;
                 }
                 TySpecifics::ImmRef(data) => {
-                    // TODO sharing an immref implies sharing its target
-
                     deps.emit_output_ref(*task_key, ImTyEncRef {
                         specifics: ImTySpecifics::Other,
                     })?;
 
-                    // TODO
-                    // let snapshot = self_ty.snapshot;
-                    // let immref_ty = self_ty.expect_immref();
-                    // let get_immref_idn = vir::FunctionIdn::new(
-                    //     vir::ViperIdent::new("get_immref"),
-                    //     (vir::TYPE_IMSTATE, vir::TYPE_TYVAL, vir::TYPE_REF),
-                    //     snapshot.downcast_ty(),
-                    // );
-                    // deps.emit_output_ref(task_key, ImTyRef::ImmRef(ImmRefData { get_immref_idn }));
+                    let params = deps.require_dep::<GenericParamsEnc>(task_key.params)?;
+                    let ref_tyval = deps.require_dep::<TyExprEnc>(self_decomp)?;
+                    let target_ty = data.referent.decompose(task_key.params);
+                    let target_tyval = deps.require_dep::<TyExprEnc>(target_ty)?;
+                    let state_decl = vcx.mk_local_decl("s", vir::TYPE_IMSTATE);
+                    let state = vcx.mk_local_ex(state_decl);
+                    let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let addr = vcx.mk_local_ex(addr_decl);
+                    let idx_decl = vcx.mk_local_decl("p", vir::TYPE_INT);
+                    let idx = vcx.mk_local_ex(idx_decl);
+                    let self_caster =
+                        deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                            param: RustTyDecomposition::param(),
+                            concrete: self_decomp,
+                        }))?;
+                    let ref_snap = self_caster
+                        .cast_to_caller_ctx(
+                            im_state.get_snap_idn.call()(ref_tyval, state, addr).upcast_ty(),
+                        )
+                        .downcast_ty();
+                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?;
+                    let target_addr = ref_use.expect_immref().addr_access(ref_snap);
+                    let shared = im_caps.shared_idn.call()(ref_tyval, state, idx, addr);
+                    let target_shared =
+                        im_caps.shared_idn.call()(target_tyval, state, idx, target_addr);
+                    let qvars = params
+                        .ty_decls()
+                        .as_dyn()
+                        .iter()
+                        .chain(params.const_decls().as_dyn().iter())
+                        .chain([state_decl.as_dyn(), addr_decl.as_dyn(), idx_decl.as_dyn()].iter())
+                        .copied()
+                        .collect::<Vec<_>>();
 
-                    // functions.push(vcx.mk_domain_function(get_immref_idn, false, None));
-
-                    // axioms.push(vcx.mk_domain_axiom(
-                    // vir::ViperIdent::new("get_immref_get_snap"),
-                    // vir::expr!{
-                    //     forall t: Type, s: ImState, l: Ref ::
-                    //     { [get_immref_idn](s, t, l) }
-                    //     (([immref_ty.deref_access](([get_immref_idn](s, t, l)))) == (l)) &&
-                    //         (([immref_ty.value_access](([get_immref_idn](s, t, l)))) == ([im_state.get_snap_idn](s, t, l)))
-                    // }));
-
-                    // self.encode_decomposition(data.referent.decompose(ty.params))?
+                    // shared capability to a shared reference implies shared capability to its target
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(vcx, "{}_shared_target", self_name),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                &[],
+                                vcx.mk_bin_op_expr(vir::BinOpKind::Implies, shared, target_shared)
+                                    .downcast_ty(),
+                            ),
+                        ),
+                    );
                 }
                 TySpecifics::MutRef(data) => {
-                    // TODO owning an mutref implies owning its target
-
-                    // TODO sharing an mutref implies sharing its target
                     deps.emit_output_ref(*task_key, ImTyEncRef {
                         specifics: ImTySpecifics::Other,
                     })?;
+
+                    // TODO we are missing the axioms that link the snapshot of a mutref to the snapshot of its target
+
+                    let params = deps.require_dep::<GenericParamsEnc>(task_key.params)?;
+                    let ref_tyval = deps.require_dep::<TyExprEnc>(self_decomp)?;
+                    let target_ty = data.referent.decompose(task_key.params);
+                    let target_tyval = deps.require_dep::<TyExprEnc>(target_ty)?;
+                    let state_decl = vcx.mk_local_decl("s", vir::TYPE_IMSTATE);
+                    let state = vcx.mk_local_ex(state_decl);
+                    let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let addr = vcx.mk_local_ex(addr_decl);
+                    let idx_decl = vcx.mk_local_decl("p", vir::TYPE_INT);
+                    let idx = vcx.mk_local_ex(idx_decl);
+                    let self_caster =
+                        deps.require_dep::<GArgsCastEnc<Pure>>(Some(RustTyNormalized {
+                            param: RustTyDecomposition::param(),
+                            concrete: self_decomp,
+                        }))?;
+                    let ref_snap = self_caster
+                        .cast_to_caller_ctx(
+                            im_state.get_snap_idn.call()(ref_tyval, state, addr).upcast_ty(),
+                        )
+                        .downcast_ty();
+                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?;
+                    let target_addr = ref_use.expect_mutref().deref_access(ref_snap);
+                    let exclusive = im_caps.exclusive_idn.call()(ref_tyval, state, idx, addr);
+                    let shared = im_caps.shared_idn.call()(ref_tyval, state, idx, addr);
+                    let target_exclusive =
+                        im_caps.exclusive_idn.call()(target_tyval, state, idx, target_addr);
+                    let target_shared =
+                        im_caps.shared_idn.call()(target_tyval, state, idx, target_addr);
+                    let qvars = params
+                        .ty_decls()
+                        .as_dyn()
+                        .iter()
+                        .chain(params.const_decls().as_dyn().iter())
+                        .chain([state_decl.as_dyn(), addr_decl.as_dyn(), idx_decl.as_dyn()].iter())
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    // exclusive capability to a mutable reference implies exclusive capability to its target
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(vcx, "{}_exclusive_target", self_name),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                &[],
+                                vcx.mk_bin_op_expr(
+                                    vir::BinOpKind::Implies,
+                                    exclusive,
+                                    target_exclusive,
+                                )
+                                .downcast_ty(),
+                            ),
+                        ),
+                    );
+                    // shared capability to a mutable reference implies shared capability to its target
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(vcx, "{}_shared_target", self_name),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                &[],
+                                vcx.mk_bin_op_expr(vir::BinOpKind::Implies, shared, target_shared)
+                                    .downcast_ty(),
+                            ),
+                        ),
+                    );
                 }
                 TySpecifics::ArrayLike(data) => {
                     deps.emit_output_ref(*task_key, ImTyEncRef {
@@ -406,12 +498,302 @@ impl TaskEncoder for ImTyEnc {
                     }
 
                     if let Some(def_id) = data.data {
-                        with_type_im_spec(def_id, |abs_fields, capabilities| {
-                            // TODO encode capability axioms
-                            // TODO encode non-aliasing axiom (we can maybe skip non-aliasing between abstract & public fields)
-                            //
-                            // TODO what checks do we assume have already occured for the condition?
-                        })
+                        let capabilities =
+                            with_type_im_spec(def_id, |_, capabilities| Vec::from(capabilities));
+                        // TODO encode capability axioms
+                        // TODO encode non-aliasing axiom (we can maybe skip non-aliasing between abstract & public fields)
+                        //
+                        // TODO what checks do we assume have already occured for the condition?
+                        // - if we have the pre-parser generate a dummy function for each condition, then well-definedness
+                        //   is already checked
+                        //
+                        // Encoding strategy for capability annotatations
+                        //
+                        // conditions must be:
+                        // - well-defined and stable (with pre-condition `true` and no locations modifiable)
+                        //
+                        // once we have established well-definedness, we can treat the condition as
+                        // a total function of the `self` snapshot and the program state. (like a pre-condition)
+                        // NOTE this means there is a relatively easy way to make Prusti do this check,
+                        // by encoding the condition as a method with no pre-condition or modifies-clause
+                        //
+                        // NOTE this may be something good to note in the paper, that conditions must be total
+                        //
+                        // in order for a condition to be stable, the current state must imply that
+                        // each location in its frame is stable_read. In determining whether this is
+                        // the case, we may assume the RHS of the implication
+                        //
+                        //
+
+                        // NOTE: At this point we assume that the well-definedness of capable! annotations has been checked.
+                        // This is done by generating a dummy method in the preparser stage which includes both the side-condition
+                        // and address calculation in the pre-condition of a function.
+                        for (cap_idx, cap_spec) in capabilities.into_iter().enumerate() {
+                            let CapabilitySpecification {
+                                side_conditions,
+                                addr_projection,
+                                capability,
+                                if_exclusive,
+                            } = cap_spec;
+
+                            // TODO for each capable! annotation, do a total encoding of its condition and address
+                            // also determine its frame (the conjunction of the frames of the condition and address)
+
+                            let cond_def_id = side_conditions.to_def_id();
+                            let aloc_def_id = addr_projection.to_def_id();
+                            let aloc_sig = RustSignature::new(aloc_def_id);
+                            // These should be identical to the gparams of the condition def
+                            let params = aloc_sig.gparams;
+                            // are these the gargs we really want? what if we have trait bounds?
+                            let gargs = params.identity_args();
+                            let generics = deps.require_dep::<GenericParamsEnc>(params)?;
+
+                            let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                            let addr_ex = vcx.mk_local_ex(addr_decl);
+                            let idx_decl = vcx.mk_local_decl("i", vir::TYPE_INT);
+                            let idx_ex = vcx.mk_local_ex(idx_decl);
+                            let state_ex = vcx.mk_local_ex(im_state.state_decl);
+
+                            let self_ref_ty = aloc_sig.inputs[0].decompose(params);
+                            let ref_data = self_ref_ty.ty.ref_data().unwrap();
+                            let self_target_ty =
+                                ref_data.referent.decompose_normalize(self_ref_ty.args);
+
+                            let self_target_tyval =
+                                deps.require_dep::<TyExprEnc>(self_target_ty)?;
+
+                            let im_caps = deps.require_ref::<ImCapEnc>(())?;
+                            let lhs_capbility_ex = (if if_exclusive {
+                                im_caps.exclusive_idn
+                            } else {
+                                im_caps.shared_idn
+                            })
+                            .call()(
+                                self_target_tyval, state_ex, idx_ex, addr_ex
+                            );
+
+                            let sig = vcx
+                                .tcx()
+                                .fn_sig(cond_def_id)
+                                .instantiate(vcx.tcx(), gargs.args())
+                                .skip_binder();
+                            let self_metadata_ty =
+                                sig.inputs()[0].pointee_metadata_ty_or_projection(vcx.tcx());
+                            let self_metadata_ty = gargs.context().normalize(self_metadata_ty);
+                            let metadata = deps
+                                .require_dep::<TyUsePureEnc>(RustTyDecomposition::from_ty(
+                                    self_metadata_ty,
+                                    gargs.context(),
+                                ))?
+                                .zst_to_snap()
+                                .ok_or_else(|| {
+                                    EncodeFullError::DependencyError(vec![(
+                                        ImTyEnc::ENCODER_NAME,
+                                        "Interior-mutability reasoning for unsized types is not supported".to_string(),
+                                        vec![vcx.tcx().def_span(cond_def_id)],
+                                    )])
+                                })?;
+
+                            let self_target_snap =
+                                im_state.get_snap_idn.call()(self_target_tyval, state_ex, addr_ex);
+                            let self_ref_pure = deps
+                                .require_dep::<TyUsePureEnc>(self_ref_ty)?
+                                .expect_immref();
+
+                            let self_ref_snap = self_ref_pure.prim_to_snap(
+                                addr_ex,
+                                metadata.upcast_ty(),
+                                self_ref_pure.mk_inner_concrete(
+                                    im_state.get_snap_idn.call()(
+                                        self_target_tyval,
+                                        state_ex,
+                                        addr_ex,
+                                    )
+                                    .upcast_ty(),
+                                ),
+                            );
+
+                            let local_defs =
+                                deps.require_dep::<MirLocalDefEnc>(MirLocalDefEncTask::Local {
+                                    def_id: aloc_def_id,
+                                    all_locals: true,
+                                })?;
+
+                            let mut snap_map = vcx.alloc(
+                                [(mir::Local::from(1 as usize), self_ref_snap.upcast_ty())]
+                                    .into_iter()
+                                    .collect(),
+                            );
+
+                            let cond_enc = deps.require_dep::<MirPureEnc>(MirPureEncTask {
+                                encoding_depth: 0,
+                                kind: PureKind::Pure,
+                                parent_def_id: cond_def_id,
+                                gargs,
+                                is_partial: false,
+                                is_unstable: true,
+                            })?;
+                            let cond_ex = cond_enc.expr.reify(
+                                vcx,
+                                (
+                                    cond_def_id,
+                                    snap_map,
+                                    None,
+                                    vir::OldLabel::None,
+                                    Some(state_ex),
+                                ),
+                            );
+
+                            let aloc_enc = deps.require_dep::<MirPureEnc>(MirPureEncTask {
+                                encoding_depth: 0,
+                                kind: PureKind::Pure,
+                                parent_def_id: aloc_def_id,
+                                gargs,
+                                is_partial: false,
+                                is_unstable: true,
+                            })?;
+                            let aloc_ex = aloc_enc.expr.reify(
+                                vcx,
+                                (
+                                    aloc_def_id,
+                                    snap_map,
+                                    None,
+                                    vir::OldLabel::None,
+                                    Some(state_ex),
+                                ),
+                            );
+
+                            let aloc_ty = aloc_sig.output.decompose(params);
+                            let aloc_ty_use = deps.require_dep::<TyUsePureEnc>(aloc_ty)?;
+                            let aloc_tmp = vcx.mk_local_decl("aloc", aloc_ty_use.snapshot);
+                            let aloc_tmp_ex = vcx.mk_local_ex(aloc_tmp).downcast_ty();
+                            let aloc_ty_use = aloc_ty_use.expect_addr();
+                            let aloc_addr = aloc_ty_use.addr_access(aloc_tmp_ex);
+                            let aloc_tyval = aloc_ty_use.type_access(aloc_tmp_ex);
+
+                            let rhs_capability_ex = vcx.mk_let_expr(
+                                aloc_tmp,
+                                aloc_ex,
+                                (match capability {
+                                    CapabilityKind::Local => {
+                                        let parent_loc = im_state.mk_aloc_psnap_idn.call()(
+                                            self_target_tyval,
+                                            addr_ex,
+                                        );
+                                        im_caps.local_write_idn.call()(
+                                            aloc_tyval, state_ex, idx_ex, aloc_addr, parent_loc,
+                                        )
+                                    }
+                                    CapabilityKind::Exclusive => im_caps.exclusive_idn.call()(
+                                        aloc_tyval, state_ex, idx_ex, aloc_addr,
+                                    ),
+                                    CapabilityKind::Shared => im_caps.shared_idn.call()(
+                                        aloc_tyval, state_ex, idx_ex, aloc_addr,
+                                    ),
+                                    CapabilityKind::Write => im_caps.write_idn.call()(
+                                        aloc_tyval, state_ex, idx_ex, aloc_addr,
+                                    ),
+                                    CapabilityKind::Read => im_caps.read_idn.call()(
+                                        aloc_tyval, state_ex, idx_ex, aloc_addr,
+                                    ),
+                                }),
+                            );
+
+                            let cond_frame = cond_enc.frame.reify(
+                                vcx,
+                                (
+                                    cond_def_id,
+                                    snap_map,
+                                    None,
+                                    vir::OldLabel::None,
+                                    Some(state_ex),
+                                ),
+                            );
+                            let aloc_frame = aloc_enc.frame.reify(
+                                vcx,
+                                (
+                                    aloc_def_id,
+                                    snap_map,
+                                    None,
+                                    vir::OldLabel::None,
+                                    Some(state_ex),
+                                ),
+                            );
+                            let frame = vcx
+                                .mk_anyset_op_expr(
+                                    vir::CollectionBinOpKind::Union,
+                                    cond_frame,
+                                    aloc_frame,
+                                )
+                                .downcast_ty();
+
+                            let frame_ty_decl = vcx.mk_local_decl("t_frame", vir::TYPE_TYVAL);
+                            let frame_ty = vcx.mk_local_ex(frame_ty_decl);
+                            let frame_ref_decl = vcx.mk_local_decl("l_frame", vir::TYPE_REF);
+                            let frame_ref = vcx.mk_local_ex(frame_ref_decl);
+                            let frame_psnap =
+                                im_state.mk_aloc_psnap_idn.call()(frame_ty, frame_ref);
+                            let frame_stable =
+                                im_caps.stable_read_idn.call()(frame_ty, state_ex, frame_ref);
+                            let frame_stable = vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[frame_ty_decl.as_dyn(), frame_ref_decl.as_dyn()]),
+                                &[],
+                                vcx.mk_bin_op_expr(
+                                    vir::BinOpKind::Implies,
+                                    vcx.mk_set_in_expr(frame_psnap, frame),
+                                    frame_stable,
+                                )
+                                .downcast_ty(),
+                            );
+
+                            let mut qvars = generics
+                                .ty_decls()
+                                .iter()
+                                .map(|decl| (*decl).as_dyn())
+                                .collect::<Vec<_>>();
+                            qvars
+                                .extend(generics.const_decls().iter().map(|decl| (*decl).as_dyn()));
+                            qvars.extend([
+                                im_state.state_decl.as_dyn(),
+                                addr_decl.as_dyn(),
+                                idx_decl.as_dyn(),
+                            ]);
+                            let axiom_body = vcx
+                                .mk_bin_op_expr(
+                                    vir::BinOpKind::Implies,
+                                    vcx.mk_bin_op_expr(
+                                        vir::BinOpKind::And,
+                                        lhs_capbility_ex,
+                                        vcx.mk_bin_op_expr(
+                                            vir::BinOpKind::Implies,
+                                            rhs_capability_ex,
+                                            frame_stable,
+                                        )
+                                        .downcast_ty(),
+                                    )
+                                    .downcast_ty(),
+                                    rhs_capability_ex,
+                                )
+                                .downcast_ty();
+                            println!("capability idx {:?}", cap_idx);
+                            axioms.push(vcx.mk_domain_axiom(
+                                vir::vir_format_identifier!(
+                                    vcx,
+                                    "{}_{}_capability",
+                                    task_key.name(),
+                                    cap_idx,
+                                ),
+                                vcx.mk_forall_expr(
+                                    vcx.alloc_slice(&qvars),
+                                    vcx.alloc_slice(&[vcx.mk_trigger(&[lhs_capbility_ex])]),
+                                    axiom_body,
+                                ),
+                            ));
+
+                            // TODO lhs_capability &&
+                            // (capability_ex => forall i in <frame> :: stable_read(i)) => capability_ex
+                            // trigger would be lhs_capability?
+                        }
                     }
                 }
                 TySpecifics::EnumLike(data) => {

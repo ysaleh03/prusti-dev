@@ -237,11 +237,14 @@ impl TaskEncoder for MirPureEnc {
         })?;
         tracing::debug!("finished {def_id:?}");
 
-        Ok(((), MirPureEncOutput {
-            inputs,
-            expr,
-            frame,
-        }))
+        Ok((
+            (),
+            MirPureEncOutput {
+                inputs,
+                expr,
+                frame,
+            },
+        ))
     }
 }
 

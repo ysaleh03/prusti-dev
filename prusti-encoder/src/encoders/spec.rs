@@ -298,14 +298,17 @@ impl TaskEncoder for SpecEnc {
                 SpecificationItem::Empty,
                 SpecificationItem::Empty,
             ));
-            Ok(((), SpecEncOutput {
-                extern_spec,
-                pres,
-                posts,
-                pledges,
-                modifies,
-                reads,
-            }))
+            Ok((
+                (),
+                SpecEncOutput {
+                    extern_spec,
+                    pres,
+                    posts,
+                    pledges,
+                    modifies,
+                    reads,
+                },
+            ))
         })
     }
 }

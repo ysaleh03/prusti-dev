@@ -178,27 +178,30 @@ impl TaskEncoder for ImStateEnc {
 
             let state_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_IMSTATE);
 
-            deps.emit_output_ref(*task_key, ImStateEncRef {
-                next_idn,
-                lte_idn,
-                havocked_idn,
-                get_snap_idn,
-                allocated_idn,
-                fresh_idn,
-                modifiable_idn,
-                modifies_idn,
-                top_set_idn,
-                mk_rep_idn,
-                rep_eq_idn,
-                get_idn,
-                pred_idn,
-                bump_idn,
-                addr_from_psnap_idn,
-                ty_from_psnap_idn,
-                mk_aloc_psnap_idn,
-                state_ref_decl,
-                state_decl,
-            })?;
+            deps.emit_output_ref(
+                *task_key,
+                ImStateEncRef {
+                    next_idn,
+                    lte_idn,
+                    havocked_idn,
+                    get_snap_idn,
+                    allocated_idn,
+                    fresh_idn,
+                    modifiable_idn,
+                    modifies_idn,
+                    top_set_idn,
+                    mk_rep_idn,
+                    rep_eq_idn,
+                    get_idn,
+                    pred_idn,
+                    bump_idn,
+                    addr_from_psnap_idn,
+                    ty_from_psnap_idn,
+                    mk_aloc_psnap_idn,
+                    state_ref_decl,
+                    state_decl,
+                },
+            )?;
 
             // Domain Functions
 
@@ -225,10 +228,13 @@ impl TaskEncoder for ImStateEnc {
             });
             axioms.push(next_defn);
 
-            let lte_defn = vcx.mk_domain_axiom(vir::ViperIdent::new("im_lte_defn"), vir::expr! {
-                forall s0: ImState, s1: ImState :: { ([lte_idn](s0, s1)) }
-                ([lte_idn](s0, s1)) == (((s0) as Int) < ((s1) as Int))
-            });
+            let lte_defn = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_lte_defn"),
+                vir::expr! {
+                    forall s0: ImState, s1: ImState :: { ([lte_idn](s0, s1)) }
+                    ([lte_idn](s0, s1)) == (((s0) as Int) < ((s1) as Int))
+                },
+            );
             axioms.push(lte_defn);
 
             let allocated_next = vcx.mk_domain_axiom(
@@ -257,40 +263,48 @@ impl TaskEncoder for ImStateEnc {
                 });
             axioms.push(fresh_modifiable);
 
-            let modifiable_next =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_modifiable_next"), vir::expr! {
+            let modifiable_next = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_modifiable_next"),
+                vir::expr! {
                     forall s: ImState ::
                     { ([modifiable_idn](([next_idn](s)))) }
                     ([modifiable_idn](s)) subset ([modifiable_idn](([next_idn](s))))
-                });
+                },
+            );
             axioms.push(modifiable_next);
 
-            let top_set_defn =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_top_set_defn"), vir::expr! {
+            let top_set_defn = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_top_set_defn"),
+                vir::expr! {
                                 forall p: PSnap ::
                                 { ((p) in ([top_set_idn]())) }
                 (p) in ([top_set_idn]())
-                            });
+                            },
+            );
 
-            let rep_eq_refl =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_eq_refl"), vir::expr! {
+            let rep_eq_refl = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_eq_refl"),
+                vir::expr! {
                     forall
                         t: Type,
                         r: GRep ::
                     { ([rep_eq_idn](t, r, r)) }
                     [rep_eq_idn](t, r, r)
-                });
+                },
+            );
             axioms.push(rep_eq_refl);
 
-            let rep_eq_sym =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_eq_sym"), vir::expr! {
+            let rep_eq_sym = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_eq_sym"),
+                vir::expr! {
                     forall
                         t: Type,
                         r0: GRep,
                         r1: GRep ::
                     { ([rep_eq_idn](t, r0, r1)) }
                     ([rep_eq_idn](t, r0, r1)) ==> ([rep_eq_idn](t, r1, r0))
-                });
+                },
+            );
             axioms.push(rep_eq_sym);
 
             let rep_eq_trans = vcx.mk_domain_axiom(
@@ -307,8 +321,9 @@ impl TaskEncoder for ImStateEnc {
             );
             axioms.push(rep_eq_trans);
 
-            let rep_eq_snap =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_rep_snap_eq"), vir::expr! {
+            let rep_eq_snap = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_rep_snap_eq"),
+                vir::expr! {
                     forall
                         t: Type,
                         st0: ImState,
@@ -320,7 +335,8 @@ impl TaskEncoder for ImStateEnc {
                     { ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1)))) }
                     ([rep_eq_idn](t, ([mk_rep_idn](st0, l0, s0)), ([mk_rep_idn](st1, l1, s1))))
                             ==> ((s0) == (s1))
-                });
+                },
+            );
             axioms.push(rep_eq_snap);
 
             // Domain

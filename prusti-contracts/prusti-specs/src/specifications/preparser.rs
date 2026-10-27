@@ -187,9 +187,7 @@ impl PrustiTokenStream {
                     {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::RepEq)
                     }
-                    (TokenTree::Punct(punct), _, _, _)
-                        if punct.as_char() == '@' =>
-                    {
+                    (TokenTree::Punct(punct), _, _, _) if punct.as_char() == '@' => {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::Addr)
                     }
                     (token @ TokenTree::Punct(punct), _, _, _) if punct.spacing() == Joint => {

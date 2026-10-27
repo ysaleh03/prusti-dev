@@ -193,6 +193,8 @@ pub struct MirSpecEncTask {
     pub def_id: DefId,
     pub context_def_id: DefId,
     pub enc_mode: MirSpecEncMode,
+    // (Interior Mutability) Whether or not the spec is being encoded for a pure-unstable
+    // function.
     pub is_unstable: bool,
 }
 
@@ -672,7 +674,7 @@ impl TaskEncoder for MirSpecEnc {
                          rhs: rhs_def_id,
                          ..
                      }| {
-                        // TODO should we emit stability checks somewhere for pledges?
+                        // TODO IM should we emit stability checks somewhere for pledges?
                         // Optional expiry obligation (lhs). If it cannot be encoded,
                         // report at its span and skip the whole pledge.
                         let lhs_expr = match *lhs_def_id {
@@ -740,7 +742,7 @@ impl TaskEncoder for MirSpecEnc {
 }
 
 impl MirSpecEnc {
-    fn encode_pure<'vir>(
+    pub fn encode_pure<'vir>(
         vcx: &'vir vir::VirCtxt<'vir>,
         deps: &mut TaskEncoderDependencies<'vir, Self>,
         ctx: SpecEncCtx<'vir>,

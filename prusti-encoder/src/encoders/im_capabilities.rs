@@ -13,12 +13,16 @@ pub struct ImCapEncRef<'vir> {
         (vir::TyVal, vir::ImState, vir::Int, vir::Ref, vir::PSnap),
         vir::Bool,
     >,
+    pub read_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
+    pub write_idn:
+        vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Int, vir::Ref), vir::Bool>,
     // pub atomic_exclusive_idn: vir::FunctionIdn<
     //     'vir,
     //     (vir::ImState, vir::Int, vir::TyVal, vir::Ref, vir::TyVal, vir::Ref),
     //     vir::Bool,
     // >,
     pub addr_to_idx_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::Ref), vir::Int>,
+
     pub stable_read_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
     pub stable_write_idn: vir::FunctionIdn<'vir, (vir::TyVal, vir::ImState, vir::Ref), vir::Bool>,
 
@@ -70,7 +74,6 @@ impl TaskEncoder for ImCapEnc {
                 ),
                 vir::TYPE_BOOL,
             );
-
             let shared_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_shared"),
                 (
@@ -81,7 +84,6 @@ impl TaskEncoder for ImCapEnc {
                 ),
                 vir::TYPE_BOOL,
             );
-
             let local_write_idn = vir::FunctionIdn::new(
                 vir::ViperIdent::new("im_local_write"),
                 (
@@ -90,6 +92,26 @@ impl TaskEncoder for ImCapEnc {
                     vir::TYPE_INT,
                     vir::TYPE_REF,
                     vir::TYPE_PSNAP,
+                ),
+                vir::TYPE_BOOL,
+            );
+            let write_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_write"),
+                (
+                    vir::TYPE_TYVAL,
+                    vir::TYPE_IMSTATE,
+                    vir::TYPE_INT,
+                    vir::TYPE_REF,
+                ),
+                vir::TYPE_BOOL,
+            );
+            let read_idn = vir::FunctionIdn::new(
+                vir::ViperIdent::new("im_read"),
+                (
+                    vir::TYPE_TYVAL,
+                    vir::TYPE_IMSTATE,
+                    vir::TYPE_INT,
+                    vir::TYPE_REF,
                 ),
                 vir::TYPE_BOOL,
             );
@@ -135,17 +157,21 @@ impl TaskEncoder for ImCapEnc {
                 vir::TYPE_GREP,
             );
 
-            deps.emit_output_ref(*task_key, ImCapEncRef {
-                exclusive_idn,
-                shared_idn,
-                local_write_idn,
-                // atomic_exclusive_idn,
-                addr_to_idx_idn,
-                stable_read_idn,
-                stable_write_idn,
-                get_snap_partial_idn,
-                get_rep_partial_idn,
-            })?;
+            deps.emit_output_ref(
+                *task_key,
+                ImCapEncRef {
+                    exclusive_idn,
+                    shared_idn,
+                    local_write_idn,
+                    write_idn,
+                    read_idn,
+                    addr_to_idx_idn,
+                    stable_read_idn,
+                    stable_write_idn,
+                    get_snap_partial_idn,
+                    get_rep_partial_idn,
+                },
+            )?;
 
             domain_functions.push(vcx.mk_domain_function(stable_read_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(stable_write_idn, false, None));
@@ -155,20 +181,24 @@ impl TaskEncoder for ImCapEnc {
             domain_functions.push(vcx.mk_domain_function(addr_to_idx_idn, false, None));
 
             let zero = vcx.mk_int::<0>();
-            let addr_to_idx_neg =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_addr_to_idx_neg"), vir::expr! {
+            let addr_to_idx_neg = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_addr_to_idx_neg"),
+                vir::expr! {
                     forall t: Type, l: Ref ::
                     { [addr_to_idx_idn](t, l) }
                     ([addr_to_idx_idn](t, l)) < (zero)
-                });
+                },
+            );
             axioms.push(addr_to_idx_neg);
 
-            let addr_to_idx_bi =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_addr_to_idx_bi"), vir::expr! {
+            let addr_to_idx_bi = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_addr_to_idx_bi"),
+                vir::expr! {
                     forall t: Type, l0: Ref, l1: Ref ::
                     { ([addr_to_idx_idn](t, l0)), ([addr_to_idx_idn](t, l1)) }
                     (([addr_to_idx_idn](t, l0)) == ([addr_to_idx_idn](t, l1))) == ((l0) == (l1))
-                });
+                },
+            );
             axioms.push(addr_to_idx_bi);
 
             // Capabilities
@@ -176,24 +206,30 @@ impl TaskEncoder for ImCapEnc {
             domain_functions.push(vcx.mk_domain_function(exclusive_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(shared_idn, false, None));
             domain_functions.push(vcx.mk_domain_function(local_write_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(write_idn, false, None));
+            domain_functions.push(vcx.mk_domain_function(read_idn, false, None));
             // functions.push(vcx.mk_domain_function(atomic_exclusive_idn, false, None));
 
             // Capability Implications
 
-            let stable_write_read =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_stable_write_read"), vir::expr! {
+            let stable_write_read = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_stable_write_read"),
+                vir::expr! {
                     forall t: Type, s: ImState, l: Ref ::
                     { ([stable_write_idn](t, s, l)) }
                     ([stable_write_idn](t, s, l)) ==> ([stable_read_idn](t, s, l))
-                });
+                },
+            );
             axioms.push(stable_write_read);
 
-            let exclusive_shared =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_exclusive_shared"), vir::expr! {
+            let exclusive_shared = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_exclusive_shared"),
+                vir::expr! {
                     forall t: Type, s: ImState, l: Ref, i: Int ::
                     { ([exclusive_idn](t, s, i, l)) }
                     ([exclusive_idn](t, s, i, l)) ==> ([shared_idn](t, s, i, l))
-                });
+                },
+            );
             axioms.push(exclusive_shared);
 
             let exclusive_stable_write = vcx.mk_domain_axiom(
@@ -219,25 +255,29 @@ impl TaskEncoder for ImCapEnc {
             let im_state = deps.require_ref::<ImStateEnc>(())?;
 
             // local-write gives us stable-write when the location is modified and modifiable
-            let local_write_write =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("local_write_write"), vir::expr! {
+            let local_write_write = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("local_write_write"),
+                vir::expr! {
                     forall t: Type, s: ImState, l: Ref, i: Int, p: PSnap ::
                     { ([local_write_idn](t, s, i, l, p))  }
                     (([local_write_idn](t, s, i, l, p)) &&
                      (((p) in ([im_state.modifiable_idn](s))) &&
                       (!((p) in ([im_state.modifies_idn](s)))))) ==>
                         ([stable_write_idn](t, s, l))
-                });
+                },
+            );
             axioms.push(local_write_write);
 
-            let local_write_read =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("local_write_read"), vir::expr! {
+            let local_write_read = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("local_write_read"),
+                vir::expr! {
                     forall t: Type, s: ImState, l: Ref, i: Int, p: PSnap ::
                     { ([local_write_idn](t, s, i, l, p))  }
                     (([local_write_idn](t, s, i, l, p)) &&
                       (!((p) in ([im_state.modifies_idn](s))))) ==>
                         ([stable_read_idn](t, s, l))
-                });
+                },
+            );
             axioms.push(local_write_read);
 
             // // local-exclusive is at least as strong as shared when `local` is not modified
@@ -268,17 +308,20 @@ impl TaskEncoder for ImCapEnc {
 
             let havocked = im_state.havocked_idn;
 
-            let stable_read_stable =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_stable_read_stable"), vir::expr! {
+            let stable_read_stable = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_stable_read_stable"),
+                vir::expr! {
                     forall t: Type, s0: ImState, s1: ImState, l: Ref ::
                     { ([stable_read_idn](t, s0, l)), ([havocked](s0, s1)) }
                     (([stable_read_idn](t, s0, l)) && ([havocked](s0, s1))) ==>
                         (([im_state.get_snap_idn](t, s0, l)) == ([im_state.get_snap_idn](t, s1, l)))
-                });
+                },
+            );
             axioms.push(stable_read_stable);
 
-            let stable_write_rep_eq =
-                vcx.mk_domain_axiom(vir::ViperIdent::new("im_stable_write_rep_eq"), vir::expr! {
+            let stable_write_rep_eq = vcx.mk_domain_axiom(
+                vir::ViperIdent::new("im_stable_write_rep_eq"),
+                vir::expr! {
                     forall t: Type, s0: ImState, s1: ImState, l: Ref, p: PSnap ::
                     { ([stable_write_idn](t, s0, l)),
                       ([im_state.rep_eq_idn](
@@ -292,7 +335,8 @@ impl TaskEncoder for ImCapEnc {
                             t,
                             ([im_state.mk_rep_idn](s0, l, p)),
                             ([im_state.mk_rep_idn](s1, l, p))))
-                });
+                },
+            );
             axioms.push(stable_write_rep_eq);
 
             // TODO should this be stable_write? hmmm or maybe if it denies the callee shared capability...

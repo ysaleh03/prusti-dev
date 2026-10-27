@@ -41,12 +41,19 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CastType, CompType, LocalDeclData};
 
 use crate::encoders::{
-    self, mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks}, mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic}, ty::{
-        generics::{GArgs, GArgsCastEnc, GParams}, use_impure::TyUseImpure, use_pure::{TyUsePure, TyUsePureEnc}, RustTyDecomposition, RustTyNormalized
-    }, FunctionCallEnc, ImTyEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc, MirPureEncTask, PrustiBuiltin, Pure, PureKind, TyUseImpureEnc, WandEnc, WandEncTask
+    self, FunctionCallEnc, ImTyEnc, MirBuiltinUseCastEnc, MirBuiltinUseCastTask, MirPureEnc,
+    MirPureEncTask, PrustiBuiltin, Pure, PureKind, TyUseImpureEnc, WandEnc, WandEncTask,
+    mir_fn::{CallTaskDescription, RustSignature, SpecBlockKind, SpecBlocks},
+    mir_shared::{EncodeResult, PureRvalueEnc, RustcIntrinsic},
+    ty::{
+        RustTyDecomposition, RustTyNormalized,
+        generics::{GArgs, GArgsCastEnc, GParams},
+        use_impure::TyUseImpure,
+        use_pure::{TyUsePure, TyUsePureEnc},
+    },
 };
 
-use super::{ty::generics::TyExprEnc, ImCapEnc, ImStateEnc, WandEncOutput};
+use super::{ImCapEnc, ImStateEnc, WandEncOutput, ty::generics::TyExprEnc};
 
 #[derive(Clone, Copy)]
 struct FromToVar<'vir> {
@@ -233,7 +240,8 @@ macro_rules! comment {
 /// [ImpureEncVisitor::capture_operand_ctxt] and passed (as the
 /// [PureRvalueEnc::EncodePlaceCtxt]) only to the encoding of the statement's
 /// effect; all other operand reads (terminators, repack guides) pass `None`.
-type OperandCtxt<'vir> = Option<FxHashMap<mir::Place<'vir>, (vir::ExprSnap<'vir>, vir::ExprRef<'vir>)>>;
+type OperandCtxt<'vir> =
+    Option<FxHashMap<mir::Place<'vir>, (vir::ExprSnap<'vir>, vir::ExprRef<'vir>)>>;
 
 struct EncodedRvalue<'vir> {
     /// A snapshot of the rvalue. This snapshot is guaranteed to be well-formed
@@ -329,7 +337,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let rvalue_ty = rvalue.ty(self.local_decls, self.vcx.tcx());
         match rvalue {
             mir::Rvalue::Use(op) => {
-
                 let im_state = self.deps.require_dep::<ImStateEnc>(())?;
                 let snap = self
                     .encode_operand_snap(op, operand_snaps)
@@ -343,7 +350,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 Ok(EncodedRvalue {
                     expr: snap,
                     addr,
-                    post_assign_folds: None
+                    post_assign_folds: None,
                 })
             }
             mir::Rvalue::Cast(cast_kind, operand, ty) => {
@@ -1513,7 +1520,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.from_to_vars.set_from_to_flag_stmt(self.vcx, from, to)
     }
 
-
     pub fn visit_body(&mut self, body: &mir::Body<'vir>) -> EncodeResult<'vir, (), E> {
         /// A work-queue item, min-ordered by the block's reverse-postorder
         /// index (ties broken by insertion order): every non-back-edge
@@ -1747,14 +1753,21 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .iter()
             .map(|local| (*local, self.local_defs[*local].local_ex))
             .collect();
-        
+
         // TODO insert statments here generic-izing locals
-        
+
         let expr = enc_output
             .expr
             .reify(
                 self.vcx,
-                (self.def_id, self.vcx.alloc(locals), Some(self.vcx.alloc(local_refs)), vir::OldLabel::None, Some(self.curr_im_state())))
+                (
+                    self.def_id,
+                    self.vcx.alloc(locals),
+                    Some(self.vcx.alloc(local_refs)),
+                    vir::OldLabel::None,
+                    Some(self.curr_im_state()),
+                ),
+            )
             .downcast_ty();
 
         // TODO insert statments here concretizing locals
@@ -1901,9 +1914,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     SpecBlockKind::Assert => {
                         self.vcx.with_span(span, |vcx| {
                             let error_msg = "assertion might not be stable";
-                            vcx.handle_error("application.precondition:assertion.false", move |_| {
-                                Some(vec![PrustiError::verification(error_msg, span.into())])
-                            });
+                            vcx.handle_error(
+                                "application.precondition:assertion.false",
+                                move |_| {
+                                    Some(vec![PrustiError::verification(error_msg, span.into())])
+                                },
+                            );
                             let error_msg = "assertion might not hold";
                             vcx.handle_error("exhale.failed:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(error_msg, span.into())])
@@ -2297,25 +2313,27 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // Pure function calls don't touch locally-shared state
                         self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
                             im_state.modifies_idn.call()(self.prev_im_state()),
-                            self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP)
+                            self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
                         )));
-                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
+                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
+                            self.prev_im_state(),
+                            self.curr_im_state(),
+                        )));
 
                         let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
                         let dest_decomp = RustTyDecomposition::from_ty(dest_ty, self.def_id);
-                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
-                            Some(
-                                RustTyNormalized {
-                                    param: RustTyDecomposition::param(),
-                                    concrete: dest_decomp
-                                }
+                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(Some(
+                            RustTyNormalized {
+                                param: RustTyDecomposition::param(),
+                                concrete: dest_decomp,
+                            },
                         ))?;
                         let dest_tyval = self.get_tyval(dest_decomp)?;
                         self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
                             im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest),
-                            caster.cast_to_callee_ctx(pure).downcast_ty()
+                            caster.cast_to_callee_ctx(pure).downcast_ty(),
                         )));
-                        
+
                         // The call returned a value of the return type, therefore
                         // it is inhabited.
                         self.stmt(vcx.mk_inhale_stmt(return_ty_use.inhabited()));
@@ -2356,27 +2374,39 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // TODO the modified locations are exactly the result of the frame function of the callee
 
                         // We assume that the resulting ImState was havocked from the pre-main state
-                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(self.prev_im_state(), self.curr_im_state())));
+                        self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
+                            self.prev_im_state(),
+                            self.curr_im_state(),
+                        )));
 
                         let dest_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
                         let dest_decomp = RustTyDecomposition::from_ty(dest_ty, self.def_id);
-                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
-                            Some(
-                                RustTyNormalized {
-                                    param: RustTyDecomposition::param(),
-                                    concrete: dest_decomp
-                                }
+                        let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(Some(
+                            RustTyNormalized {
+                                param: RustTyDecomposition::param(),
+                                concrete: dest_decomp,
+                            },
                         ))?;
                         let dest_tyval = self.get_tyval(dest_decomp)?;
                         let dest_ty_use = self.ty_use_impure(dest_ty);
-                        self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
-                            im_state.get_snap_idn.call()(dest_tyval, self.curr_im_state(), dest),
-                            caster.cast_to_callee_ctx(dest_ty_use.ref_to_snap(dest)).downcast_ty()
-                        )));
+                        self.stmt(
+                            vcx.mk_inhale_stmt(
+                                vcx.mk_eq_expr(
+                                    im_state.get_snap_idn.call()(
+                                        dest_tyval,
+                                        self.curr_im_state(),
+                                        dest,
+                                    ),
+                                    caster
+                                        .cast_to_callee_ctx(dest_ty_use.ref_to_snap(dest))
+                                        .downcast_ty(),
+                                ),
+                            ),
+                        );
 
                         // TODO encode the snap equality between the return value of the fn and the assigned-to place
                         // TODO could we actuall just add the snap equality as a method postcondition? Since the method has access
-                        // to the address of the target & the 
+                        // to the address of the target & the
 
                         let label_post = self.new_label("post");
                         self.call_labels
@@ -2611,7 +2641,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     self.vcx.with_span(arg.span, |_| {
                         self.encode_operand_snap(&arg.node, &None).unwrap()
                     })
-                }).chain(pure_func.is_pure_unstable().then(|| curr_im_state.upcast_ty()))
+                })
+                .chain(
+                    pure_func
+                        .is_pure_unstable()
+                        .then(|| curr_im_state.upcast_ty()),
+                )
                 .collect::<Vec<_>>();
             Some((true, pure_func.call_impure(snap_args)))
         } else {
@@ -2640,14 +2675,16 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     // requires: self.in_im_mode()
     fn bump_im_state(&mut self) -> EncodeResult<'vir, (), E> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
-        let assign_prev = self.vcx.mk_pure_assign_stmt(self.prev_im_state(), self.curr_im_state());
+        let assign_prev = self
+            .vcx
+            .mk_pure_assign_stmt(self.prev_im_state(), self.curr_im_state());
         self.stmt(assign_prev);
         self.stmt(&im_state.bump_idn.call()(self.im_state_ref()).alloc());
         Ok(())
     }
 
     // requires: self.in_im_mode()
-    fn inhale_im_place_capabilities(&mut self, pcg: &Pcg<'_, 'vir>)-> EncodeResult<'vir, (), E> {
+    fn inhale_im_place_capabilities(&mut self, pcg: &Pcg<'_, 'vir>) -> EncodeResult<'vir, (), E> {
         // TODO do we need an equivalent of the root places set?
         //
         // TODO can we actually consider every accessible place to be separate?
@@ -2660,41 +2697,55 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
         for p in pcg.places_with_capability(CapabilityKind::Read) {
             if self.local_defs.get(p.local).is_some() {
-              comment!(self, "[IM] shared capability to place {:?}", p);
+                comment!(self, "[IM] shared capability to place {:?}", p);
 
-              let place_enc = self.encode_place(p)?;
-              let addr_expr = place_enc.expr.address;
+                let place_enc = self.encode_place(p)?;
+                let addr_expr = place_enc.expr.address;
 
-              let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-              let tyval = self.get_tyval(ty_decomp)?;
+                let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+                let tyval = self.get_tyval(ty_decomp)?;
 
-              // TODO enumerate places??
-              let cap_expr = im_caps.shared_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+                // TODO enumerate places??
+                let cap_expr = im_caps.shared_idn.call()(
+                    tyval,
+                    self.curr_im_state(),
+                    self.vcx.mk_int::<0>(),
+                    addr_expr,
+                );
 
-              self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+                self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
             }
         }
 
         for p in pcg.places_with_capability(CapabilityKind::Exclusive) {
             if self.local_defs.get(p.local).is_some() {
-              comment!(self, "[IM] exclusive capability to place {:?}", p);
+                comment!(self, "[IM] exclusive capability to place {:?}", p);
 
-              let place_enc = self.encode_place(p)?;
-              let addr_expr = place_enc.expr.address;
+                let place_enc = self.encode_place(p)?;
+                let addr_expr = place_enc.expr.address;
 
-              let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
-              let tyval = self.get_tyval(ty_decomp)?;
+                let ty_decomp = RustTyDecomposition::from_ty(place_enc.ty.ty, self.def_id);
+                let tyval = self.get_tyval(ty_decomp)?;
 
-              let cap_expr = im_caps.exclusive_idn.call()(tyval, self.curr_im_state(), self.vcx.mk_int::<0>(), addr_expr);
+                let cap_expr = im_caps.exclusive_idn.call()(
+                    tyval,
+                    self.curr_im_state(),
+                    self.vcx.mk_int::<0>(),
+                    addr_expr,
+                );
 
-              self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
+                self.stmt(self.vcx.mk_inhale_stmt(cap_expr));
             }
         }
 
         Ok(())
     }
 
-    fn mendel_local_post_main(&mut self, before_label: &str, pcg: &Pcg<'_, 'vir>) -> EncodeResult<'vir, (), E> {
+    fn mendel_local_post_main(
+        &mut self,
+        before_label: &str,
+        pcg: &Pcg<'_, 'vir>,
+    ) -> EncodeResult<'vir, (), E> {
         comment!(
             self,
             "exhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)"
@@ -2746,7 +2797,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         Ok(())
     }
 
-    fn get_tyval(&mut self, ty: RustTyDecomposition<'vir>) -> EncodeResult<'vir, vir::ExprTyVal<'vir>, E> {
+    fn get_tyval(
+        &mut self,
+        ty: RustTyDecomposition<'vir>,
+    ) -> EncodeResult<'vir, vir::ExprTyVal<'vir>, E> {
         match self.cached_tyvals.get(&ty) {
             Some(tyval) => Ok(*tyval),
             None => {
@@ -2802,9 +2856,12 @@ impl<'vir, 'enc, E: TaskEncoder> PureRvalueEnc<'vir> for ImpureEncVisitor<'vir, 
         if let Some(operand_snaps) = operand_snaps
             && let Some(place) = operand.place()
         {
-            let snap = operand_snaps.get(&place).unwrap_or_else(|| {
-                panic!("operand {operand:?} was not captured for the current statement")
-            }).0;
+            let snap = operand_snaps
+                .get(&place)
+                .unwrap_or_else(|| {
+                    panic!("operand {operand:?} was not captured for the current statement")
+                })
+                .0;
             return Ok(snap);
         }
         match operand {

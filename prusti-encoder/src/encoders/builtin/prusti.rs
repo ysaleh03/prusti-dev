@@ -1230,7 +1230,8 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let ref_snap =
                     self.wrap_in_immref(addr_ty.mk_referent_concrete(snap), Some(addr))?;
                 let frame = self.vcx.mk_set_literal_expr(
-                    self.vcx.alloc_slice(&[im_state.mk_aloc_psnap_idn.call()(tyval, addr)]),
+                    self.vcx
+                        .alloc_slice(&[im_state.mk_aloc_psnap_idn.call()(tyval, addr)]),
                     vir::TYPE_PSNAP,
                 );
                 (ref_snap, Some(frame))
@@ -1483,10 +1484,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
     // (Interior Mutability)
 
     // TODO should this reutrn a snap or a rep?
-    fn encode_rep_op(
-        &mut self,
-        op: RepOp,
-    ) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
+    fn encode_rep_op(&mut self, op: RepOp) -> EncResult<'vir, ExprRet<'vir, vir::Snap>> {
         let im_state = self.deps.require_ref::<ImStateEnc>(())?;
         Ok(match op {
             RepOp::FromAddr => {

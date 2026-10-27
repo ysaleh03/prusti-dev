@@ -763,7 +763,10 @@ impl<'tcx> TySpecifics<'tcx, RustTyDatas> {
         }
     }
 
-    fn from_struct(def_id: Option<hir::def_id::DefId>, variant: &ty::VariantDef) -> StructData<'tcx, RustTyDatas> {
+    fn from_struct(
+        def_id: Option<hir::def_id::DefId>,
+        variant: &ty::VariantDef,
+    ) -> StructData<'tcx, RustTyDatas> {
         let fields = Self::from_fields(&variant.fields);
         StructData::new(def_id, fields)
     }

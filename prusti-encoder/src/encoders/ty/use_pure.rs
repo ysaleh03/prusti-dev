@@ -11,7 +11,11 @@ use crate::encoders::{
 };
 
 use super::{
-    data::*, generics::{GArgCaster, GArgsTy, TyExprEnc}, pure::{PureTyDatas, TyPureEnc, TyPureFieldRef, TyPureRef}, rust_ty::RustTySpecial, TyUseEnc, UseTyDatas
+    TyUseEnc, UseTyDatas,
+    data::*,
+    generics::{GArgCaster, GArgsTy, TyExprEnc},
+    pure::{PureTyDatas, TyPureEnc, TyPureFieldRef, TyPureRef},
+    rust_ty::RustTySpecial,
 };
 
 pub(super) type UsePureTyDatas = UseTyDatas<Pure>;
@@ -72,16 +76,18 @@ impl<'vir> TyUsePureAddrData<'vir> {
 
     pub fn mk_referent_generic<Curr, Next>(
         &self,
-        snap: vir::ExprGenSnap<'vir, Curr, Next>
+        snap: vir::ExprGenSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenPSnap<'vir, Curr, Next> {
         self.referent_caster.cast_to_callee_ctx(snap).downcast_ty()
     }
 
     pub fn mk_referent_concrete<Curr, Next>(
         &self,
-        snap: vir::ExprGenPSnap<'vir, Curr, Next>
+        snap: vir::ExprGenPSnap<'vir, Curr, Next>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
-        self.referent_caster.cast_to_caller_ctx(snap.upcast_ty()).downcast_ty()
+        self.referent_caster
+            .cast_to_caller_ctx(snap.upcast_ty())
+            .downcast_ty()
     }
 }
 
@@ -329,7 +335,7 @@ impl<'a, 'vir> TyUsePureWalker<'a, 'vir> {
                     pure: *data.1,
                     referent_caster,
                 })
-            },
+            }
             TySpecifics::AddrDyn(data) => TySpecifics::mk_addrdyn(*data.1),
             TySpecifics::Rep(data) => TySpecifics::Rep(()),
         };
@@ -492,6 +498,22 @@ impl<'vir> TyUsePureImmRef<'vir> {
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         let value = self.pure.value_access.call()(snap);
         self.referent_caster.cast_to_caller_ctx(value.upcast_ty())
+    }
+
+    pub fn mk_inner_generic<Curr, Next>(
+        &self,
+        snap: vir::ExprGenSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenPSnap<'vir, Curr, Next> {
+        self.referent_caster.cast_to_callee_ctx(snap).downcast_ty()
+    }
+
+    pub fn mk_inner_concrete<Curr, Next>(
+        &self,
+        snap: vir::ExprGenPSnap<'vir, Curr, Next>,
+    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
+        self.referent_caster
+            .cast_to_caller_ctx(snap.upcast_ty())
+            .downcast_ty()
     }
 }
 
