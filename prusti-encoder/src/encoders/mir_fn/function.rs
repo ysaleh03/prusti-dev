@@ -108,11 +108,10 @@ impl<'vir> FunctionCallEncOutput<'vir> {
             .zip(self.inputs.iter())
             .zip(self.arg_tys.iter())
         {
-            // TODO this is going to become a problem for pure_unstable calls
             *arg = caster.cast_to_callee_ctx(if self.is_pure_unstable() {
-                ty.dummy_ref_address(*arg)
-            } else {
                 *arg
+            } else {
+                ty.dummy_ref_address(*arg)
             });
         }
         let call = function.call()(&args, self.ty_args.get_ty(), self.ty_args.get_const());

@@ -154,8 +154,8 @@ impl TaskEncoder for ImTyEnc {
                             im_state.get_snap_idn.call()(ref_tyval, state, addr).upcast_ty(),
                         )
                         .downcast_ty();
-                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?;
-                    let target_addr = ref_use.expect_immref().addr_access(ref_snap);
+                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?.expect_immref();
+                    let target_addr = ref_use.addr_access(ref_snap);
                     let shared = im_caps.shared_idn.call()(ref_tyval, state, idx, addr);
                     let target_shared =
                         im_caps.shared_idn.call()(target_tyval, state, idx, target_addr);
@@ -177,6 +177,29 @@ impl TaskEncoder for ImTyEnc {
                                 &[],
                                 vcx.mk_bin_op_expr(vir::BinOpKind::Implies, shared, target_shared)
                                     .downcast_ty(),
+                            ),
+                        ),
+                    );
+
+                    let qvars = params
+                        .ty_decls()
+                        .as_dyn()
+                        .iter()
+                        .chain(params.const_decls().as_dyn().iter())
+                        .chain([state_decl.as_dyn(), addr_decl.as_dyn()].iter())
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    let ref_use = deps.require_dep::<TyPureEnc>(self_decomp.ty)?.expect_immref();
+                    let target_snap_indirect = ref_use.value_access.call()(ref_snap);
+                    let target_snap_direct = im_state.get_snap_idn.call()(target_tyval, state, target_addr);
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(vcx, "{}_target_snap", self_name),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                &[],
+                                vcx.mk_eq_expr(target_snap_indirect, target_snap_direct)
                             ),
                         ),
                     );
@@ -208,8 +231,8 @@ impl TaskEncoder for ImTyEnc {
                             im_state.get_snap_idn.call()(ref_tyval, state, addr).upcast_ty(),
                         )
                         .downcast_ty();
-                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?;
-                    let target_addr = ref_use.expect_mutref().deref_access(ref_snap);
+                    let ref_use = deps.require_dep::<TyUsePureEnc>(self_decomp)?.expect_mutref();
+                    let target_addr = ref_use.deref_access(ref_snap);
                     let exclusive = im_caps.exclusive_idn.call()(ref_tyval, state, idx, addr);
                     let shared = im_caps.shared_idn.call()(ref_tyval, state, idx, addr);
                     let target_exclusive =
@@ -250,6 +273,30 @@ impl TaskEncoder for ImTyEnc {
                                 &[],
                                 vcx.mk_bin_op_expr(vir::BinOpKind::Implies, shared, target_shared)
                                     .downcast_ty(),
+                            ),
+                        ),
+                    );
+
+                    let qvars = params
+                        .ty_decls()
+                        .as_dyn()
+                        .iter()
+                        .chain(params.const_decls().as_dyn().iter())
+                        .chain([state_decl.as_dyn(), addr_decl.as_dyn()].iter())
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    // TODO do we need a rep-equality axiom for mutrefs?
+                    let ref_use = deps.require_dep::<TyPureEnc>(self_decomp.ty)?.expect_mutref();
+                    let target_snap_indirect = ref_use.value_access.call()(ref_snap);
+                    let target_snap_direct = im_state.get_snap_idn.call()(target_tyval, state, target_addr);
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(vcx, "{}_target_snap", self_name),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&qvars[..]),
+                                &[],
+                                vcx.mk_eq_expr(target_snap_indirect, target_snap_direct)
                             ),
                         ),
                     );
@@ -876,6 +923,28 @@ impl TaskEncoder for ImTyEnc {
                                             .cast_to_caller_ctx(psnap_ex.upcast_ty())
                                             .downcast_ty(),
                                     ),
+                                ),
+                            ),
+                        ),
+                    );
+
+                    let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let addr_ex = vcx.mk_local_ex(addr_decl);
+                    let ty_decl = vcx.mk_local_decl("t", vir::TYPE_TYVAL);
+                    let ty_ex = vcx.mk_local_ex(ty_decl);
+                    axioms.push(
+                        vcx.mk_domain_axiom(
+                            vir::vir_format_identifier!(
+                                vcx,
+                                "{}_mk_aloc_psnap_defn",
+                                task_key.name()
+                            ),
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[addr_decl.as_dyn(), ty_decl.as_dyn()]),
+                                &[],
+                                vcx.mk_eq_expr(
+                                    im_state.mk_aloc_psnap_idn.call()(ty_ex, addr_ex),
+                                    self_caster.cast_to_callee_ctx(addrdyn.mk_addr.call()(addr_ex, ty_ex).upcast_ty()).downcast_ty(),
                                 ),
                             ),
                         ),
