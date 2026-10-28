@@ -411,7 +411,8 @@ impl TaskEncoder for MethodEnc {
             wd_pres.push(none_modifies_ex);
             wd_posts.push(none_modifies_ex);
 
-            let mut extra_checks = Vec::new();
+            let mut extra_pre_checks = Vec::new();
+            let mut extra_post_checks = Vec::new();
 
             match proc_kind {
                 ProcKind::PureUnstable => {
@@ -497,27 +498,9 @@ impl TaskEncoder for MethodEnc {
                                     span.into(),
                                 )])
                             });
-                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
-                        });
-                    }
-                    for (
-                        MirSpecExpr {
-                            total,
-                            partial,
-                            frame,
-                        },
-                        span,
-                    ) in spec.posts.iter()
-                    {
-                        let span = *span;
-                        vcx.with_span(span, |vcx| {
-                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
-                                Some(vec![PrustiError::verification(
-                                    "post-condition might not be framed by reads-clause",
-                                    span.into(),
-                                )])
-                            });
-                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
+                            extra_pre_checks.push(
+                                vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)),
+                            )
                         });
                     }
                     for (
@@ -537,7 +520,31 @@ impl TaskEncoder for MethodEnc {
                                     span.into(),
                                 )])
                             });
-                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
+                            extra_pre_checks.push(
+                                vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)),
+                            )
+                        });
+                    }
+                    for (
+                        MirSpecExpr {
+                            total,
+                            partial,
+                            frame,
+                        },
+                        span,
+                    ) in spec.posts.iter()
+                    {
+                        let span = *span;
+                        vcx.with_span(span, |vcx| {
+                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "post-condition might not be framed by reads-clause",
+                                    span.into(),
+                                )])
+                            });
+                            extra_post_checks.push(vcx.mk_exhale_stmt(
+                                vcx.mk_set_subset_expr(frame, vcx.mk_old_expr(reads_total)),
+                            ))
                         });
                     }
                 }
@@ -692,7 +699,7 @@ impl TaskEncoder for MethodEnc {
             // is a subset of the set calculated by the reads-clause?
 
             let mut wd_pre_stmts = Vec::new();
-           for (
+            for (
                 MirSpecExpr {
                     total,
                     partial,
@@ -731,7 +738,7 @@ impl TaskEncoder for MethodEnc {
                 });
             }
 
-            wd_pre_stmts.append(&mut extra_checks);
+            wd_pre_stmts.append(&mut extra_pre_checks);
             // HACK: we exhale the pre-conditions in reverse order to clear our state so we can check
             // the post-condition
             for wd_pre in wd_pres.iter().rev() {
@@ -742,7 +749,7 @@ impl TaskEncoder for MethodEnc {
                 &vir::CfgBlockLabelData::Start,
                 &[],
                 vcx.alloc_slice(&wd_pre_stmts),
-                vcx.mk_goto_stmt(&vir::CfgBlockLabelData::End)
+                vcx.mk_goto_stmt(&vir::CfgBlockLabelData::End),
             );
 
             let mut wd_post_stmts = Vec::new();
@@ -787,6 +794,7 @@ impl TaskEncoder for MethodEnc {
                     );
                 });
             }
+            wd_post_stmts.append(&mut extra_post_checks);
 
             let wd_post_block = vcx.mk_cfg_block(
                 &vir::CfgBlockLabelData::End,
