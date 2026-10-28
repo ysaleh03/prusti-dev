@@ -22,6 +22,30 @@ pub fn parse_prusti(tokens: TokenStream) -> syn::Result<TokenStream> {
     syn::parse2::<syn::Expr>(parsed.clone())?;
     Ok(parsed)
 }
+
+pub fn parse_prusti_set(tokens: TokenStream) -> syn::Result<TokenStream> {
+    let is_field_projection = {
+        let tokens = tokens.clone().into_iter().collect::<Vec<_>>();
+        matches!(
+            tokens.as_slice(),
+            [
+                TokenTree::Ident(_),
+                TokenTree::Punct(punct),
+                TokenTree::Ident(_)
+            ] if punct.as_char() == '@'
+        )
+    };
+    let parsed = parse_prusti(tokens)?;
+    if is_field_projection {
+        let parsed = quote! {
+            Set::single(ALoc::new(#parsed))
+        };
+        syn::parse2::<syn::Expr>(parsed.clone())?;
+        Ok(parsed)
+    } else {
+        Ok(parsed)
+    }
+}
 pub fn parse_prusti_pledge(tokens: TokenStream) -> syn::Result<TokenStream> {
     // TODO: pledges with reference that is not "result" are not supported;
     // for this reason we assert here that the reference (if there is any) is "result"
@@ -1256,6 +1280,22 @@ mod tests {
                 .unwrap()
                 .to_string(),
             "assert ! (! ((:: prusti_contracts :: Ghost :: new_ref (& (a)) == :: prusti_contracts :: Ghost :: new_ref (& (b)))) || (b))",
+        );
+    }
+
+    #[test]
+    fn test_reads_modifies_field_projection() {
+        assert_eq!(
+            parse_prusti_set("x@f".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "Set :: single (ALoc :: new (((x)) . f ()))",
+        );
+        assert_eq!(
+            parse_prusti_set("Set::single(ALoc::new(x@f))".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "Set :: single (ALoc :: new (((x)) . f ()))",
         );
     }
 

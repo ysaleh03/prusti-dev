@@ -1215,14 +1215,14 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
             AddrOp::ToRef => {
                 let tyval = addr_ty.type_access(opand);
                 let addr = addr_ty.addr_access(opand);
-                // TODO is this an invariant?
                 let snap = if self.is_partial {
                     self.handle_partial_op_error(
                         "application.precondition:assertion.false",
-                        "insufficient capability to guarantee that call to `to_ref` is stable",
+                        "insufficient capability to guarantee that usage of `to_ref` is well-defined",
                         self.span,
                     );
                     let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+                    // acquiring a spec-only shared reference requires that we have shared capability to its target
                     im_caps.get_snap_partial_idn.call()(tyval, self.curr_im_state, addr)
                 } else {
                     im_state.get_snap_idn.call()(tyval, self.curr_im_state, addr)

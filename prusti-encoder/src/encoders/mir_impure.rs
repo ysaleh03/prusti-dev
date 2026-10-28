@@ -2389,6 +2389,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         ))?;
                         let dest_tyval = self.get_tyval(dest_decomp)?;
                         let dest_ty_use = self.ty_use_impure(dest_ty);
+                        // TODO should this actually be a method post-condition?
                         self.stmt(
                             vcx.mk_inhale_stmt(
                                 vcx.mk_eq_expr(

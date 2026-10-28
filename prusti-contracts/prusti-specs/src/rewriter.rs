@@ -3,7 +3,9 @@ use crate::{
     span_overrider::SpanOverrider,
     specifications::{
         common::{SpecificationId, SpecificationIdGenerator},
-        preparser::{parse_prusti, parse_prusti_assert_pledge, parse_prusti_pledge},
+        preparser::{
+            parse_prusti, parse_prusti_assert_pledge, parse_prusti_pledge, parse_prusti_set,
+        },
         untyped,
     },
 };
@@ -170,7 +172,11 @@ impl AstRewriter {
         tokens: TokenStream,
         item: &T,
     ) -> syn::Result<syn::Item> {
-        self.generate_spec_item_fn(spec_type, spec_id, parse_prusti(tokens)?, item)
+        let parsed = match spec_type {
+            SpecItemType::Modifies | SpecItemType::Reads => parse_prusti_set(tokens)?,
+            _ => parse_prusti(tokens)?,
+        };
+        self.generate_spec_item_fn(spec_type, spec_id, parsed, item)
     }
 
     /// Parse a pledge with lhs into a Rust expression

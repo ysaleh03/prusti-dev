@@ -48,7 +48,6 @@ impl<'vir> MethodCallEncOutput<'vir> {
             .filter_map(|(arg, caster)| caster.cast_to_callee_ctx(arg))
             .collect();
 
-        // TODO modifies
         vir::with_vcx(|vcx| {
             stmts.push(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
                 self.im_state.modifies_idn.call()(self.im_state.get_idn.call()(im_state_ref)),
@@ -119,16 +118,13 @@ impl TaskEncoder for MethodCallEnc {
             .decompose_compare_normalize(signature.gparams, task_key.gargs);
         let output = deps.require_dep::<GArgsCastEnc<Impure>>(normalized)?;
         let im_state = deps.require_ref::<ImStateEnc>(())?;
-        Ok((
-            (),
-            MethodCallEncOutput {
-                method: method_ref,
-                ty_args,
-                inputs,
-                output,
-                im_state,
-            },
-        ))
+        Ok(((), MethodCallEncOutput {
+            method: method_ref,
+            ty_args,
+            inputs,
+            output,
+            im_state,
+        }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -303,13 +299,10 @@ impl TaskEncoder for MethodEnc {
             });
 
             // TODO generate a function idn for the frame
-            deps.emit_output_ref(
-                def_id,
-                MethodEncOutputRef {
-                    method_ref,
-                    footprint_ref,
-                },
-            )?;
+            deps.emit_output_ref(def_id, MethodEncOutputRef {
+                method_ref,
+                footprint_ref,
+            })?;
 
             // Method contract. We will need to emit pre- and postconditions for
             // the permissions, the functional spec, and (in the postcondition)
@@ -349,6 +342,7 @@ impl TaskEncoder for MethodEnc {
                 })?;
 
             let im_state = deps.require_ref::<ImStateEnc>(())?;
+            let im_caps = deps.require_ref::<ImCapEnc>(())?;
             let im_state_ref = vcx.mk_local_ex(im_state.state_ref_decl);
             let im_state_owned = vcx.mk_predicate_app_expr((im_state.pred_idn)(im_state_ref)(None));
             pres.push(im_state_owned);
@@ -367,10 +361,17 @@ impl TaskEncoder for MethodEnc {
                     if matches!(proc_kind, ProcKind::Method | ProcKind::PureUnstable) {
                         cap_pres.push(local_defs[arg_idx].impure_cap)
                     }
-                    pres.push(vcx.mk_eq_expr(local_defs[arg_idx].spec_snap, local_defs[arg_idx].im_state_snap));
+                    pres.push(vcx.mk_eq_expr(
+                        local_defs[arg_idx].spec_snap,
+                        local_defs[arg_idx].im_state_snap,
+                    ));
                 }
             }
             posts.push(local_defs[mir::RETURN_PLACE].impure_pred);
+            posts.push(vcx.mk_eq_expr(
+                local_defs[mir::RETURN_PLACE].spec_snap,
+                local_defs[mir::RETURN_PLACE].im_state_snap,
+            ));
 
             // ..
             pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
@@ -403,10 +404,10 @@ impl TaskEncoder for MethodEnc {
                     .collect::<Vec<_>>(),
             );
 
-            let mut stab_pres = pres.clone();
-            stab_pres.append(&mut cap_pres);
-            let mut stab_posts = posts.clone();
-            stab_posts.append(&mut cap_pres);
+            let mut wd_pres = pres.clone();
+            wd_pres.append(&mut cap_pres);
+            let mut wd_posts = posts.clone();
+            wd_posts.append(&mut cap_pres);
 
             match proc_kind {
                 ProcKind::PureUnstable => {
@@ -460,17 +461,23 @@ impl TaskEncoder for MethodEnc {
                         span,
                     )?;
 
-                    assert!(spec.modifies.pure.is_empty());
+                    assert!(spec.modifies.is_empty());
                     cap_pres.push(none_modifies_ex);
                     let none_modifiable_ex = vcx
                         .mk_eq_expr(modifiable_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
                     cap_pres.push(none_modifiable_ex);
 
-                    let frame_partial = spec.reads.impure.iter().fold(
+                    // TODO
+
+                    let frame_partial = spec.reads.iter().fold(
                         vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                        |acc, (spec_ex, _)| {
-                            vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
-                                .downcast_ty()
+                        |acc, (clause, _)| {
+                            vcx.mk_anyset_op_expr(
+                                vir::CollectionBinOpKind::Union,
+                                acc,
+                                clause.impure,
+                            )
+                            .downcast_ty()
                         },
                     );
 
@@ -490,7 +497,6 @@ impl TaskEncoder for MethodEnc {
                         generics.ty_exprs(),
                         generics.const_exprs(),
                     );
-                    let im_caps = deps.require_ref::<ImCapEnc>(())?;
 
                     let self_frame_idn: MethodIdn<
                         '_,
@@ -544,18 +550,18 @@ impl TaskEncoder for MethodEnc {
                     );
                 }
                 ProcKind::Method => {
-                    assert!(spec.reads.pure.is_empty());
+                    assert!(spec.reads.is_empty());
                     cap_pres.push(none_modifies_ex);
 
-                    let modifies_set_partial = (!spec.modifies.pure.is_empty())
+                    let modifies_set_partial = (!spec.modifies.is_empty())
                         .then(|| {
-                            spec.modifies.impure.iter().fold(
+                            spec.modifies.iter().fold(
                                 vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                                |acc, (spec_ex, _)| {
+                                |acc, (clause, _)| {
                                     vcx.mk_anyset_op_expr(
                                         vir::CollectionBinOpKind::Union,
                                         acc,
-                                        spec_ex,
+                                        clause.impure,
                                     )
                                     .downcast_ty()
                                 },
@@ -563,7 +569,7 @@ impl TaskEncoder for MethodEnc {
                         })
                         .unwrap_or(im_state.top_set_idn.call()());
 
-                    // The method specification is checked assuming that the set of modifiable locations is
+                    // Contract well-definedness is checked assuming that the set of modifiable locations is
                     // exactly the modifies-clause and the set of modified locations is empty.
                     let modifiable_pre_partial =
                         vcx.mk_eq_expr(modifies_set_partial, modifiable_ex);
@@ -584,15 +590,15 @@ impl TaskEncoder for MethodEnc {
                     );
                     pres.push(modifiable_pre_total);
 
-                    let modifies_set_pure = (!spec.modifies.pure.is_empty())
+                    let modifies_set_pure = (!spec.modifies.is_empty())
                         .then(|| {
-                            spec.modifies.pure.iter().fold(
+                            spec.modifies.iter().fold(
                                 vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                                |acc, spec_ex| {
+                                |acc, (clause, _)| {
                                     vcx.mk_anyset_op_expr(
                                         vir::CollectionBinOpKind::Union,
                                         acc,
-                                        spec_ex,
+                                        clause.pure,
                                     )
                                     .downcast_ty()
                                 },
@@ -659,9 +665,173 @@ impl TaskEncoder for MethodEnc {
                     );
                 }
                 ProcKind::Pure => {
-                    assert!(spec.modifies.pure.is_empty() && spec.reads.pure.is_empty());
+                    assert!(spec.modifies.is_empty() && spec.reads.is_empty());
                 }
             }
+
+            // NOTE: be careful about the order in which we add pre/post-conditions.
+
+            // TODO the new design for stability checks should be:
+            // check well-definedness in a single state (read-capability required for read locations)
+            // THEN assuming that the condition holds, check stability by either
+            // 1) checking for stable_read/read for all elements of the frame or
+            // 2) given a state in which the condition holds, havoc and check that the condition holds post-havoc.
+            //
+            // i.e. the stability condition for assertions is that they are stable WHEN TRUE
+            // we go with option 1 because it means that the semantics of assertions match the semantics of runtime
+            // code.
+
+            // TODO we need:
+            //
+            // the frame of the pre/post condition
+            // a 'partial/wd' version of each where functions check their preconditions (but not stability)
+            // and .to_ref() checks for the right capability
+
+            // I guess the question is whether it should be well-defined to produce a spec-mode shared reference
+            // using read-capability alone
+
+            // Extend stab pres/posts with the partial pre/post-conditions
+            wd_pres.extend(spec.pres.iter().map(|(cond, _)| cond.partial));
+            wd_posts.extend(spec.posts.iter().map(|(cond, _)| cond.partial));
+
+            // TODO for both pres and posts, first inhale wd_pres/posts to check well_definedness and then
+            // ask if every location in their frames are stable_read
+
+            // TODO IM if time permits, should we enforce that the frame of the pres/posts
+            // is a subset of the set calculated by the reads-clause?
+
+            let mut wd_pre_stmts = Vec::new();
+            for pre in wd_pres {
+                wd_pre_stmts.push(vcx.mk_inhale_stmt(pre));
+            }
+            for (
+                MirSpecExpr {
+                    total,
+                    partial,
+                    frame,
+                },
+                span,
+            ) in spec.pres.iter()
+            {
+                let span = *span;
+                vcx.with_span(span, |vcx| {
+                    vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                        Some(vec![PrustiError::verification(
+                            "condition might not be stable",
+                            span.into(),
+                        )])
+                    });
+                    let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let addr_ex = vcx.mk_local_ex(addr_decl);
+                    let type_decl = vcx.mk_local_decl("t", vir::TYPE_TYVAL);
+                    let type_ex = vcx.mk_local_ex(type_decl);
+                    let aloc_ex = im_state.mk_aloc_psnap_idn.call()(type_ex, addr_ex);
+                    wd_pre_stmts.push(
+                        vcx.mk_exhale_stmt(
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[addr_decl.as_dyn(), type_decl.as_dyn()]),
+                                &[],
+                                vcx.mk_bin_op_expr(
+                                    vir::BinOpKind::Implies,
+                                    vcx.mk_set_in_expr(aloc_ex, frame),
+                                    im_caps.stable_read_idn.call()(type_ex, curr_im_state, addr_ex),
+                                )
+                                .downcast_ty(),
+                            ),
+                        ),
+                    );
+                });
+            }
+
+            let mut wd_post_stmts = Vec::new();
+            for post in wd_posts {
+                wd_post_stmts.push(vcx.mk_inhale_stmt(post));
+            }
+            for (
+                MirSpecExpr {
+                    total,
+                    partial,
+                    frame,
+                },
+                span,
+            ) in spec.posts.iter()
+            {
+                let span = *span;
+                vcx.with_span(span, |vcx| {
+                    vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                        Some(vec![PrustiError::verification(
+                            "condition might not be stable",
+                            span.into(),
+                        )])
+                    });
+                    let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                    let addr_ex = vcx.mk_local_ex(addr_decl);
+                    let type_decl = vcx.mk_local_decl("t", vir::TYPE_TYVAL);
+                    let type_ex = vcx.mk_local_ex(type_decl);
+                    let aloc_ex = im_state.mk_aloc_psnap_idn.call()(type_ex, addr_ex);
+                    wd_post_stmts.push(
+                        vcx.mk_exhale_stmt(
+                            vcx.mk_forall_expr(
+                                vcx.alloc_slice(&[addr_decl.as_dyn(), type_decl.as_dyn()]),
+                                &[],
+                                vcx.mk_bin_op_expr(
+                                    vir::BinOpKind::Implies,
+                                    vcx.mk_set_in_expr(aloc_ex, frame),
+                                    im_caps.stable_read_idn.call()(type_ex, curr_im_state, addr_ex),
+                                )
+                                .downcast_ty(),
+                            ),
+                        ),
+                    );
+                });
+            }
+
+            let mut wd_method_stmts = Vec::new();
+            let nondet_decl = vcx.mk_local_decl("nondet", vir::TYPE_BOOL);
+            let nondet_ex = vcx.mk_local_ex(nondet_decl);
+            wd_method_stmts.push(vcx.mk_local_decl_stmt(nondet_decl, None));
+            wd_method_stmts.push(vcx.mk_if_stmt(
+                nondet_ex,
+                vcx.alloc_slice(&wd_pre_stmts),
+                vcx.alloc_slice(&wd_post_stmts),
+            ));
+            let wd_method_block = vcx.mk_cfg_block(
+                &vir::CfgBlockLabelData::End,
+                &[],
+                vcx.alloc_slice(&wd_method_stmts),
+                vcx.mk_assume_false_stmt(),
+            );
+
+            let wd_method_name = vir::vir_format_identifier!(
+                vcx,
+                "m_contract_wd_{}",
+                vir::ViperIdent::from_def_id(vcx, def_id)
+            );
+            let wd_method_ref: MethodIdn<
+                'vir,
+                (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap),
+            > = MethodIdn::new(
+                wd_method_name,
+                (
+                    vir::TYPE_REF,
+                    ref_args,
+                    generics.ty_args(),
+                    generics.const_args(),
+                ),
+            );
+            methods.push(vcx.mk_method(
+                wd_method_ref,
+                (
+                    im_state.state_ref_decl,
+                    &args,
+                    generics.ty_decls(),
+                    generics.const_decls(),
+                ),
+                &[],
+                &[],
+                &[],
+                Some(vcx.alloc_slice(&[wd_method_block])),
+            ));
 
             // Trusted functions, call stubs, external functions and trait
             // functions without a default implementation have no body to
@@ -701,28 +871,11 @@ impl TaskEncoder for MethodEnc {
                     )
                 }
 
-                // TODO IM what we want to do is encode the pre-condition of the method as a inhale-exhale pair
-                // where the exhale (2nd) element includes exlcusive capability to each argument and the inhale
-                // (1st) element uses the total version of each function
-
-                // TODO what about post-conditions? I assume we don't want to emit capabilities into the callee
-                // TODO does this work with the generic encoding/casts?
-                // I think so - since the imstate stores s_Params, if we learn an equality between two s_Params we
-                // should also know that the concrete cast of both is equal
-
-                // TODO each pre would actually be a pair of the stability-check and non-stability check version (we could do this in the spec encoder)
-                // then we would have a inhale-exhale pair [initial-caps, true]
-
-                // let init_capabilities = todo!();
-
                 let im_data = {
                     let prev_im_state_decl = vir::vir_local_decl! { vcx; prev_im_st : ImState };
                     start_stmts.push(vcx.mk_local_decl_stmt(prev_im_state_decl, None));
                     let prev_im_state = vcx.mk_local_ex(prev_im_state_decl);
-
-                    start_stmts.push(vcx.mk_comment_stmt(
-                        "inhale forall l: Loc :: read(l, pc) ==> acc(loc_to_ref(l).value)",
-                    ));
+                    // TODO why is this still here?
                     for arg in (0..arg_count).map(mir::Local::from) {
                         match body.local_decls[arg].ty.ref_mutability() {
                             Some(ty::Mutability::Mut) => start_stmts.push(vcx.mk_comment_stmt(
@@ -839,35 +992,10 @@ impl TaskEncoder for MethodEnc {
                 None
             };
 
-            // NOTE: be careful about the order in which we add pre/post-conditions.
-
-            // Extend stab pres/posts with the partial pre/post-conditions
-            stab_pres.extend(spec.pres.iter().map(|(cond, _)| cond.partial));
-            stab_posts.extend(spec.posts.iter().map(|(cond, _)| cond.partial));
-            // TODO IM if time permits, should we enforce that the frame of the pres/posts
-            // is a subset of the set calculated by the reads-clause?
-
             // Add functional specification as the last pre- and postconditions.
             pres.extend(spec.pres.iter().map(|(cond, _)| cond.total));
             posts.extend(spec.posts.iter().map(|(cond, _)| cond.total));
 
-            let stab_method_name = vir::vir_format_identifier!(
-                vcx,
-                "m_check_stab_{}",
-                vir::ViperIdent::from_def_id(vcx, def_id)
-            );
-            let stab_method_ref: MethodIdn<
-                'vir,
-                (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap),
-            > = MethodIdn::new(
-                stab_method_name,
-                (
-                    vir::TYPE_REF,
-                    ref_args,
-                    generics.ty_args(),
-                    generics.const_args(),
-                ),
-            );
             methods.push(vcx.mk_method(
                 method_ref,
                 (
@@ -880,20 +1008,6 @@ impl TaskEncoder for MethodEnc {
                 vcx.alloc_slice(&pres),
                 vcx.alloc_slice(&posts),
                 blocks.map(|blocks| vcx.alloc_slice(&blocks)),
-            ));
-
-            methods.push(vcx.mk_method(
-                stab_method_ref,
-                (
-                    im_state.state_ref_decl,
-                    &args,
-                    generics.ty_decls(),
-                    generics.const_decls(),
-                ),
-                &[],
-                vcx.alloc_slice(&stab_pres),
-                vcx.alloc_slice(&stab_posts),
-                None,
             ));
             Ok((
                 MethodEncOutput {

@@ -402,7 +402,7 @@ impl TaskEncoder for FunctionEnc {
                 // the function body and check that the reads-clause is a superset
                 assert!(expr.is_none());
 
-                if spec.reads.pure.is_empty() {
+                if spec.reads.is_empty() {
                     vcx.emit_early_error(PrustiError::incorrect(
                         format!(
                             "`pure_unstable` function `{}` has no reads-clause",
@@ -413,10 +413,10 @@ impl TaskEncoder for FunctionEnc {
                 }
 
                 // Encode function that calculates this function's frame
-                let frame_body = spec.reads.pure.iter().fold(
+                let frame_body = spec.reads.iter().fold(
                     vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                    |acc, spec_ex| {
-                        vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, spec_ex)
+                    |acc, (clause, _)| {
+                        vcx.mk_anyset_op_expr(vir::CollectionBinOpKind::Union, acc, clause.pure)
                             .downcast_ty()
                     },
                 );
@@ -434,12 +434,14 @@ impl TaskEncoder for FunctionEnc {
                     generics.ty_exprs(),
                     generics.const_exprs(),
                 );
-                let im_caps = deps.require_ref::<ImCapEnc>(())?;
-                partial_pres.push(vir::expr! {
-                    forall t: Type, l: Ref ::
-                    { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
-                    (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
-                });
+
+                // We don't add this as a pre-condition; function calls should be well-defined as long as their pre-conditions hold
+                // let im_caps = deps.require_ref::<ImCapEnc>(())?;
+                // partial_pres.push(vir::expr! {
+                //     forall t: Type, l: Ref ::
+                //     { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
+                //     (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
+                // });
 
                 // Encode the function's framing axiom as a post-condition
                 let future_decl = vcx.mk_local_decl("s_future", vir::TYPE_IMSTATE);
