@@ -563,7 +563,7 @@ impl TaskEncoder for MethodEnc {
                     // Contract well-definedness is checked assuming that the set of modifiable locations is
                     // a superset of the modifies-clause.
                     let modifiable_pre_partial =
-                        vcx.mk_set_subset_expr(modifiable_ex, modifies_set_partial);
+                        vcx.mk_set_subset_expr(modifies_set_partial, modifiable_ex);
                     wd_pres.push(modifiable_pre_partial);
 
                     // The caller method's precondition requires the the modifies-clause to be a subset of the current
