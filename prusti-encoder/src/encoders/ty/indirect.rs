@@ -12,10 +12,7 @@ use vir::{CastType, Reify};
 use crate::encoders::{ImCapEnc, ImStateEnc, TyUseImpureEnc, ty::RustTyDecomposition};
 
 use super::{
-    data::{StructData, TySpecifics},
-    generics::TyExprEnc,
-    rust_ty::RustTyDatas,
-    use_pure::{TyUsePureEnc, UsePureTyDatas},
+    data::{StructData, TySpecifics}, generics::TyExprEnc, pure::TyPureEnc, rust_ty::RustTyDatas, use_pure::{TyUsePureEnc, UsePureTyDatas}
 };
 
 #[derive(Copy, Clone)]
@@ -258,11 +255,18 @@ pub struct IndirectCapsEnc;
 #[derive(Clone)]
 pub struct IndirectCapsEncOutputRef<'vir> {
     pub cap_applications: Vec<ExprOutput<'vir>>,
+    pub state_constraints: Vec<ExprOutput<'vir>>,
 }
 
 impl<'vir> IndirectCapsEncOutputRef<'vir> {
-    pub fn new(cap_applications: Vec<ExprOutput<'vir>>) -> Self {
-        Self { cap_applications }
+    pub fn new(
+        cap_applications: Vec<ExprOutput<'vir>>,
+        state_constraints: Vec<ExprOutput<'vir>>,
+    ) -> Self {
+        Self {
+            cap_applications,
+            state_constraints,
+        }
     }
 }
 
@@ -295,6 +299,7 @@ impl TaskEncoder for IndirectCapsEnc {
             let self_ty_enc = deps.require_dep::<TyUsePureEnc>(ty)?;
             let combined = ty.ty.zip(self_ty_enc);
             let mut cap_applications = vec![];
+            let mut state_constraints = vec![];
             // Collects (accessor, indirect_predicate) pairs for the fields of a
             // struct-like (used for structs and enum variants). Fields are
             // recursed into at their concrete (normalized) type.
@@ -323,6 +328,10 @@ impl TaskEncoder for IndirectCapsEnc {
                     let tyval = deps.require_dep::<TyExprEnc>(inner_ty)?;
                     let im_caps = deps.require_ref::<ImCapEnc>(())?;
                     let im_state = deps.require_ref::<ImStateEnc>(())?;
+                    let state_ex =
+                                im_state.get_idn.call()(
+                                    vcx.mk_local_ex(im_state.state_ref_decl),
+                                );
                     cap_applications.push(vcx.mk_lazy_expr(
                         "shared_indirect",
                         vir::TYPE_BOOL,
@@ -330,14 +339,30 @@ impl TaskEncoder for IndirectCapsEnc {
                             let addr = ref_domain.addr_access(self_expr.downcast_ty());
                             im_caps.shared_idn.call()(
                                 tyval,
-                                im_state.get_idn.call()(
-                                    vcx.mk_local_ex(im_state.state_ref_decl),
-                                ),
+                                state_ex,
                                 // TODO should this be different?
                                 vcx.mk_int::<0>(),
                                 addr,
                             )
                             .kind
+                        }),
+                    ));
+
+                    let ref_ty_enc = deps.require_dep::<TyPureEnc>(ty.ty)?.expect_immref();
+                    state_constraints.push(vcx.mk_lazy_expr(
+                        "shared_indirect_imstate",
+                        vir::TYPE_BOOL,
+                        Box::new(move |vcx, self_expr: vir::ExprSnap<'vir>| {
+                            let addr = ref_domain.addr_access(self_expr.downcast_ty());
+                            let snap = ref_ty_enc.value_access.call()(self_expr.downcast_ty());
+                            vcx.mk_eq_expr(
+                                im_state.get_snap_idn.call()(
+                                   tyval, 
+                                    state_ex,
+                                    addr,
+                                ),
+                                snap
+                            ).kind
                         }),
                     ));
                 }
@@ -379,7 +404,7 @@ impl TaskEncoder for IndirectCapsEnc {
                 TySpecifics::StructLike(data) => (),
                 TySpecifics::EnumLike(data) => (),
             };
-            Ok(((), IndirectCapsEncOutputRef::new(cap_applications)))
+            Ok(((), IndirectCapsEncOutputRef::new(cap_applications, state_constraints)))
         })
     }
 }

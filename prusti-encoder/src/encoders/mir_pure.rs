@@ -109,7 +109,7 @@ impl TaskEncoder for MirPureEnc {
         PureKind,    // encoding a pure function?
         DefId,       // ID of the function
         GArgs<'vir>, // the generic arguments and their context
-        bool,        // whether to do stability checks
+        bool,        // whether this expression has access to the ImState
         bool,        // whether this expression is unstable
     );
 

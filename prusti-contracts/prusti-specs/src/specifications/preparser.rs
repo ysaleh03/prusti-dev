@@ -214,6 +214,9 @@ impl PrustiTokenStream {
                     (TokenTree::Punct(punct), _, _, _) if punct.as_char() == '@' => {
                         PrustiToken::BinOp(punct.span(), PrustiBinaryOp::Addr)
                     }
+                    (TokenTree::Punct(punct), _, _, _) if punct.as_char() == '^' => {
+                        PrustiToken::BinOp(punct.span(), PrustiBinaryOp::AbstractFieldRef)
+                    }
                     (token @ TokenTree::Punct(punct), _, _, _) if punct.spacing() == Joint => {
                         // make sure to fully consume any Rust operator
                         // to avoid later mis-identifying its suffix
@@ -449,12 +452,33 @@ impl PrustiTokenStream {
 
                 None => break,
             };
-            if op == PrustiBinaryOp::Addr {
+            if matches!(
+                op,
+                PrustiBinaryOp::Addr | PrustiBinaryOp::AbstractFieldRef
+            ) {
                 self.tokens.pop_front();
                 let rhs = match self.tokens.pop_front() {
                     Some(PrustiToken::Token(token)) => token.to_token_stream(),
-                    Some(token) => return err(token.span(), "expected field name after `@`"),
-                    None => return err(span, "expected field name after `@`"),
+                    Some(token) => {
+                        return err(
+                            token.span(),
+                            if op == PrustiBinaryOp::Addr {
+                                "expected field name after `@`"
+                            } else {
+                                "expected field name after `^`"
+                            },
+                        )
+                    }
+                    None => {
+                        return err(
+                            span,
+                            if op == PrustiBinaryOp::Addr {
+                                "expected field name after `@`"
+                            } else {
+                                "expected field name after `^`"
+                            },
+                        )
+                    }
                 };
                 lhs = op.translate(span, lhs, rhs);
                 continue;
@@ -1029,6 +1053,7 @@ impl PrustiToken {
 enum PrustiBinaryOp {
     Rust(RustOp),
     Addr,
+    AbstractFieldRef,
     Iff,
     Implies,
     ImpliesReverse,
@@ -1061,7 +1086,7 @@ impl PrustiBinaryOp {
             Self::Rust(_) => (0, 0),
             // Address projection must consume only its immediate operands,
             // before any other Prusti binary operator is considered.
-            Self::Addr => (u8::MAX, u8::MAX),
+            Self::Addr | Self::AbstractFieldRef => (u8::MAX, u8::MAX),
             Self::Iff => (4, 3),
             Self::Implies => (6, 5),
             Self::ImpliesReverse => (5, 6),
@@ -1104,6 +1129,10 @@ impl PrustiBinaryOp {
             Self::Addr => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
                 quote_spanned! { joined_span => (#lhs) . #raw_rhs () }
+            }
+            Self::AbstractFieldRef => {
+                let joined_span = join_spans(lhs.span(), rhs.span());
+                quote_spanned! { joined_span => ((#lhs) . #raw_rhs ()).to_ref() }
             }
             Self::SnapEq => {
                 let joined_span = join_spans(lhs.span(), rhs.span());
@@ -1224,6 +1253,18 @@ mod tests {
                 .unwrap()
                 .to_string(),
             "((self)) . inner () == ((self)) . inner ()",
+        );
+        assert_eq!(
+            parse_prusti("x^f".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "(((x)) . f ()) . to_ref ()",
+        );
+        assert_eq!(
+            parse_prusti("x^f^g".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "((((((x)) . f ()) . to_ref ())) . g ()) . to_ref ()",
         );
         assert_eq!(
             parse_prusti("self === other@inner".parse().unwrap())

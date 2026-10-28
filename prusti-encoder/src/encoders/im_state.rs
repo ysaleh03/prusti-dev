@@ -176,7 +176,7 @@ impl TaskEncoder for ImStateEnc {
 
             let state_ref_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_REF);
 
-            let state_decl = vcx.mk_local_decl("im_state_ref", vir::TYPE_IMSTATE);
+            let state_decl = vcx.mk_local_decl("im_state", vir::TYPE_IMSTATE);
 
             deps.emit_output_ref(
                 *task_key,

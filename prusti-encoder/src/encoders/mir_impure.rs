@@ -1732,7 +1732,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     fn encode_spec_block(
         &mut self,
         spec_block: mir::BasicBlock,
-    ) -> EncodeResult<'vir, vir::ExprBool<'vir>, E> {
+    ) -> EncodeResult<'vir, (vir::ExprBool<'vir>, vir::ExprSet<'vir>), E> {
         let enc_output = self.deps.require_dep::<MirPureEnc>(MirPureEncTask {
             encoding_depth: 0,
             parent_def_id: self.def_id,
@@ -1755,15 +1755,29 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .collect();
 
         // TODO insert statments here generic-izing locals
-
+        let locals = self.vcx.alloc(locals);
+        let local_refs = self.vcx.alloc(local_refs);
         let expr = enc_output
             .expr
             .reify(
                 self.vcx,
                 (
                     self.def_id,
-                    self.vcx.alloc(locals),
-                    Some(self.vcx.alloc(local_refs)),
+                    locals,
+                    Some(local_refs),
+                    vir::OldLabel::None,
+                    Some(self.curr_im_state()),
+                ),
+            )
+            .downcast_ty();
+        let frame = enc_output
+            .frame
+            .reify(
+                self.vcx,
+                (
+                    self.def_id,
+                    locals,
+                    Some(local_refs),
                     vir::OldLabel::None,
                     Some(self.curr_im_state()),
                 ),
@@ -1771,7 +1785,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .downcast_ty();
 
         // TODO insert statments here concretizing locals
-        Ok(expr)
+        Ok((expr, frame))
     }
 
     fn visit_basic_block_data(
@@ -1830,7 +1844,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 .clone()
                 .into_iter()
                 .map(|(spec_block, span)| {
-                    let expr = self.encode_spec_block(spec_block)?;
+                    let (expr, _) = self.encode_spec_block(spec_block)?;
+                    panic!("implement stab check for loop invariants");
+                    // TODO to have full loop invariant support we'd need to emit a stability check?
                     self.vcx.with_span(span, |vcx| {
                         let error_msg = "loop invariant might not be preserved";
                         vcx.handle_error("invariant.not.preserved:assertion.false", move |_| {
@@ -1908,12 +1924,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 if matches!(spec.kind, SpecBlockKind::LoopInvariant) {
                     continue;
                 }
-                let spec_expr = self.encode_spec_block(spec.block)?;
+                let (spec_expr, frame) = self.encode_spec_block(spec.block)?;
                 let span = spec.span;
                 match spec.kind {
                     SpecBlockKind::Assert => {
                         self.vcx.with_span(span, |vcx| {
-                            let error_msg = "assertion might not be stable";
+                            let error_msg = "assertion might not be well-defined";
                             vcx.handle_error(
                                 "application.precondition:assertion.false",
                                 move |_| {
@@ -1924,11 +1940,49 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             vcx.handle_error("exhale.failed:assertion.false", move |_| {
                                 Some(vec![PrustiError::verification(error_msg, span.into())])
                             });
+                            // Exhale checks that the condition holds in the current state & is well-defined
                             self.stmt(self.vcx.mk_exhale_stmt(spec_expr));
+                            // TODO emit a stability check
+                        });
+                        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+                        let im_caps = self.deps.require_ref::<ImCapEnc>(())?;
+                        self.vcx.with_span(span, |vcx| {
+                            let error_msg = "assertion might not be stable";
+                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(error_msg, span.into())])
+                            });
+                            let addr_decl = vcx.mk_local_decl("l", vir::TYPE_REF);
+                            let addr_ex = vcx.mk_local_ex(addr_decl);
+                            let ty_decl = vcx.mk_local_decl("t", vir::TYPE_TYVAL);
+                            let ty_ex = vcx.mk_local_ex(ty_decl);
+                            let state_ex =
+                                im_state.get_idn.call()(vcx.mk_local_ex(im_state.state_ref_decl));
+                            // Exhale check that the frame of the condition is stable
+                            self.stmt(
+                                vcx.mk_exhale_stmt(
+                                    vcx.mk_forall_expr(
+                                        vcx.alloc_slice(&[addr_decl.as_dyn(), ty_decl.as_dyn()]),
+                                        &[],
+                                        vcx.mk_bin_op_expr(
+                                            vir::BinOpKind::Implies,
+                                            vcx.mk_set_in_expr(
+                                                im_state.mk_aloc_psnap_idn.call()(ty_ex, addr_ex),
+                                                frame,
+                                            ),
+                                            im_caps.stable_read_idn.call()(
+                                                ty_ex, state_ex, addr_ex,
+                                            ),
+                                        )
+                                        .downcast_ty(),
+                                    ),
+                                ),
+                            );
+                            // TODO emit a stability check
                         });
                     }
                     SpecBlockKind::Assume => {
                         self.stmt(self.vcx.mk_inhale_stmt(spec_expr));
+                        panic!("implement stability check for prusti_assume");
                     }
                     SpecBlockKind::Refute => {
                         // TODO: handle_error
@@ -2307,7 +2361,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                 },
                             );
                         }
-                        // TODO if there's an assignment we need to do a havoc and a snap equality.
                         self.stmt(assign_stmt);
 
                         // Pure function calls don't touch locally-shared state
@@ -2649,7 +2702,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         .then(|| curr_im_state.upcast_ty()),
                 )
                 .collect::<Vec<_>>();
-            Some((true, pure_func.call_impure(snap_args)))
+            Some((true, pure_func.call_partial(snap_args)))
         } else {
             None
         })

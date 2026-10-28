@@ -207,10 +207,11 @@ impl<'vir> WandEncOutput<'vir> {
         let decomp = RustTyDecomposition::from_ty(arg_ty, self.g_params(vcx, call_ctx));
         let region_proj =
             projection_for_generalized_idx(arg_ty, g.region_idx(), decomp, vcx.tcx())?;
-        let caps = deps
+        let mut caps_enc = deps
             .require_dep::<IndirectCapsEnc>(region_proj)
-            .unwrap()
-            .cap_applications;
+            .unwrap();
+        let mut caps = caps_enc.cap_applications;
+        caps.append(&mut caps_enc.state_constraints);
         (!caps.is_empty()).then_some(caps)
     }
 
@@ -321,7 +322,6 @@ impl<'vir> WandEncOutput<'vir> {
             })
             .collect::<Vec<_>>()
             .into_iter();
-
         unblocked_input_posts
         // let output_posts = self.outputs().filter_map(|g| {
         //     self.encode_caps_for_function_shape_node(vcx, deps, g, None, |i| {

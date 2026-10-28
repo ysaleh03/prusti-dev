@@ -35,16 +35,6 @@ pub struct FunctionCallEncOutput<'vir> {
     is_pure_unstable: bool,
 }
 
-// TODO IM I think there are some more cases that we add.
-// 1) you might call a function unchecked to encode trait axioms
-// 2) you might call a function with pre-conditions but no stab checks for a method spec
-// 3) you might call a function with both pre-conditions and stab check for stab/WD checks
-//
-//
-// is 2) necessary? if we have a pure-partial mode that checks stability/wd, then can we
-// do a total encoding for actual verification?
-// we might call a function in pure-partial context if we want to check stability
-
 impl<'vir> FunctionCallEncOutput<'vir> {
     pub fn call_frame<Curr, Next>(
         &self,
@@ -83,15 +73,6 @@ impl<'vir> FunctionCallEncOutput<'vir> {
         args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
     ) -> vir::ExprGenSnap<'vir, Curr, Next> {
         self.call_casted(self.function.partial_ref, args)
-    }
-
-    // TODO in impure contexts we need to call a function that doesn't do stability checks but still checks
-    // the pre-condition
-    pub fn call_impure<Curr, Next>(
-        &self,
-        args: Vec<vir::ExprGenSnap<'vir, Curr, Next>>,
-    ) -> vir::ExprGenSnap<'vir, Curr, Next> {
-        self.call_casted(self.function.impure_ref, args)
     }
 
     fn call_casted<Curr, Next>(
@@ -143,7 +124,6 @@ impl TaskEncoder for FunctionCallEnc {
             FunctionEncOutputRef {
                 partial_ref: assoc_enc.call_stub_pure_partial.unwrap(),
                 total_ref: assoc_enc.call_stub_pure_total.unwrap(),
-                impure_ref: assoc_enc.call_stub_pure_impure.unwrap(),
                 frame_ref: assoc_enc.frame_stub,
             }
         } else {
@@ -171,20 +151,17 @@ impl TaskEncoder for FunctionCallEnc {
                 deps.require_dep::<TyUsePureEnc>(ty_task)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((
-            (),
-            FunctionCallEncOutput {
-                function: total_ref,
-                ty_args,
-                inputs,
-                output,
-                arg_tys,
-                is_pure_unstable: crate::encoders::is_function_pure_unstable(
-                    callee_def_id,
-                    task_key.gargs,
-                ),
-            },
-        ))
+        Ok(((), FunctionCallEncOutput {
+            function: total_ref,
+            ty_args,
+            inputs,
+            output,
+            arg_tys,
+            is_pure_unstable: crate::encoders::is_function_pure_unstable(
+                callee_def_id,
+                task_key.gargs,
+            ),
+        }))
     }
 
     fn emit_outputs<'vir>(program: &mut task_encoder::Program<'vir>) {
@@ -198,10 +175,13 @@ pub struct FunctionEnc;
 
 #[derive(Debug, Clone)]
 pub struct FunctionEncOutputRef<'vir> {
-    // (Interior Mutability) pure_unstable functions are encoded to take an extra ImState argument
+    // NOTE: pure_unstable functions are encoded to take an extra ImState argument
+
+    // Encoding of function that includes its preconditions. Used in e.g. well-definedness checks.
     partial_ref: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
+    // Encoding of functions that omits preconditions. Used in e.g. axioms.
     total_ref: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
-    impure_ref: FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Snap>,
+    // TODO what is this for
     pub frame_ref:
         Option<FunctionIdn<'vir, (vir::ManySnap, vir::ManyTyVal, vir::ManyCSnap), vir::Set>>,
 }
@@ -273,11 +253,6 @@ impl TaskEncoder for FunctionEnc {
                 (arg_types, generics.ty_args(), generics.const_args()),
                 return_type,
             );
-            let impure_ref = FunctionIdn::new(
-                impure_ident,
-                (arg_types, generics.ty_args(), generics.const_args()),
-                return_type,
-            );
 
             let set_ty = vcx.mk_ty_set(vir::TYPE_PSNAP);
             let frame_ref = is_pure_unstable.then(|| {
@@ -288,15 +263,11 @@ impl TaskEncoder for FunctionEnc {
                 )
             });
 
-            deps.emit_output_ref(
-                def_id,
-                FunctionEncOutputRef {
-                    partial_ref,
-                    total_ref,
-                    impure_ref,
-                    frame_ref,
-                },
-            )?;
+            deps.emit_output_ref(def_id, FunctionEncOutputRef {
+                partial_ref,
+                total_ref,
+                frame_ref,
+            })?;
 
             let spec = deps.require_dep::<MirSpecEnc>(MirSpecEncTask {
                 def_id,
@@ -379,8 +350,7 @@ impl TaskEncoder for FunctionEnc {
                 .iter()
                 .map(|arg| vcx.mk_local_ex(arg))
                 .collect::<Vec<_>>();
-            let mut partial_pres = spec.pre_exprs().collect::<Vec<_>>();
-            let mut total_posts = spec
+            let mut wrapped_posts = spec
                 .posts
                 .iter()
                 .map(|(post, _)| {
@@ -393,9 +363,6 @@ impl TaskEncoder for FunctionEnc {
             let wrapped_call =
                 total_ref.call()(&func_args, generics.ty_exprs(), generics.const_exprs());
 
-            // TODO OH it's tricky because we might call a pure_unstable function in a
-            // situation where it's not necessarily stable.
-            // This means that we can't always require the stability-check version of the function for impure contexts
             if is_pure_unstable {
                 // Until we have a good way to check the bodies of pure_unstable functions, disallow non-trusted functions
                 // TODO we could make the syntactic check similar to pure functions, but simply calculate the footpritn of
@@ -435,14 +402,6 @@ impl TaskEncoder for FunctionEnc {
                     generics.const_exprs(),
                 );
 
-                // We don't add this as a pre-condition; function calls should be well-defined as long as their pre-conditions hold
-                // let im_caps = deps.require_ref::<ImCapEnc>(())?;
-                // partial_pres.push(vir::expr! {
-                //     forall t: Type, l: Ref ::
-                //     { ([im_state.mk_aloc_psnap_idn](t, l)) } // TODO is this the right trigger
-                //     (([im_state.mk_aloc_psnap_idn](t, l)) in ([frame_ex])) ==> ([im_caps.stable_read_idn](t, ([im_state.state_decl]), l))
-                // });
-
                 // Encode the function's framing axiom as a post-condition
                 let future_decl = vcx.mk_local_decl("s_future", vir::TYPE_IMSTATE);
                 let future_args = local_defs
@@ -452,7 +411,7 @@ impl TaskEncoder for FunctionEnc {
                     .collect::<Vec<_>>();
                 let future_call =
                     total_ref.call()(&future_args, generics.ty_exprs(), generics.const_exprs());
-                total_posts.push(vir::expr! {
+                wrapped_posts.push(vir::expr! {
                   forall [future_decl] :: { ([future_call]) }
                   (forall t: Type, l: Ref :: { ([im_state.get_snap_idn](t, ([future_decl]), l)) }
                   (([im_state.mk_aloc_psnap_idn](t, l)) in (frame_ex)) ==>
@@ -473,35 +432,27 @@ impl TaskEncoder for FunctionEnc {
                     })
                     .collect::<Vec<_>>(),
             );
-            let partial_pres = vcx.alloc_slice(&partial_pres);
-            functions.push(vcx.mk_function(
-                partial_ref,
-                (&func_params, generics.ty_decls(), generics.const_decls()),
-                partial_pres,
-                posts,
-                None,
-                Some(wrapped_call),
-            ));
-
-            let total_posts = vcx.alloc_slice(&total_posts);
-            functions.push(vcx.mk_function(
-                total_ref,
-                (&func_params, generics.ty_decls(), generics.const_decls()),
-                &[],
-                total_posts,
-                expr.is_none().then_some(&vir::DecreasesGenData::Star),
-                expr,
-            ));
 
             let pres = vcx.alloc_slice(&spec.pre_exprs().collect::<Vec<_>>());
             functions.push(vcx.mk_function(
-                impure_ref,
+                partial_ref,
                 (&func_params, generics.ty_decls(), generics.const_decls()),
                 pres,
                 posts,
                 None,
                 Some(wrapped_call),
             ));
+
+            let wrapped_posts = vcx.alloc_slice(&wrapped_posts);
+            functions.push(vcx.mk_function(
+                total_ref,
+                (&func_params, generics.ty_decls(), generics.const_decls()),
+                &[],
+                wrapped_posts,
+                expr.is_none().then_some(&vir::DecreasesGenData::Star),
+                expr,
+            ));
+
             Ok((
                 FunctionEncOutput {
                     functions: &vcx.alloc(functions)[..],

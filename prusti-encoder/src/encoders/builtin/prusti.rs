@@ -1218,7 +1218,7 @@ impl<'enc, 'vir> BuiltinCtxt<'enc, 'vir> {
                 let snap = if self.is_partial {
                     self.handle_partial_op_error(
                         "application.precondition:assertion.false",
-                        "insufficient capability to guarantee that usage of `to_ref` is well-defined",
+                        "insufficient capability to justify obtaining spec-only immutable reference",
                         self.span,
                     );
                     let im_caps = self.deps.require_ref::<ImCapEnc>(())?;

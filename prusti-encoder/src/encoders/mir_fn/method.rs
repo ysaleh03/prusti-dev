@@ -377,7 +377,12 @@ impl TaskEncoder for MethodEnc {
             pres.extend(wands.indirect_pres(vcx, &local_defs, deps));
             posts.extend(wands.indirect_posts(vcx, &local_defs, deps));
             posts.extend(wands.wand_posts(vcx, &local_defs, deps));
-            cap_posts.extend(wands.indirect_cap_posts(vcx, &local_defs, deps));
+            if matches!(proc_kind, ProcKind::Method | ProcKind::PureUnstable) {
+                cap_posts.push(local_defs[mir::RETURN_PLACE].impure_cap);
+                cap_posts.extend(wands.indirect_cap_posts(vcx, &local_defs, deps));
+                // TODO for each of the shared referenes held across the call, cap_posts
+                // should include the fact that the snapshot at that address remains the same
+            }
 
             // TODO for reads-clauses can we assume that all pure_unstable functions
             // are trusted? Ah but wouldn't we like to check the well-definedness of function
