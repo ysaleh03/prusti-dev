@@ -488,7 +488,6 @@ impl TaskEncoder for ImTyEnc {
 
                             let im_caps = deps.require_ref::<ImCapEnc>(())?;
 
-                            // TODO change
                             let self_exclusive = im_caps.exclusive_idn.call()(
                                 self_tyval, state, place_idx, self_addr,
                             );

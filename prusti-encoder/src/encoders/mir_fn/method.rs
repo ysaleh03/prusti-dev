@@ -874,25 +874,14 @@ impl TaskEncoder for MethodEnc {
                     let name_p = local_def.local.name;
                     start_stmts.push(
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
-                    )
+                    );
+                    start_stmts.push(vcx.mk_inhale_stmt(local_defs[local].impure_cap));
                 }
 
                 let im_data = {
                     let prev_im_state_decl = vir::vir_local_decl! { vcx; prev_im_st : ImState };
                     start_stmts.push(vcx.mk_local_decl_stmt(prev_im_state_decl, None));
                     let prev_im_state = vcx.mk_local_ex(prev_im_state_decl);
-                    // TODO why is this still here?
-                    for arg in (0..arg_count).map(mir::Local::from) {
-                        match body.local_decls[arg].ty.ref_mutability() {
-                            Some(ty::Mutability::Mut) => start_stmts.push(vcx.mk_comment_stmt(
-                                "if (side conditions) {{ inhale mutable capability for {arg:?}@inner }}",
-                            )),
-                            Some(ty::Mutability::Not) => start_stmts.push(vcx.mk_comment_stmt(
-                                "if (side conditions) {{ inhale shared capability for {arg:?}@inner }}",
-                            )),
-                            None => {}
-                        };
-                    }
                     ImpureImData {
                         im_state_ref,
                         curr_im_state,
