@@ -15,7 +15,7 @@ use crate::encoders::{
     im_state::ImStateEncRef,
     mir_fn::{CallTaskDescription, FunctionEnc, RustSignature, SpecBlocks, SpecBlocksEnc},
     mir_impure::ImpureImData,
-    pure::spec::{MirSpecEncMode, MirSpecEncTask, MirSpecExpr},
+    pure::spec::{MirSpecClause, MirSpecEncMode, MirSpecEncTask, MirSpecExpr},
     ty::generics::{
         GArgCaster, GArgs, GArgsCastEnc, GArgsTy, GArgsTyEnc, GParams, GenericParamsEnc,
     },
@@ -392,10 +392,6 @@ impl TaskEncoder for MethodEnc {
             let modifies_ex = im_state.modifies_idn.call()(curr_im_state);
             let modifiable_ex = im_state.modifiable_idn.call()(curr_im_state);
 
-            // Stability checks are always in a state where no location is modified
-            let none_modifies_ex =
-                vcx.mk_eq_expr(modifies_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
-
             let pure_args = vcx.alloc_slice(
                 &local_defs
                     .args()
@@ -407,10 +403,19 @@ impl TaskEncoder for MethodEnc {
             let mut wd_pres = pres.clone();
             wd_pres.append(&mut cap_pres);
             let mut wd_posts = posts.clone();
-            wd_posts.append(&mut cap_pres);
+            wd_posts.append(&mut cap_posts);
+
+            // WD/stability checks are always in a state where no location is modified
+            let none_modifies_ex =
+                vcx.mk_eq_expr(modifies_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
+            wd_pres.push(none_modifies_ex);
+            wd_posts.push(none_modifies_ex);
+
+            let mut extra_checks = Vec::new();
 
             match proc_kind {
                 ProcKind::PureUnstable => {
+                    assert!(spec.modifies.is_empty());
                     // When encoding a pure-unstable function, we need to check the following:
                     // - the reads-clause is well-defined (+ all reads are safe)
                     // - the reads-clause is self-framing
@@ -453,105 +458,91 @@ impl TaskEncoder for MethodEnc {
 
                     // TODO compute the frame of the
 
-                    let arg_defs = deps.require_ref_spanned::<MirLocalDefEnc>(
-                        MirLocalDefEncTask::Local {
-                            def_id,
-                            all_locals: false,
+                    // Add trivial preconditions that check well-definedness of the reads-clause
+                    for (
+                        MirSpecClause {
+                            pure,
+                            impure,
+                            frame,
                         },
                         span,
-                    )?;
-
-                    assert!(spec.modifies.is_empty());
-                    cap_pres.push(none_modifies_ex);
-                    let none_modifiable_ex = vcx
-                        .mk_eq_expr(modifiable_ex, vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP));
-                    cap_pres.push(none_modifiable_ex);
-
-                    // TODO
-
-                    let frame_partial = spec.reads.iter().fold(
-                        vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
-                        |acc, (clause, _)| {
-                            vcx.mk_anyset_op_expr(
-                                vir::CollectionBinOpKind::Union,
-                                acc,
-                                clause.impure,
-                            )
-                            .downcast_ty()
-                        },
-                    );
-
-                    let frame_ex = vcx.mk_let_expr(
-                        vcx.mk_local_decl("reads", set_ty),
-                        frame_partial,
-                        vcx.mk_bool::<true>(),
-                    );
-
-                    // A trivial precondition that checks stability and well-definedness of the reads-clause w.r.t. the
-                    // function precondition and argument types
-                    cap_pres.push(frame_ex);
+                    ) in spec.reads.iter()
+                    {
+                        let span = *span;
+                        wd_pres.push(vcx.mk_eq_expr(impure, impure))
+                    }
 
                     let function_enc = deps.require_ref::<FunctionEnc>(def_id)?;
-                    let frame_total = function_enc.frame_ref.unwrap().call()(
+                    let reads_total = function_enc.frame_ref.unwrap().call()(
                         pure_args,
                         generics.ty_exprs(),
                         generics.const_exprs(),
                     );
 
-                    let self_frame_idn: MethodIdn<
-                        '_,
-                        (vir::Ref, vir::ManyRef, vir::ManyTyVal, vir::ManyCSnap),
-                    > = MethodIdn::new(
-                        vir::vir_format_identifier!(
-                            vcx,
-                            "m_self_framing_{}",
-                            vir::ViperIdent::from_def_id(vcx, def_id)
-                        ),
-                        (
-                            vir::TYPE_REF,
-                            ref_args,
-                            generics.ty_args(),
-                            generics.const_args(),
-                        ),
-                    );
-
-                    // This method forces Viper to check that the reads-clause is self-framing, i.e. that it only
-                    // reads from unstable memory locations that are themselves described by the reads-clause
-                    //
-                    // TODO IM if time permits, we might want to use the frame calculated by MirPure instead which
-                    // would let us generate a more helpful error message.
-                    let reads_stable = vir::expr! {
-                        forall l: Ref, t: Type :: { ([im_caps.stable_read_idn](t, ([curr_im_state]), l)) }
-                        (([im_state.mk_aloc_psnap_idn](t, l)) in (frame_total)) ==>
-                            ([im_caps.stable_read_idn](t, ([curr_im_state]), l))
-                    };
-                    // TODO IM should we add the pre/post-conditions of the pure-unstable function here to check
-                    // that they are also framed by the reads-clause?
-                    methods.push(
-                        vcx.mk_method(
-                            self_frame_idn,
-                            (
-                                im_state.state_ref_decl,
-                                &args,
-                                generics.ty_decls(),
-                                generics.const_decls(),
-                            ),
-                            &[],
-                            vcx.alloc_slice(
-                                &pres
-                                    .iter()
-                                    .map(|pre| *pre)
-                                    .chain([im_state_owned, reads_stable, frame_ex])
-                                    .collect::<Vec<_>>(),
-                            ),
-                            &[],
-                            None,
-                        ),
-                    );
+                    // Add self-framing checks
+                    for (
+                        MirSpecExpr {
+                            total,
+                            partial,
+                            frame,
+                        },
+                        span,
+                    ) in spec.pres.iter()
+                    {
+                        let span = *span;
+                        vcx.with_span(span, |vcx| {
+                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "pre-condition might not be framed by reads-clause",
+                                    span.into(),
+                                )])
+                            });
+                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
+                        });
+                    }
+                    for (
+                        MirSpecExpr {
+                            total,
+                            partial,
+                            frame,
+                        },
+                        span,
+                    ) in spec.posts.iter()
+                    {
+                        let span = *span;
+                        vcx.with_span(span, |vcx| {
+                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "post-condition might not be framed by reads-clause",
+                                    span.into(),
+                                )])
+                            });
+                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
+                        });
+                    }
+                    for (
+                        MirSpecClause {
+                            pure,
+                            impure,
+                            frame,
+                        },
+                        span,
+                    ) in spec.reads.iter()
+                    {
+                        let span = *span;
+                        vcx.with_span(span, |vcx| {
+                            vcx.handle_error("exhale.failed:assertion.false", move |_| {
+                                Some(vec![PrustiError::verification(
+                                    "reads-clause might not be self-framing",
+                                    span.into(),
+                                )])
+                            });
+                            extra_checks.push(vcx.mk_exhale_stmt(vcx.mk_set_subset_expr(frame, reads_total)))
+                        });
+                    }
                 }
                 ProcKind::Method => {
                     assert!(spec.reads.is_empty());
-                    cap_pres.push(none_modifies_ex);
 
                     let modifies_set_partial = (!spec.modifies.is_empty())
                         .then(|| {
@@ -570,12 +561,12 @@ impl TaskEncoder for MethodEnc {
                         .unwrap_or(im_state.top_set_idn.call()());
 
                     // Contract well-definedness is checked assuming that the set of modifiable locations is
-                    // exactly the modifies-clause and the set of modified locations is empty.
+                    // a superset of the modifies-clause.
                     let modifiable_pre_partial =
-                        vcx.mk_eq_expr(modifies_set_partial, modifiable_ex);
-                    cap_pres.push(modifiable_pre_partial);
+                        vcx.mk_set_subset_expr(modifiable_ex, modifies_set_partial);
+                    wd_pres.push(modifiable_pre_partial);
 
-                    // The method precondition requires the the modifies-clause to be a subset of the current
+                    // The caller method's precondition requires the the modifies-clause to be a subset of the current
                     // set of modifiable locations, but the body is checked assuming that the modifiable locations
                     // are *exactly* the modifies-clause.
                     let modifies_set_total = footprint_ref.unwrap().inner_ref.call()(
@@ -701,10 +692,7 @@ impl TaskEncoder for MethodEnc {
             // is a subset of the set calculated by the reads-clause?
 
             let mut wd_pre_stmts = Vec::new();
-            for pre in wd_pres {
-                wd_pre_stmts.push(vcx.mk_inhale_stmt(pre));
-            }
-            for (
+           for (
                 MirSpecExpr {
                     total,
                     partial,
@@ -717,7 +705,7 @@ impl TaskEncoder for MethodEnc {
                 vcx.with_span(span, |vcx| {
                     vcx.handle_error("exhale.failed:assertion.false", move |_| {
                         Some(vec![PrustiError::verification(
-                            "condition might not be stable",
+                            "pre-condition might not be stable",
                             span.into(),
                         )])
                     });
@@ -743,6 +731,20 @@ impl TaskEncoder for MethodEnc {
                 });
             }
 
+            wd_pre_stmts.append(&mut extra_checks);
+            // HACK: we exhale the pre-conditions in reverse order to clear our state so we can check
+            // the post-condition
+            for wd_pre in wd_pres.iter().rev() {
+                wd_pre_stmts.push(vcx.mk_exhale_stmt(wd_pre))
+            }
+
+            let wd_pre_block = vcx.mk_cfg_block(
+                &vir::CfgBlockLabelData::Start,
+                &[],
+                vcx.alloc_slice(&wd_pre_stmts),
+                vcx.mk_goto_stmt(&vir::CfgBlockLabelData::End)
+            );
+
             let mut wd_post_stmts = Vec::new();
             for post in wd_posts {
                 wd_post_stmts.push(vcx.mk_inhale_stmt(post));
@@ -760,7 +762,7 @@ impl TaskEncoder for MethodEnc {
                 vcx.with_span(span, |vcx| {
                     vcx.handle_error("exhale.failed:assertion.false", move |_| {
                         Some(vec![PrustiError::verification(
-                            "condition might not be stable",
+                            "post-condition might not be stable",
                             span.into(),
                         )])
                     });
@@ -786,19 +788,10 @@ impl TaskEncoder for MethodEnc {
                 });
             }
 
-            let mut wd_method_stmts = Vec::new();
-            let nondet_decl = vcx.mk_local_decl("nondet", vir::TYPE_BOOL);
-            let nondet_ex = vcx.mk_local_ex(nondet_decl);
-            wd_method_stmts.push(vcx.mk_local_decl_stmt(nondet_decl, None));
-            wd_method_stmts.push(vcx.mk_if_stmt(
-                nondet_ex,
-                vcx.alloc_slice(&wd_pre_stmts),
-                vcx.alloc_slice(&wd_post_stmts),
-            ));
-            let wd_method_block = vcx.mk_cfg_block(
+            let wd_post_block = vcx.mk_cfg_block(
                 &vir::CfgBlockLabelData::End,
                 &[],
-                vcx.alloc_slice(&wd_method_stmts),
+                vcx.alloc_slice(&wd_post_stmts),
                 vcx.mk_assume_false_stmt(),
             );
 
@@ -828,9 +821,9 @@ impl TaskEncoder for MethodEnc {
                     generics.const_decls(),
                 ),
                 &[],
+                vcx.alloc_slice(&wd_pres),
                 &[],
-                &[],
-                Some(vcx.alloc_slice(&[wd_method_block])),
+                Some(vcx.alloc_slice(&[wd_pre_block, wd_post_block])),
             ));
 
             // Trusted functions, call stubs, external functions and trait
