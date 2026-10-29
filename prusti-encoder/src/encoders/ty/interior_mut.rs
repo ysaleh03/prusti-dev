@@ -397,8 +397,7 @@ impl TaskEncoder for ImTyEnc {
                         specifics: ImTySpecifics::StructLike(StructLikeData { abs_fields }),
                     })?;
 
-                    // TODO encode field addr inequality axioms?
-                    // TODO moved-axioms for abstract fields
+                    // TODO encode pairwise non-aliasing axioms for 1) fields and 2) abstract fields
 
                     let struct_data = self_ty_pure.expect_structlike();
 
@@ -439,6 +438,8 @@ impl TaskEncoder for ImTyEnc {
                                 }
                                 TyPureFieldRef::Dynamic(f) => f.call()(self_lookup),
                             };
+
+                            // TODO the non-aliasing axiom could be that ...
 
                             let field_ty = field_data.ty().decompose(task_key.params);
                             let field_tyval = deps.require_dep::<TyExprEnc>(field_ty)?;
@@ -732,7 +733,7 @@ impl TaskEncoder for ImTyEnc {
                                             self_target_tyval,
                                             addr_ex,
                                         );
-                                        im_caps.local_write_idn.call()(
+                                        im_caps.local_idn.call()(
                                             aloc_tyval, state_ex, idx_ex, aloc_addr, parent_loc,
                                         )
                                     }

@@ -1633,6 +1633,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         args: &[Spanned<mir::Operand<'vir>>],
         curr_ver: &FxHashMap<mir::Local, Version<'vir>>,
     ) -> EncodeResult<'vir, ExprRet<'vir>, MirPureEnc> {
+        // TODO IM does this work with our new encoding?
         let mk_bool = |prim: vir::ExprGenBool<'vir, _, _>| prim.upcast_ty::<vir::CSnap>();
         Ok(match builtin {
             SpecBuiltin::Forall | SpecBuiltin::Exists => {

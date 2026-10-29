@@ -380,8 +380,6 @@ impl TaskEncoder for MethodEnc {
             if matches!(proc_kind, ProcKind::Method | ProcKind::PureUnstable) {
                 cap_posts.push(local_defs[mir::RETURN_PLACE].impure_cap);
                 cap_posts.extend(wands.indirect_cap_posts(vcx, &local_defs, deps));
-                // TODO for each of the shared referenes held across the call, cap_posts
-                // should include the fact that the snapshot at that address remains the same
             }
 
             // TODO for reads-clauses can we assume that all pure_unstable functions
@@ -875,7 +873,9 @@ impl TaskEncoder for MethodEnc {
                     start_stmts.push(
                         vcx.mk_local_decl_stmt(vir::vir_local_decl! { vcx; [name_p] : Ref }, None),
                     );
-                    start_stmts.push(vcx.mk_inhale_stmt(local_defs[local].impure_cap));
+                    // Inhale exclusive capability to each function argument
+                    // TODO I think we don't want to do this, since we havoc AFTER inhaling capabilities @ each step
+                    // start_stmts.push(vcx.mk_inhale_stmt(local_defs[local].impure_cap));
                 }
 
                 let im_data = {

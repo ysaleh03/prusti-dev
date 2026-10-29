@@ -1246,6 +1246,8 @@ pub fn im_spec(attr: TokenStream, tokens: TokenStream) -> TokenStream {
             let spec_id_str = spec_id.to_string();
             let (model_trait, model_impl, wd_impl) = im_model::rewrite(&item)?;
 
+            // TODO make wd_impl extern_spec if the im_spec is marked extern as well?
+
             return Ok(quote_spanned! {item.span()=>
                 #[prusti::im_model_trait]
                 #[prusti::spec_id = #spec_id_str]

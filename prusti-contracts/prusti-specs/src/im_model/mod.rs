@@ -25,7 +25,6 @@ pub fn rewrite(
     let mut new_trait: syn::ItemTrait = parse_quote_spanned! {item_struct.span() =>
         trait #trait_ident #impl_generics #where_clause {}
     };
-
     let mut new_impl: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
         impl #impl_generics #trait_ident #ty_generics for #item_ident #ty_generics #where_clause {}
     };
@@ -144,10 +143,12 @@ pub fn rewrite(
                 #addr
             }
         })?);
+
         // This is a bit of a hack to force Prusti to check the stability & well-definedness
         // of capable! annotations.
         wd_items.push(syn::parse2(quote! {
             #[trusted]
+            #[ghost_fn]
             #[requires(#side_condition)]
             #[requires(#addr == #addr)]
             #[modifies(Set::new())]
@@ -159,11 +160,11 @@ pub fn rewrite(
 
     new_trait.items = trait_items;
     new_impl.items = impl_items;
+
     let mut wd_impl: syn::ItemImpl = parse_quote_spanned! {item_struct.span() =>
         impl #impl_generics #item_ident #ty_generics #where_clause {}
     };
     wd_impl.items = wd_items;
-
     Ok((new_trait, new_impl, wd_impl))
 }
 

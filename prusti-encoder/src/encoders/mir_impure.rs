@@ -337,7 +337,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let rvalue_ty = rvalue.ty(self.local_decls, self.vcx.tcx());
         match rvalue {
             mir::Rvalue::Use(op) => {
-                let im_state = self.deps.require_dep::<ImStateEnc>(())?;
                 let snap = self
                     .encode_operand_snap(op, operand_snaps)
                     .map_err(EncodeRvalueError::from)?;
@@ -1745,7 +1744,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let locals: FxHashMap<mir::Local, _> = enc_output
             .inputs
             .iter()
-            .map(|local| (*local, self.local_defs[*local].impure_snap))
+            .map(|local| (*local, self.local_defs[*local].spec_snap))
             .collect();
 
         let local_refs: FxHashMap<mir::Local, vir::ExprRef<'vir>> = enc_output
@@ -1754,7 +1753,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .map(|local| (*local, self.local_defs[*local].local_ex))
             .collect();
 
-        // TODO insert statments here generic-izing locals
         let locals = self.vcx.alloc(locals);
         let local_refs = self.vcx.alloc(local_refs);
         let expr = enc_output
@@ -2059,6 +2057,15 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
                     match rval_enc {
                         Ok(rval_enc) => {
+                            let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+
+                            // Compute the ImState frame of the assignment from the PCG
+                            self.inhale_im_place_capabilities(EvalStmtPhase::PreMain, location)?;
+                            self.stmt(self.vcx.mk_inhale_stmt(self.vcx.mk_eq_expr(
+                                im_state.modifies_idn.call()(self.curr_im_state()),
+                                self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
+                            )));
+
                             let dest_ty = dest.ty(self.local_decls, self.vcx.tcx());
                             assert!(dest_ty.variant_index.is_none());
                             let dest_ty_out = self.ty_use_impure(dest_ty.ty);
@@ -2066,14 +2073,14 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                                 dest_ty_out.apply_method_assign(self.vcx, proj_enc, rval_enc.expr);
                             self.stmt(method_assign_app);
 
-                            // (Interior Mutability)
+                            // After the effect is recorded in the Prusti heap it is recorded in the ImState
                             self.bump_im_state()?;
-                            let current_fpcs = self.current_fpcs.take().unwrap();
-                            let cfpcs = &current_fpcs.statements[location.statement_index];
-                            let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-                            self.inhale_im_place_capabilities(pcg)?;
-                            self.current_fpcs = Some(current_fpcs);
+                            self.stmt(self.vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
+                                self.prev_im_state(),
+                                self.curr_im_state(),
+                            )));
 
+                            // Then we sync the ImState with the resulting Prusti heap
                             let dest_decomp = RustTyDecomposition::from_ty(dest_ty.ty, self.def_id);
                             let caster = self.deps.require_dep::<GArgsCastEnc<Pure>>(
                                 Some(
@@ -2084,7 +2091,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             ))?;
 
                             let dest_tyval = self.get_tyval(dest_decomp)?;
-                            let im_state = self.deps.require_ref::<ImStateEnc>(())?;
 
                             let generic_snap = caster.cast_to_callee_ctx(rval_enc.expr).downcast_ty();
                             self.stmt(self.vcx.mk_inhale_stmt(
@@ -2195,14 +2201,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             self.pcg_phase_actions(location, phase)?;
         }
 
-        // (Interior Mutability)
-        self.bump_im_state()?;
-        let current_fpcs = self.current_fpcs.take().unwrap();
-        let cfpcs = &current_fpcs.statements[location.statement_index];
-        let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
-        self.inhale_im_place_capabilities(pcg)?;
-        self.current_fpcs = Some(current_fpcs);
-
         // A specification-only arm's `if false` switch is encoded as an
         // unconditional jump to the live target (the continuation, or the
         // inline ghost body); the arm itself is not encoded.
@@ -2232,6 +2230,16 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 // A `Drop`'s semantics (releasing the dropped place's
                 // permission via a weaken exhale) are carried by the PCG
                 // statements, so only its goto remains to be encoded here.
+
+                self.comment("encoding Drop");
+                self.inhale_im_place_capabilities(EvalStmtPhase::PreMain, location)?;
+                self.bump_im_state()?;
+                let im_state = self.deps.require_ref::<ImStateEnc>(())?;
+                self.stmt(self.vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
+                    self.prev_im_state(),
+                    self.curr_im_state(),
+                )));
+
                 self.goto_single_succ(location, *target)?
             }
             mir::TerminatorKind::SwitchInt { discr, targets } => {
@@ -2294,6 +2302,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 target,
                 ..
             } => {
+                // we are guaranteed to havoc for calls, so compute the frame
+                self.inhale_im_place_capabilities(EvalStmtPhase::PreMain, location)?;
+
                 // TODO: IM we need special handling for:
                 // 1) calculating the explicit capabilities that we frame around a call
                 // N.B. for this we might want to implement the special handling for pure functions
@@ -2340,7 +2351,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 self.vcx.with_span(span, |vcx| {
                     let pure =
                         self.pure_call_result(func_def_id, caller_substs, args, is_pure, span)?;
-                    let im_state = self.deps.require_ref::<ImStateEnc>(())?;
                     if let Some((can_fail, pure)) = pure {
                         self.wandless_calls.insert(self.current_block.unwrap());
                         let return_ty = destination.ty(self.local_decls, self.vcx.tcx()).ty;
@@ -2364,10 +2374,14 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         self.stmt(assign_stmt);
 
                         // Pure function calls don't touch locally-shared state
+                        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
                         self.stmt(vcx.mk_inhale_stmt(vcx.mk_eq_expr(
-                            im_state.modifies_idn.call()(self.prev_im_state()),
+                            im_state.modifies_idn.call()(self.curr_im_state()),
                             self.vcx.mk_set_literal_expr(&[], vir::TYPE_PSNAP),
                         )));
+
+                        self.bump_im_state()?;
+                        // We learn that the resulting ImState was havocked from the pre-call state
                         self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
                             self.prev_im_state(),
                             self.curr_im_state(),
@@ -2391,10 +2405,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         // it is inhabited.
                         self.stmt(vcx.mk_inhale_stmt(return_ty_use.inhabited()));
                     } else {
-                        // TODO IM somewhere here we also need to get the set of modified locations
                         let Ok(func_out) = self.deps.require_dep::<encoders::MethodCallEnc>(
                             CallTaskDescription::new(self.def_id, caller_substs, func_def_id),
                         ) else {
+                            // TODO in the recursive case is there something special we do ImState-wise?
                             self.current_terminator = Some(
                                 self.vcx
                                     .mk_dummy_stmt(vir::vir_format!(self.vcx, "recursion",)),
@@ -2406,6 +2420,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             .iter()
                             .map(|arg| self.encode_operand(&arg.node).unwrap())
                             .collect::<Vec<_>>();
+
+                        // NOTE: we don't call bump_im_state because the method will inhale/exhale the
+                        // ImState predicate
+                        self.stmt(
+                            vcx.mk_pure_assign_stmt(self.prev_im_state(), self.curr_im_state()),
+                        );
 
                         let call = func_out.call(self.im_state_ref(), method_in, dest);
 
@@ -2424,9 +2444,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                             },
                         );
                         self.stmts(call);
-                        // TODO the modified locations are exactly the result of the frame function of the callee
 
-                        // We assume that the resulting ImState was havocked from the pre-main state
+                        // We learn that the resulting ImState was havocked from the pre-call state
+                        let im_state = self.deps.require_ref::<ImStateEnc>(())?;
                         self.stmt(vcx.mk_inhale_stmt(im_state.havocked_idn.call()(
                             self.prev_im_state(),
                             self.curr_im_state(),
@@ -2738,12 +2758,22 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     }
 
     // requires: self.in_im_mode()
-    fn inhale_im_place_capabilities(&mut self, pcg: &Pcg<'_, 'vir>) -> EncodeResult<'vir, (), E> {
+    fn inhale_im_place_capabilities(
+        &mut self,
+        phase: EvalStmtPhase,
+        location: mir::Location,
+    ) -> EncodeResult<'vir, (), E> {
         // TODO do we need an equivalent of the root places set?
         //
         // TODO can we actually consider every accessible place to be separate?
 
         // TODO I wonder if this would be made faster if we only considered leaf places
+
+        // TODO I wonder if we ONLY need to inhale capability to root places
+
+        let current_fpcs = self.current_fpcs.take().unwrap();
+        let cfpcs = &current_fpcs.statements[location.statement_index];
+        let pcg = &cfpcs.states[EvalStmtPhase::PreMain];
 
         comment!(self, "[IM] implicit capabilites from place capabilities:");
 
@@ -2792,6 +2822,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             }
         }
 
+        self.current_fpcs = Some(current_fpcs);
         Ok(())
     }
 
