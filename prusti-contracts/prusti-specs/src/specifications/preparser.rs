@@ -330,6 +330,12 @@ impl PrustiTokenStream {
                 group.set_span(span);
                 TokenTree::Group(group).to_token_stream()
             }
+            Some(PrustiToken::Token(TokenTree::Punct(punct))) if punct.as_char() == '*' => {
+                // Address projections bind tighter than dereference, while
+                // ordinary binary operators remain outside the dereference.
+                let rhs = self.expr_bp(15)?;
+                quote_spanned! { punct.span() => *#rhs }
+            }
             Some(PrustiToken::Outer(span)) => {
                 let _stream = self
                     .pop_group(Delimiter::Parenthesis)
@@ -1265,6 +1271,18 @@ mod tests {
                 .unwrap()
                 .to_string(),
             "((((((x)) . f ()) . to_ref ())) . g ()) . to_ref ()",
+        );
+        assert_eq!(
+            parse_prusti("*x^f".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "* (((x)) . f ()) . to_ref ()",
+        );
+        assert_eq!(
+            parse_prusti("*x@f".parse().unwrap())
+                .unwrap()
+                .to_string(),
+            "* (((x)) . f ()) ()",
         );
         assert_eq!(
             parse_prusti("self === other@inner".parse().unwrap())
